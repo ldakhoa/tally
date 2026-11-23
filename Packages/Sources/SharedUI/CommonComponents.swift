@@ -26,7 +26,7 @@ public struct MonthSwitcher: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.themedPlain)
-            .accessibilityLabel(L10n.text(lang, en: "Previous period", vi: "Kỳ trước"))
+            .accessibilityLabel(L10n.text(lang, en: "Previous period", vi: "Kỳ trước", zh: "上一周期"))
 
             Button {
                 showingPicker = true
@@ -48,7 +48,7 @@ public struct MonthSwitcher: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.themedPlain)
-            .accessibilityLabel(L10n.text(lang, en: "Choose date or period: \(title)", vi: "Chọn ngày hoặc khoảng thời gian: \(title)"))
+            .accessibilityLabel(L10n.text(lang, en: "Choose date or period: \(title)", vi: "Chọn ngày hoặc khoảng thời gian: \(title)", zh: "选择日期或时间段：\(title)"))
 
             Button {
                 withAnimation(.snappy(duration: 0.2)) { store.shiftPeriod(by: 1) }
@@ -59,7 +59,7 @@ public struct MonthSwitcher: View {
                     .contentShape(Rectangle())
             }
             .buttonStyle(.themedPlain)
-            .accessibilityLabel(L10n.text(lang, en: "Next period", vi: "Kỳ sau"))
+            .accessibilityLabel(L10n.text(lang, en: "Next period", vi: "Kỳ sau", zh: "下一周期"))
         }
         .padding(.horizontal, 6)
         .padding(.vertical, 4)
@@ -70,7 +70,7 @@ public struct MonthSwitcher: View {
         .sheet(isPresented: $showingPicker) {
             PeriodPickerSheet(
                 initialPeriod: store.selectedPeriod,
-                highlightedDayKeys: store.transactionDayKeys
+                dailyTotals: store.dailyCalendarTotals
             ) { chosen in
                 withAnimation(.snappy(duration: 0.2)) {
                     store.selectedPeriod = chosen
@@ -114,6 +114,7 @@ public struct PeriodHeaderBar<Actions: View>: View {
 /// Airbnb HorizonCalendar-style sheet for picking a day, date range, or full month.
 public struct PeriodPickerSheet: View {
     public let initialPeriod: DatePeriod
+    public let dailyTotals: [String: DailyCalendarTotal]
     public let highlightedDayKeys: Set<String>
     public let onApply: (DatePeriod) -> Void
 
@@ -124,10 +125,12 @@ public struct PeriodPickerSheet: View {
 
     public init(
         initialPeriod: DatePeriod,
+        dailyTotals: [String: DailyCalendarTotal] = [:],
         highlightedDayKeys: Set<String> = [],
         onApply: @escaping (DatePeriod) -> Void
     ) {
         self.initialPeriod = initialPeriod
+        self.dailyTotals = dailyTotals
         self.highlightedDayKeys = highlightedDayKeys
         self.onApply = onApply
         self._draftPeriod = State(initialValue: initialPeriod)
@@ -135,11 +138,15 @@ public struct PeriodPickerSheet: View {
 
     public var body: some View {
         let lang = settings.language
+        let selectedSummary = MonthlySnapshot.periodTotal(for: draftPeriod, dailyTotals: dailyTotals)
+
         NavigationStack {
             VStack(spacing: 0) {
                 HorizonPeriodCalendarView(
                     selection: $draftPeriod,
                     language: lang,
+                    currency: settings.currency,
+                    dailyTotals: dailyTotals,
                     highlightedDayKeys: highlightedDayKeys
                 )
 
@@ -147,12 +154,35 @@ public struct PeriodPickerSheet: View {
 
                 VStack(alignment: .leading, spacing: 10) {
                     HStack(alignment: .center, spacing: 12) {
-                        VStack(alignment: .leading, spacing: 2) {
+                        VStack(alignment: .leading, spacing: 3) {
                             Text(draftPeriod.formattedTitle(language: lang))
                                 .font(.appHeading)
                                 .foregroundStyle(Color.textPrimary)
                                 .fixedSize(horizontal: false, vertical: true)
-                            if let subtitle = draftPeriod.formattedSubtitle(language: lang) {
+
+                            if selectedSummary.incomeMinor > 0 || selectedSummary.spendingMinor > 0 {
+                                HStack(spacing: 8) {
+                                    if selectedSummary.incomeMinor > 0 {
+                                        Text(MoneyFormat.format(
+                                            minor: selectedSummary.incomeMinor,
+                                            currency: settings.currency,
+                                            language: lang,
+                                            signed: true
+                                        ))
+                                        .foregroundStyle(Color.positive)
+                                    }
+                                    if selectedSummary.spendingMinor > 0 {
+                                        Text(MoneyFormat.format(
+                                            minor: -selectedSummary.spendingMinor,
+                                            currency: settings.currency,
+                                            language: lang
+                                        ))
+                                        .foregroundStyle(Color.accent)
+                                    }
+                                }
+                                .font(.appCaption.weight(.semibold))
+                                .monospacedDigit()
+                            } else if let subtitle = draftPeriod.formattedSubtitle(language: lang) {
                                 Text(subtitle)
                                     .font(.appCaption)
                                     .foregroundStyle(Color.textSecondary)
@@ -163,7 +193,7 @@ public struct PeriodPickerSheet: View {
                             }
                         }
                         Spacer(minLength: 8)
-                        Button(L10n.text(lang, en: "Apply", vi: "Áp dụng")) {
+                        Button(L10n.text(lang, en: "Apply", vi: "Áp dụng", zh: "应用")) {
                             onApply(draftPeriod)
                             dismiss()
                         }
@@ -175,13 +205,13 @@ public struct PeriodPickerSheet: View {
                 .background(Color.cardBackground)
             }
             .pageBackground()
-            .navigationTitle(L10n.text(lang, en: "Select dates", vi: "Chọn ngày"))
+            .navigationTitle(L10n.text(lang, en: "Select dates", vi: "Chọn ngày", zh: "选择日期"))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Cancel", vi: "Huỷ")) { dismiss() }
+                    Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
                 }
             }
         }
@@ -191,12 +221,12 @@ public struct PeriodPickerSheet: View {
     private func selectionHint(for period: DatePeriod, language: AppLanguage) -> String {
         switch period {
         case .day:
-            return L10n.text(language, en: "Tap another day to select a range", vi: "Chạm ngày khác để chọn khoảng ngày")
+            return L10n.text(language, en: "Tap another day to select a range", vi: "Chạm ngày khác để chọn khoảng ngày", zh: "点击另一天以选择日期范围")
         case .range(let start, let end):
             let days = DateKey.daysBetween(min(start, end), max(start, end)) + 1
-            return L10n.text(language, en: "\(days) days selected", vi: "Đã chọn \(days) ngày")
+            return L10n.text(language, en: "\(days) days selected", vi: "Đã chọn \(days) ngày", zh: "已选 \(days) 天")
         case .month:
-            return L10n.text(language, en: "Full month", vi: "Cả tháng")
+            return L10n.text(language, en: "Full month", vi: "Cả tháng", zh: "整月")
         }
     }
 }
@@ -204,6 +234,7 @@ public struct PeriodPickerSheet: View {
 public struct MemberFilterBar: View {
     @Environment(AppSettings.self) private var settings
     @Environment(BudgetStore.self) private var store
+    @Environment(\.colorScheme) private var colorScheme
 
     public init() {}
 
@@ -211,23 +242,51 @@ public struct MemberFilterBar: View {
         let members = store.knownMembers(settings: settings)
         if members.count > 1 {
             let options: [String] = ["__all__"] + members.map(\.id)
-            let binding = Binding<String>(
-                get: { store.selectedMemberID ?? "__all__" },
-                set: { store.selectedMemberID = ($0 == "__all__") ? nil : $0 }
-            )
-            ChipPicker(
-                L10n.text(settings.language, en: "Household member", vi: "Thành viên"),
-                selection: binding,
-                options: options,
-                sideMargin: 0
-            ) { id in
-                if id == "__all__" {
-                    return L10n.text(settings.language, en: "All", vi: "Cả nhà")
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(options, id: \.self) { id in
+                        let isSelected = (store.selectedMemberID ?? "__all__") == id
+                        let floats = colorScheme == .light && !isSelected
+                        Button {
+                            withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) {
+                                store.selectedMemberID = (id == "__all__") ? nil : id
+                            }
+                        } label: {
+                            HStack(spacing: 7) {
+                                if id == "__all__" {
+                                    CoupleAvatarsBadge(avatarSize: 20, showHeart: false)
+                                    Text(L10n.text(settings.language, en: "Both", vi: "Cả nhà", zh: "全部成员"))
+                                        .lineLimit(1)
+                                } else {
+                                    let idx = members.firstIndex(where: { $0.id == id }) ?? 0
+                                    let asset: ChibiAsset = (id == HouseholdMember.defaultPartnerID || idx == 1) ? .wife : .husband
+                                    ChibiAvatarView(asset: asset, size: 22, borderColor: isSelected ? Color.onInk.opacity(0.85) : Color.cardBackground)
+                                    Text(members.first(where: { $0.id == id })?.name ?? id)
+                                        .lineLimit(1)
+                                }
+                            }
+                            .font(.appControl)
+                            .padding(.leading, 7)
+                            .padding(.trailing, 13)
+                            .frame(minHeight: 36)
+                            .foregroundStyle(isSelected ? Color.onInk : Color.textPrimary)
+                            .background {
+                                Capsule()
+                                    .fill(isSelected ? Color.ink : Color.cardBackground)
+                                    .floatingShadow(floats)
+                            }
+                            .overlay {
+                                if !isSelected && !floats {
+                                    Capsule().strokeBorder(Color.hairlineStrong, lineWidth: 1)
+                                }
+                            }
+                        }
+                        .buttonStyle(.themedPlain)
+                    }
                 }
-                return members.first(where: { $0.id == id })?.name ?? id
-            } symbol: { id in
-                id == "__all__" ? "person.2.fill" : "person.fill"
+                .padding(.vertical, 4)
             }
+            .accessibilityLabel(L10n.text(settings.language, en: "Household member", vi: "Thành viên", zh: "家庭成员"))
         }
     }
 }
@@ -242,13 +301,16 @@ public struct CategoryBadge: View {
     }
 
     public var body: some View {
-        RoundedRectangle(cornerRadius: size * 0.28, style: .continuous)
-            .fill(category.tintBackground)
+        RoundedRectangle(cornerRadius: size * 0.34, style: .continuous)
+            .fill(category.color.opacity(0.18))
             .frame(width: size, height: size)
             .overlay {
-                Image(systemName: category.symbol)
-                    .font(.system(size: size * 0.44, weight: .semibold))
-                    .foregroundStyle(category.color)
+                RoundedRectangle(cornerRadius: size * 0.34, style: .continuous)
+                    .strokeBorder(category.color.opacity(0.28), lineWidth: 1)
+            }
+            .overlay {
+                Text(category.cuteEmoji)
+                    .font(.system(size: size * 0.54))
             }
             .accessibilityHidden(true)
     }

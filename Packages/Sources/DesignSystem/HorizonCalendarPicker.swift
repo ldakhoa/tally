@@ -1,14 +1,17 @@
+import BudgetKit
 import SwiftUI
 import TallyCore
 
 // MARK: - Airbnb HorizonCalendar-Style Period Picker
 
 /// Vertical continuous-scrolling calendar inspired by Airbnb's HorizonCalendar.
-/// Supports selecting a single day (Today / Yesterday / Tomorrow / any date),
-/// an inclusive date range (tap start, then tap end), or a full calendar month.
+/// Displays daily spending & income directly inside each day cell by default (e.g. `-$20`, `+$100`)
+/// and supports selecting a single day, an inclusive date range, or a full calendar month.
 public struct HorizonPeriodCalendarView: View {
     @Binding public var selection: DatePeriod
     public let language: AppLanguage
+    public var currency: CurrencyCode
+    public var dailyTotals: [String: DailyCalendarTotal]
     public var highlightedDayKeys: Set<String>
 
     @State private var scrollTargetMonth: String?
@@ -16,16 +19,21 @@ public struct HorizonPeriodCalendarView: View {
     public init(
         selection: Binding<DatePeriod>,
         language: AppLanguage,
+        currency: CurrencyCode = .sgd,
+        dailyTotals: [String: DailyCalendarTotal] = [:],
         highlightedDayKeys: Set<String> = []
     ) {
         self._selection = selection
         self.language = language
+        self.currency = currency
+        self.dailyTotals = dailyTotals
         self.highlightedDayKeys = highlightedDayKeys
     }
 
     public var body: some View {
         let todayKey = DateKey.dayKey(from: Date())
         let months = monthRange(including: selection.primaryMonthKey, todayKey: todayKey)
+        let monthlySummaries = MonthlySnapshot.monthlyTotals(from: dailyTotals)
 
         VStack(spacing: 0) {
             quickPresetBar(todayKey: todayKey)
@@ -36,11 +44,15 @@ public struct HorizonPeriodCalendarView: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 26) {
                         ForEach(months, id: \.self) { monthKey in
-                            monthSection(monthKey: monthKey, todayKey: todayKey)
-                                .id(monthKey)
+                            monthSection(
+                                monthKey: monthKey,
+                                todayKey: todayKey,
+                                monthTotal: monthlySummaries[monthKey]
+                            )
+                            .id(monthKey)
                         }
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, 12)
                     .padding(.top, 18)
                     .padding(.bottom, 28)
                 }
@@ -68,9 +80,9 @@ public struct HorizonPeriodCalendarView: View {
             (L10n.today(language), .today()),
             (L10n.yesterday(language), .yesterday()),
             (L10n.tomorrow(language), .tomorrow()),
-            (L10n.text(language, en: "Last 7 days", vi: "7 ngày qua"),
+            (L10n.text(language, en: "Last 7 days", vi: "7 ngày qua", zh: "最近7天"),
              .normalizedRange(start: DateKey.shiftDay(todayKey, by: -6), end: todayKey)),
-            (L10n.text(language, en: "This month", vi: "Tháng này"), .currentMonth()),
+            (L10n.text(language, en: "This month", vi: "Tháng này", zh: "本月"), .currentMonth()),
         ]
 
         return ScrollView(.horizontal, showsIndicators: false) {
@@ -112,24 +124,56 @@ public struct HorizonPeriodCalendarView: View {
                     .frame(maxWidth: .infinity)
             }
         }
-        .padding(.horizontal, 16)
+        .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(Color.appBackground)
     }
 
     // MARK: - Month Section
 
-    private func monthSection(monthKey: String, todayKey: String) -> some View {
+    private func monthSection(
+        monthKey: String,
+        todayKey: String,
+        monthTotal: DailyCalendarTotal?
+    ) -> some View {
         let isThisMonthSelected = (selection == .month(monthKey))
         let leadingSlots = DateKey.leadingEmptySlots(inMonth: monthKey, firstWeekday: 1)
         let dayCount = DateKey.daysInMonth(monthKey)
         let totalCells = leadingSlots + dayCount
 
         return VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .center) {
-                Text(DateKey.formatMonth(monthKey, language: language))
-                    .font(.appHeading)
-                    .foregroundStyle(Color.textPrimary)
+            HStack(alignment: .center, spacing: 8) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(DateKey.formatMonth(monthKey, language: language))
+                        .font(.appHeading)
+                        .foregroundStyle(Color.textPrimary)
+
+                    if let monthTotal, (monthTotal.spendingMinor > 0 || monthTotal.incomeMinor > 0) {
+                        HStack(spacing: 8) {
+                            if monthTotal.incomeMinor > 0 {
+                                Text(MoneyFormat.format(
+                                    minor: monthTotal.incomeMinor,
+                                    currency: currency,
+                                    language: language,
+                                    compact: true,
+                                    signed: true
+                                ))
+                                .foregroundStyle(Color.positive)
+                            }
+                            if monthTotal.spendingMinor > 0 {
+                                Text(MoneyFormat.format(
+                                    minor: -monthTotal.spendingMinor,
+                                    currency: currency,
+                                    language: language,
+                                    compact: true
+                                ))
+                                .foregroundStyle(Color.accent)
+                            }
+                        }
+                        .font(.appCaption.weight(.semibold))
+                        .monospacedDigit()
+                    }
+                }
                 Spacer()
                 Button {
                     withAnimation(.snappy(duration: 0.18)) {
@@ -138,8 +182,8 @@ public struct HorizonPeriodCalendarView: View {
                 } label: {
                     Text(
                         isThisMonthSelected
-                            ? L10n.text(language, en: "Full month ✓", vi: "Cả tháng ✓")
-                            : L10n.text(language, en: "Full month", vi: "Cả tháng")
+                            ? L10n.text(language, en: "Full month ✓", vi: "Cả tháng ✓", zh: "整月 ✓")
+                            : L10n.text(language, en: "Full month", vi: "Cả tháng", zh: "整月")
                     )
                     .font(.appCaption.weight(.medium))
                     .lineLimit(1)
@@ -155,11 +199,11 @@ public struct HorizonPeriodCalendarView: View {
 
             LazyVGrid(
                 columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 7),
-                spacing: 6
+                spacing: 4
             ) {
                 ForEach(0..<totalCells, id: \.self) { index in
                     if index < leadingSlots {
-                        Color.clear.frame(height: 44)
+                        Color.clear.frame(height: 58)
                     } else {
                         let dayNum = index - leadingSlots + 1
                         let dayKey = String(format: "%@-%02d", monthKey, dayNum)
@@ -194,7 +238,8 @@ public struct HorizonPeriodCalendarView: View {
         let isEndpoint = isStart || isEnd
         let isInRange = dayKey > startKey && dayKey < endKey
         let isToday = dayKey == todayKey
-        let hasActivity = highlightedDayKeys.contains(dayKey)
+        let summary = dailyTotals[dayKey]
+        let hasActivity = (summary?.hasActivity ?? false) || highlightedDayKeys.contains(dayKey)
 
         return Button {
             handleDayTap(dayKey)
@@ -204,61 +249,79 @@ public struct HorizonPeriodCalendarView: View {
                 if isRangeSpan {
                     if isInRange {
                         Rectangle()
-                            .fill(Color.ink.opacity(0.10))
-                            .frame(height: 38)
+                            .fill(Color.ink.opacity(0.08))
+                            .frame(height: 54)
                             .clipShape(
                                 UnevenRoundedRectangle(
-                                    topLeadingRadius: (columnIndex == 0 || isFirstDayOfMonth) ? 19 : 0,
-                                    bottomLeadingRadius: (columnIndex == 0 || isFirstDayOfMonth) ? 19 : 0,
-                                    bottomTrailingRadius: (columnIndex == 6 || isLastDayOfMonth) ? 19 : 0,
-                                    topTrailingRadius: (columnIndex == 6 || isLastDayOfMonth) ? 19 : 0
+                                    topLeadingRadius: (columnIndex == 0 || isFirstDayOfMonth) ? 12 : 0,
+                                    bottomLeadingRadius: (columnIndex == 0 || isFirstDayOfMonth) ? 12 : 0,
+                                    bottomTrailingRadius: (columnIndex == 6 || isLastDayOfMonth) ? 12 : 0,
+                                    topTrailingRadius: (columnIndex == 6 || isLastDayOfMonth) ? 12 : 0
                                 )
                             )
                     } else if isStart {
                         HStack(spacing: 0) {
                             Color.clear
-                            Color.ink.opacity(0.10)
+                            Color.ink.opacity(0.08)
                         }
-                        .frame(height: 38)
+                        .frame(height: 54)
                     } else if isEnd {
                         HStack(spacing: 0) {
-                            Color.ink.opacity(0.10)
+                            Color.ink.opacity(0.08)
                             Color.clear
                         }
-                        .frame(height: 38)
+                        .frame(height: 54)
                     }
                 }
 
-                // Selected endpoint / single day circle
-                if isEndpoint {
-                    Circle()
-                        .fill(Color.ink)
-                        .frame(width: 38, height: 38)
-                } else if isToday {
-                    Circle()
-                        .strokeBorder(Color.ink.opacity(0.45), lineWidth: 1.5)
-                        .frame(width: 38, height: 38)
-                }
+                VStack(spacing: 2) {
+                    ZStack {
+                        if isEndpoint {
+                            Circle()
+                                .fill(Color.ink)
+                                .frame(width: 28, height: 28)
+                        } else if isToday {
+                            Circle()
+                                .strokeBorder(Color.ink.opacity(0.5), lineWidth: 1.5)
+                                .frame(width: 28, height: 28)
+                        }
 
-                VStack(spacing: 1) {
-                    Text("\(dayNumber)")
-                        .font(isEndpoint || isToday ? .appControl.weight(.semibold) : .appSecondary)
-                        .monospacedDigit()
-                        .foregroundStyle(isEndpoint ? Color.onInk : Color.textPrimary)
-
-                    if hasActivity {
-                        Circle()
-                            .fill(isEndpoint ? Color.onInk.opacity(0.85) : Color.accent)
-                            .frame(width: 4, height: 4)
+                        Text("\(dayNumber)")
+                            .font(isEndpoint || isToday ? .appCaption.weight(.semibold) : .appCaption)
+                            .monospacedDigit()
+                            .foregroundStyle(isEndpoint ? Color.onInk : Color.textPrimary)
                     }
+                    .frame(height: 28)
+
+                    CalendarDayMoneyLabel(
+                        summary: summary,
+                        hasFallbackActivity: hasActivity,
+                        currency: currency,
+                        language: language
+                    )
+                    .frame(height: 24, alignment: .top)
                 }
+                .padding(.horizontal, 1)
             }
-            .frame(maxWidth: .infinity, minHeight: 44)
+            .frame(maxWidth: .infinity, minHeight: 58, maxHeight: 58)
             .contentShape(Rectangle())
         }
         .buttonStyle(.themedPlain)
-        .accessibilityLabel(DateKey.formatFullDay(dayKey, language: language))
+        .accessibilityLabel(accessibilityDescription(dayKey: dayKey, summary: summary))
         .accessibilityAddTraits(isEndpoint ? .isSelected : [])
+    }
+
+    private func accessibilityDescription(dayKey: String, summary: DailyCalendarTotal?) -> String {
+        let base = DateKey.formatFullDay(dayKey, language: language)
+        guard let summary, summary.hasActivity else { return base }
+        var parts = [base]
+        if summary.incomeMinor > 0 {
+            parts.append(MoneyFormat.format(minor: summary.incomeMinor, currency: currency, language: language, signed: true))
+        }
+        if summary.spendingMinor > 0 {
+            parts.append(MoneyFormat.format(minor: -summary.spendingMinor, currency: currency, language: language))
+        }
+        return parts.joined(separator: ", ")
     }
 
     private func handleDayTap(_ tappedDayKey: String) {
@@ -283,6 +346,8 @@ public struct HorizonPeriodCalendarView: View {
 public struct HorizonSingleDateCalendarView: View {
     @Binding public var selectedDayKey: String
     public let language: AppLanguage
+    public var currency: CurrencyCode
+    public var dailyTotals: [String: DailyCalendarTotal]
     public var highlightedDayKeys: Set<String>
     public var onSelect: ((String) -> Void)?
 
@@ -291,11 +356,15 @@ public struct HorizonSingleDateCalendarView: View {
     public init(
         selectedDayKey: Binding<String>,
         language: AppLanguage,
+        currency: CurrencyCode = .sgd,
+        dailyTotals: [String: DailyCalendarTotal] = [:],
         highlightedDayKeys: Set<String> = [],
         onSelect: ((String) -> Void)? = nil
     ) {
         self._selectedDayKey = selectedDayKey
         self.language = language
+        self.currency = currency
+        self.dailyTotals = dailyTotals
         self.highlightedDayKeys = highlightedDayKeys
         self.onSelect = onSelect
     }
@@ -317,7 +386,7 @@ public struct HorizonSingleDateCalendarView: View {
                         .frame(maxWidth: .infinity)
                 }
             }
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 12)
             .padding(.vertical, 8)
             .background(Color.appBackground)
 
@@ -331,7 +400,7 @@ public struct HorizonSingleDateCalendarView: View {
                                 .id(monthKey)
                         }
                     }
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, 12)
                     .padding(.top, 18)
                     .padding(.bottom, 28)
                 }
@@ -398,17 +467,18 @@ public struct HorizonSingleDateCalendarView: View {
 
             LazyVGrid(
                 columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 7),
-                spacing: 6
+                spacing: 4
             ) {
                 ForEach(0..<totalCells, id: \.self) { index in
                     if index < leadingSlots {
-                        Color.clear.frame(height: 44)
+                        Color.clear.frame(height: 58)
                     } else {
                         let dayNum = index - leadingSlots + 1
                         let dayKey = String(format: "%@-%02d", monthKey, dayNum)
                         let isSelected = dayKey == selectedDayKey
                         let isToday = dayKey == todayKey
-                        let hasActivity = highlightedDayKeys.contains(dayKey)
+                        let summary = dailyTotals[dayKey]
+                        let hasActivity = (summary?.hasActivity ?? false) || highlightedDayKeys.contains(dayKey)
 
                         Button {
                             withAnimation(.snappy(duration: 0.16)) {
@@ -416,31 +486,35 @@ public struct HorizonSingleDateCalendarView: View {
                             }
                             onSelect?(dayKey)
                         } label: {
-                            ZStack {
-                                if isSelected {
-                                    Circle()
-                                        .fill(Color.ink)
-                                        .frame(width: 38, height: 38)
-                                } else if isToday {
-                                    Circle()
-                                        .strokeBorder(Color.ink.opacity(0.45), lineWidth: 1.5)
-                                        .frame(width: 38, height: 38)
-                                }
+                            VStack(spacing: 2) {
+                                ZStack {
+                                    if isSelected {
+                                        Circle()
+                                            .fill(Color.ink)
+                                            .frame(width: 28, height: 28)
+                                    } else if isToday {
+                                        Circle()
+                                            .strokeBorder(Color.ink.opacity(0.5), lineWidth: 1.5)
+                                            .frame(width: 28, height: 28)
+                                    }
 
-                                VStack(spacing: 1) {
                                     Text("\(dayNum)")
-                                        .font(isSelected || isToday ? .appControl.weight(.semibold) : .appSecondary)
+                                        .font(isSelected || isToday ? .appCaption.weight(.semibold) : .appCaption)
                                         .monospacedDigit()
                                         .foregroundStyle(isSelected ? Color.onInk : Color.textPrimary)
-
-                                    if hasActivity {
-                                        Circle()
-                                            .fill(isSelected ? Color.onInk.opacity(0.85) : Color.accent)
-                                            .frame(width: 4, height: 4)
-                                    }
                                 }
+                                .frame(height: 28)
+
+                                CalendarDayMoneyLabel(
+                                    summary: summary,
+                                    hasFallbackActivity: hasActivity,
+                                    currency: currency,
+                                    language: language
+                                )
+                                .frame(height: 24, alignment: .top)
                             }
-                            .frame(maxWidth: .infinity, minHeight: 44)
+                            .padding(.horizontal, 1)
+                            .frame(maxWidth: .infinity, minHeight: 58, maxHeight: 58)
                             .contentShape(Rectangle())
                         }
                         .buttonStyle(.themedPlain)
@@ -453,13 +527,222 @@ public struct HorizonSingleDateCalendarView: View {
     }
 }
 
+// MARK: - Inline Single-Month Money Calendar (for Transactions Calendar mode)
+
+/// Compact inline month calendar card showing daily spending/income totals directly in every cell.
+public struct InlineMonthCalendarCard: View {
+    public let monthKey: String
+    public let selectedDayKey: String?
+    public let language: AppLanguage
+    public let currency: CurrencyCode
+    public let dailyTotals: [String: DailyCalendarTotal]
+    public let onSelectDay: (String) -> Void
+    public let onSelectFullMonth: () -> Void
+
+    public init(
+        monthKey: String,
+        selectedDayKey: String?,
+        language: AppLanguage,
+        currency: CurrencyCode,
+        dailyTotals: [String: DailyCalendarTotal],
+        onSelectDay: @escaping (String) -> Void,
+        onSelectFullMonth: @escaping () -> Void
+    ) {
+        self.monthKey = monthKey
+        self.selectedDayKey = selectedDayKey
+        self.language = language
+        self.currency = currency
+        self.dailyTotals = dailyTotals
+        self.onSelectDay = onSelectDay
+        self.onSelectFullMonth = onSelectFullMonth
+    }
+
+    public var body: some View {
+        let todayKey = DateKey.dayKey(from: Date())
+        let leadingSlots = DateKey.leadingEmptySlots(inMonth: monthKey, firstWeekday: 1)
+        let dayCount = DateKey.daysInMonth(monthKey)
+        let totalCells = leadingSlots + dayCount
+        let symbols = localizedWeekdaySymbols(language: language)
+        let monthSummary = MonthlySnapshot.periodTotal(for: .month(monthKey), dailyTotals: dailyTotals)
+
+        Card {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(DateKey.formatMonth(monthKey, language: language))
+                        .font(.appHeading)
+                    HStack(spacing: 8) {
+                        if monthSummary.incomeMinor > 0 {
+                            Text(MoneyFormat.format(
+                                minor: monthSummary.incomeMinor,
+                                currency: currency,
+                                language: language,
+                                compact: true,
+                                signed: true
+                            ))
+                            .foregroundStyle(Color.positive)
+                        }
+                        if monthSummary.spendingMinor > 0 {
+                            Text(MoneyFormat.format(
+                                minor: -monthSummary.spendingMinor,
+                                currency: currency,
+                                language: language,
+                                compact: true
+                            ))
+                            .foregroundStyle(Color.accent)
+                        }
+                        if monthSummary.incomeMinor == 0 && monthSummary.spendingMinor == 0 {
+                            Text(L10n.text(language, en: "No activity", vi: "Chưa có giao dịch", zh: "暂无记录"))
+                                .foregroundStyle(Color.textSecondary)
+                        }
+                    }
+                    .font(.appCaption.weight(.semibold))
+                    .monospacedDigit()
+                }
+                Spacer()
+                if selectedDayKey != nil {
+                    Button(L10n.text(language, en: "All month", vi: "Cả tháng", zh: "整月")) {
+                        onSelectFullMonth()
+                    }
+                    .pillButton()
+                }
+            }
+
+            HStack(spacing: 0) {
+                ForEach(Array(symbols.enumerated()), id: \.offset) { _, symbol in
+                    Text(symbol)
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.textSecondary)
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .padding(.top, 2)
+
+            LazyVGrid(
+                columns: Array(repeating: GridItem(.flexible(), spacing: 0), count: 7),
+                spacing: 4
+            ) {
+                ForEach(0..<totalCells, id: \.self) { index in
+                    if index < leadingSlots {
+                        Color.clear.frame(height: 54)
+                    } else {
+                        let dayNum = index - leadingSlots + 1
+                        let dayKey = String(format: "%@-%02d", monthKey, dayNum)
+                        let isSelected = dayKey == selectedDayKey
+                        let isToday = dayKey == todayKey
+                        let summary = dailyTotals[dayKey]
+
+                        Button {
+                            onSelectDay(dayKey)
+                        } label: {
+                            VStack(spacing: 2) {
+                                ZStack {
+                                    if isSelected {
+                                        Circle()
+                                            .fill(Color.ink)
+                                            .frame(width: 26, height: 26)
+                                    } else if isToday {
+                                        Circle()
+                                            .strokeBorder(Color.ink.opacity(0.5), lineWidth: 1.5)
+                                            .frame(width: 26, height: 26)
+                                    }
+
+                                    Text("\(dayNum)")
+                                        .font(isSelected || isToday ? .appCaption.weight(.semibold) : .appCaption)
+                                        .monospacedDigit()
+                                        .foregroundStyle(isSelected ? Color.onInk : Color.textPrimary)
+                                }
+                                .frame(height: 26)
+
+                                CalendarDayMoneyLabel(
+                                    summary: summary,
+                                    hasFallbackActivity: false,
+                                    currency: currency,
+                                    language: language
+                                )
+                                .frame(height: 24, alignment: .top)
+                            }
+                            .padding(.horizontal, 1)
+                            .frame(maxWidth: .infinity, minHeight: 54, maxHeight: 54)
+                            .background {
+                                if isSelected {
+                                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                                        .fill(Color.ink.opacity(0.06))
+                                }
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.themedPlain)
+                    }
+                }
+            }
+        }
+    }
+}
+
+// MARK: - Day Cell Money Badge
+
+private struct CalendarDayMoneyLabel: View {
+    let summary: DailyCalendarTotal?
+    let hasFallbackActivity: Bool
+    let currency: CurrencyCode
+    let language: AppLanguage
+
+    var body: some View {
+        let income = summary?.incomeMinor ?? 0
+        let spending = summary?.spendingMinor ?? 0
+
+        if income > 0 || spending > 0 {
+            let hasBoth = income > 0 && spending > 0
+            let fontSize: CGFloat = hasBoth ? 8.5 : 9.5
+
+            VStack(spacing: 0) {
+                if income > 0 {
+                    Text(MoneyFormat.formatCalendarAmount(
+                        minor: income,
+                        currency: currency,
+                        language: language,
+                        isIncome: true
+                    ))
+                    .font(.system(size: fontSize, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(Color.positive)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                }
+                if spending > 0 {
+                    Text(MoneyFormat.formatCalendarAmount(
+                        minor: spending,
+                        currency: currency,
+                        language: language,
+                        isIncome: false
+                    ))
+                    .font(.system(size: fontSize, weight: .semibold).monospacedDigit())
+                    .foregroundStyle(Color.accent)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+                }
+            }
+        } else if hasFallbackActivity {
+            Circle()
+                .fill(Color.accent)
+                .frame(width: 4, height: 4)
+                .padding(.top, 4)
+        } else {
+            Color.clear
+        }
+    }
+}
+
 // MARK: - Helpers
 
 private func localizedWeekdaySymbols(language: AppLanguage) -> [String] {
-    if language.resolved == .vietnamese {
+    switch language.resolved {
+    case .vietnamese:
         return ["CN", "T2", "T3", "T4", "T5", "T6", "T7"]
+    case .chinese:
+        return ["日", "一", "二", "三", "四", "五", "六"]
+    case .english:
+        return ["S", "M", "T", "W", "T", "F", "S"]
     }
-    return ["S", "M", "T", "W", "T", "F", "S"]
 }
 
 private func monthRange(including focusMonth: String, todayKey: String) -> [String] {

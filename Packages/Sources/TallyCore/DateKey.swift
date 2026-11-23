@@ -115,6 +115,68 @@ public enum DateKey {
         return day
     }
 
+    /// Calendar weekday for a `YYYY-MM-DD` key (`1 = Sunday` ... `7 = Saturday`).
+    public static func weekday(fromDayKey key: String) -> Int {
+        guard let date = date(fromDayKey: key) else { return 1 }
+        return calendar.component(.weekday, from: date)
+    }
+
+    /// Short month label for chart axes (e.g. `"Nov"`, `"Th11"`, or `"11月"`).
+    public static func formatShortMonth(_ monthKey: String, language: AppLanguage) -> String {
+        guard let comps = yearAndMonth(fromMonthKey: monthKey) else { return monthKey }
+        switch language.resolved {
+        case .vietnamese:
+            return "Th\(comps.month)"
+        case .chinese:
+            return "\(comps.month)月"
+        case .english:
+            guard let date = date(fromMonthKey: monthKey) else { return monthKey }
+            let formatter = DateFormatter()
+            formatter.locale = language.locale
+            formatter.setLocalizedDateFormatFromTemplate("MMM")
+            return formatter.string(from: date)
+        }
+    }
+
+    /// Compact weekday label for `1 = Sun ... 7 = Sat`.
+    public static func shortWeekdayLabel(weekday: Int, language: AppLanguage) -> String {
+        switch language.resolved {
+        case .vietnamese:
+            switch weekday {
+            case 1: return "CN"
+            case 2: return "T2"
+            case 3: return "T3"
+            case 4: return "T4"
+            case 5: return "T5"
+            case 6: return "T6"
+            case 7: return "T7"
+            default: return ""
+            }
+        case .chinese:
+            switch weekday {
+            case 1: return "日"
+            case 2: return "一"
+            case 3: return "二"
+            case 4: return "三"
+            case 5: return "四"
+            case 6: return "五"
+            case 7: return "六"
+            default: return ""
+            }
+        case .english:
+            switch weekday {
+            case 1: return "Sun"
+            case 2: return "Mon"
+            case 3: return "Tue"
+            case 4: return "Wed"
+            case 5: return "Thu"
+            case 6: return "Fri"
+            case 7: return "Sat"
+            default: return ""
+            }
+        }
+    }
+
     public static func relativeDayLabel(_ dayKey: String, language: AppLanguage, referenceDate: Date = Date()) -> String? {
         let todayKey = self.dayKey(from: referenceDate)
         if dayKey == todayKey { return L10n.today(language) }

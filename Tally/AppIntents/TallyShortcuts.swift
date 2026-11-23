@@ -100,7 +100,8 @@ struct AutoLogTransactionIntent: AppIntent {
             let err = L10n.text(
                 settings.language,
                 en: "Could not find a transaction amount in that text.",
-                vi: "Không tìm thấy số tiền giao dịch trong nội dung gửi vào."
+                vi: "Không tìm thấy số tiền giao dịch trong nội dung gửi vào.",
+                zh: "未在文本中找到交易金额。"
             )
             return .result(dialog: IntentDialog(stringLiteral: err))
         }
@@ -124,7 +125,8 @@ struct AutoLogTransactionIntent: AppIntent {
         let msg = L10n.text(
             settings.language,
             en: "Logged \(saved.name): \(formatted) (\(saved.category.title(in: settings.language))).",
-            vi: "Đã lưu \(saved.name): \(formatted) (\(saved.category.title(in: settings.language)))."
+            vi: "Đã lưu \(saved.name): \(formatted) (\(saved.category.title(in: settings.language))).",
+            zh: "已记录 \(saved.name)：\(formatted)（\(saved.category.title(in: settings.language))）。"
         )
         return .result(dialog: IntentDialog(stringLiteral: msg))
     }
@@ -185,7 +187,8 @@ struct LogApplePayTransactionIntent: AppIntent {
         let msg = L10n.text(
             settings.language,
             en: "Logged \(formatted) at \(saved.name) (\(saved.category.title(in: settings.language))).",
-            vi: "Đã ghi \(formatted) tại \(saved.name) (\(saved.category.title(in: settings.language)))."
+            vi: "Đã ghi \(formatted) tại \(saved.name) (\(saved.category.title(in: settings.language))).",
+            zh: "已在 \(saved.name) 记录 \(formatted)（\(saved.category.title(in: settings.language))）。"
         )
         return .result(dialog: IntentDialog(stringLiteral: msg))
     }
@@ -224,7 +227,8 @@ struct LogTransactionFromTextIntent: AppIntent {
             let err = L10n.text(
                 settings.language,
                 en: "Could not find a transaction amount in the provided text.",
-                vi: "Không tìm thấy số tiền giao dịch trong nội dung gửi vào."
+                vi: "Không tìm thấy số tiền giao dịch trong nội dung gửi vào.",
+                zh: "未在提供的文本中找到交易金额。"
             )
             return .result(dialog: IntentDialog(stringLiteral: err))
         }
@@ -249,7 +253,8 @@ struct LogTransactionFromTextIntent: AppIntent {
         let msg = L10n.text(
             settings.language,
             en: "Saved \(saved.name): \(formatted) in \(saved.category.title(in: settings.language)).",
-            vi: "Đã lưu \(saved.name): \(formatted) (\(saved.category.title(in: settings.language)))."
+            vi: "Đã lưu \(saved.name): \(formatted) (\(saved.category.title(in: settings.language))).",
+            zh: "已保存 \(saved.name)：\(formatted)（\(saved.category.title(in: settings.language))）。"
         )
         return .result(dialog: IntentDialog(stringLiteral: msg))
     }
@@ -290,7 +295,8 @@ struct QuickLogExpenseIntent: AppIntent {
         let msg = L10n.text(
             settings.language,
             en: "Logged \(formatted) for \(saved.name).",
-            vi: "Đã ghi \(formatted) cho \(saved.name)."
+            vi: "Đã ghi \(formatted) cho \(saved.name).",
+            zh: "已为 \(saved.name) 记录 \(formatted)。"
         )
         return .result(dialog: IntentDialog(stringLiteral: msg))
     }
@@ -314,7 +320,8 @@ struct GetSpendingSummaryIntent: AppIntent {
         let msg = L10n.text(
             settings.language,
             en: "Today's spending is \(todayStr). This month's total spending is \(monthStr).",
-            vi: "Hôm nay đã chi \(todayStr). Tổng chi tiêu tháng này là \(monthStr)."
+            vi: "Hôm nay đã chi \(todayStr). Tổng chi tiêu tháng này là \(monthStr).",
+            zh: "今日支出 \(todayStr)，本月累计支出 \(monthStr)。"
         )
         return .result(dialog: IntentDialog(stringLiteral: msg))
     }

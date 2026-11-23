@@ -42,16 +42,18 @@ export class EmailInbox extends DurableObject<Env> {
     });
   }
 
-  async enqueue(item: BankAlertItem): Promise<{ accepted: boolean; duplicate: boolean }> {
-    const existing = this.ctx.storage.sql
-      .exec("SELECT 1 FROM seen_ids WHERE id = ? LIMIT 1", item.id)
-      .toArray();
-    if (existing.length > 0) {
-      return { accepted: false, duplicate: true };
+  async enqueue(item: BankAlertItem, force = false): Promise<{ accepted: boolean; duplicate: boolean }> {
+    if (!force) {
+      const existing = this.ctx.storage.sql
+        .exec("SELECT 1 FROM seen_ids WHERE id = ? LIMIT 1", item.id)
+        .toArray();
+      if (existing.length > 0) {
+        return { accepted: false, duplicate: true };
+      }
     }
 
     this.ctx.storage.sql.exec(
-      "INSERT OR IGNORE INTO alerts (id, subject, sender, body, member, received_at) VALUES (?, ?, ?, ?, ?, ?)",
+      "INSERT OR REPLACE INTO alerts (id, subject, sender, body, member, received_at) VALUES (?, ?, ?, ?, ?, ?)",
       item.id,
       item.subject.slice(0, 300),
       item.sender.slice(0, 200),
@@ -60,7 +62,7 @@ export class EmailInbox extends DurableObject<Env> {
       item.receivedAt
     );
     this.ctx.storage.sql.exec(
-      "INSERT OR IGNORE INTO seen_ids (id, seen_at) VALUES (?, ?)",
+      "INSERT OR REPLACE INTO seen_ids (id, seen_at) VALUES (?, ?)",
       item.id,
       item.receivedAt
     );
@@ -191,7 +193,7 @@ export default {
     const stub = getInboxStub(env);
 
     if (request.method === "POST" && url.pathname === "/v1/ingest") {
-      const payload = (await request.json().catch(() => null)) as Partial<BankAlertItem> | null;
+      const payload = (await request.json().catch(() => null)) as (Partial<BankAlertItem> & { force?: boolean }) | null;
       if (!payload || (!payload.body && !payload.subject)) {
         return json({ error: "missing subject or body" }, 400);
       }
@@ -203,7 +205,7 @@ export default {
         member: payload.member?.trim() || "",
         receivedAt: payload.receivedAt || new Date().toISOString(),
       };
-      const result = await stub.enqueue(item);
+      const result = await stub.enqueue(item, payload.force === true);
       return json({ ok: true, id: item.id, ...result });
     }
 

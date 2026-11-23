@@ -1,14 +1,15 @@
 import Foundation
 import TallyCore
 
-/// The app's themes, matching Onsite's design language: Ink & Vermilion (default), Rosé Pine,
+/// The app's themes: Paws & Cream (cozy default), Ink & Vermilion, Rosé Pine,
 /// and Rosé Pine Moon.
 public enum AppTheme: String, CaseIterable, Identifiable, Sendable {
+    case cozyPaws
     case ink
     case rosePine
     case rosePineMoon
 
-    public static let standard: AppTheme = .ink
+    public static let standard: AppTheme = .cozyPaws
 
     public var id: String { rawValue }
 
@@ -18,6 +19,7 @@ public enum AppTheme: String, CaseIterable, Identifiable, Sendable {
 
     public var title: String {
         switch self {
+        case .cozyPaws: return "Paws & Cream"
         case .ink: return "Ink & Vermilion"
         case .rosePine: return "Rosé Pine"
         case .rosePineMoon: return "Rosé Pine Moon"
@@ -26,17 +28,19 @@ public enum AppTheme: String, CaseIterable, Identifiable, Sendable {
 
     public func summary(in language: AppLanguage) -> String {
         switch self {
+        case .cozyPaws:
+            return L10n.text(language, en: "Warm milk-tea cream, soft cocoa & peach pastel", vi: "Kem sữa ấm áp, nâu cacao & hồng đào dịu mắt", zh: "温暖奶茶奶油、柔和可可与蜜桃色调")
         case .ink:
-            return L10n.text(language, en: "Warm ink on cream, with a vermilion accent", vi: "Mực ấm trên nền kem, nhấn đỏ son")
+            return L10n.text(language, en: "Warm ink on cream, with a vermilion accent", vi: "Mực ấm trên nền kem, nhấn đỏ son", zh: "奶油底暖墨色，配朱红点缀")
         case .rosePine:
-            return L10n.text(language, en: "Rosé Pine Dawn in light, Rosé Pine in dark", vi: "Rosé Pine Dawn khi sáng, Rosé Pine khi tối")
+            return L10n.text(language, en: "Rosé Pine Dawn in light, Rosé Pine in dark", vi: "Rosé Pine Dawn khi sáng, Rosé Pine khi tối", zh: "浅色为 Rosé Pine Dawn，深色为 Rosé Pine")
         case .rosePineMoon:
-            return L10n.text(language, en: "Rosé Pine Dawn in light, Rosé Pine Moon in dark", vi: "Rosé Pine Dawn khi sáng, Rosé Pine Moon khi tối")
+            return L10n.text(language, en: "Rosé Pine Dawn in light, Rosé Pine Moon in dark", vi: "Rosé Pine Dawn khi sáng, Rosé Pine Moon khi tối", zh: "浅色为 Rosé Pine Dawn，深色为 Rosé Pine Moon")
         }
     }
 
     public static func choices(dark: Bool) -> [AppTheme] {
-        dark ? allCases : [.ink, .rosePine]
+        dark ? allCases : [.cozyPaws, .ink, .rosePine]
     }
 
     public func choiceTitle(dark: Bool) -> String {
@@ -51,10 +55,11 @@ public enum AppTheme: String, CaseIterable, Identifiable, Sendable {
         isChoice(choice, dark: dark) ? self : choice
     }
 
-    public var usesSystemSemanticColors: Bool { self == .ink }
+    public var usesSystemSemanticColors: Bool { self == .ink || self == .cozyPaws }
 
     public func palette(dark: Bool) -> ThemePalette {
         switch self {
+        case .cozyPaws: return dark ? .cozyPawsDark : .cozyPawsLight
         case .ink: return dark ? .inkDark : .inkLight
         case .rosePine: return dark ? .rosePine(RosePine.main, dark: true) : .rosePine(RosePine.dawn, dark: false)
         case .rosePineMoon: return dark ? .rosePine(RosePine.moon, dark: true) : .rosePine(RosePine.dawn, dark: false)
@@ -76,9 +81,9 @@ public enum AppAppearance: String, CaseIterable, Identifiable, Sendable {
 
     public func title(in language: AppLanguage) -> String {
         switch self {
-        case .system: return L10n.text(language, en: "System", vi: "Theo máy")
-        case .light: return L10n.text(language, en: "Light", vi: "Sáng")
-        case .dark: return L10n.text(language, en: "Dark", vi: "Tối")
+        case .system: return L10n.text(language, en: "System", vi: "Theo máy", zh: "跟随系统")
+        case .light: return L10n.text(language, en: "Light", vi: "Sáng", zh: "浅色")
+        case .dark: return L10n.text(language, en: "Dark", vi: "Tối", zh: "深色")
         }
     }
 }
@@ -195,6 +200,36 @@ public struct ThemePalette: Hashable, Sendable {
 }
 
 extension ThemePalette {
+    public static let cozyPawsLight = ThemePalette(
+        ink: ThemeColor(0x5A3F37),
+        onInk: ThemeColor(0xFFFDF9),
+        accent: ThemeColor(0xE67360),
+        onAccent: ThemeColor(0xFFFFFF),
+        text: ThemeColor(0x3D2C26),
+        textSecondary: ThemeColor(0x7E675E),
+        ios: IOSSurfaces(page: ThemeColor(0xFFF8F0), card: ThemeColor(0xFFFFFF), editor: ThemeColor(0xFAF0E4)),
+        veils: ThemeVeils(base: ThemeColor(0x5A3F37), hairline: 0.09, hairlineStrong: 0.18, field: 0.055, rowSelection: 0.07, rowHover: 0.04),
+        positive: ThemeColor(0x3E8E63),
+        caution: ThemeColor(0xD68A28),
+        negative: ThemeColor(0xD95B5B),
+        info: ThemeColor(0x5589B8)
+    )
+
+    public static let cozyPawsDark = ThemePalette(
+        ink: ThemeColor(0xF8ECE2),
+        onInk: ThemeColor(0x281E1B),
+        accent: ThemeColor(0xF59382),
+        onAccent: ThemeColor(0x281E1B),
+        text: ThemeColor(0xFAF0E6),
+        textSecondary: ThemeColor(0xC7B0A4),
+        ios: IOSSurfaces(page: ThemeColor(0x1E1816), card: ThemeColor(0x2A211E), editor: ThemeColor(0x362B27)),
+        veils: ThemeVeils(base: ThemeColor(0xFAF0E6), hairline: 0.10, hairlineStrong: 0.20, field: 0.075, rowSelection: 0.09, rowHover: 0.05),
+        positive: ThemeColor(0x6ED094),
+        caution: ThemeColor(0xF5BE5B),
+        negative: ThemeColor(0xF27D7D),
+        info: ThemeColor(0x7EB8E8)
+    )
+
     public static let inkLight = ThemePalette(
         ink: ThemeColor(0x171210),
         onInk: ThemeColor(0xFFFFFF),

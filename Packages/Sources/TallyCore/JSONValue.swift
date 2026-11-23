@@ -80,10 +80,14 @@ extension JSONValue: ExpressibleByDictionaryLiteral {
 
 extension JSONValue {
     public static func schemaObject(_ properties: [(String, JSONValue)]) -> JSONValue {
+        schemaObject(properties, required: properties.map(\.0))
+    }
+
+    public static func schemaObject(_ properties: [(String, JSONValue)], required: [String]) -> JSONValue {
         .object([
             "type": "object",
             "properties": .object(Dictionary(properties, uniquingKeysWith: { _, last in last })),
-            "required": .array(properties.map { .string($0.0) }),
+            "required": .array(required.map { .string($0) }),
             "additionalProperties": false,
         ])
     }
@@ -110,6 +114,43 @@ extension JSONValue {
 
     public subscript(key: String) -> JSONValue? {
         if case .object(let dictionary) = self { return dictionary[key] }
+        return nil
+    }
+
+    public var stringValue: String? {
+        if case .string(let value) = self { return value }
+        return nil
+    }
+
+    public var doubleValue: Double? {
+        switch self {
+        case .double(let value): return value
+        case .int(let value): return Double(value)
+        case .string(let str): return Double(str)
+        default: return nil
+        }
+    }
+
+    public var intValue: Int? {
+        switch self {
+        case .int(let value): return value
+        case .double(let value): return Int(value)
+        default: return nil
+        }
+    }
+
+    public var boolValue: Bool? {
+        if case .bool(let value) = self { return value }
+        return nil
+    }
+
+    public var arrayValue: [JSONValue]? {
+        if case .array(let value) = self { return value }
+        return nil
+    }
+
+    public var objectValue: [String: JSONValue]? {
+        if case .object(let value) = self { return value }
         return nil
     }
 }

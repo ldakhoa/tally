@@ -31,11 +31,12 @@ struct ShortcutsSettingsPane: View {
                 shortcutInstallRow(
                     symbol: "square.and.arrow.up.fill",
                     tint: .accent,
-                    title: L10n.text(lang, en: "Log to Tally (Share Sheet)", vi: "Log to Tally (Chia sẻ ảnh & tin nhắn)"),
+                    title: L10n.text(lang, en: "Log to Tally (Share Sheet)", vi: "Log to Tally (Chia sẻ ảnh & tin nhắn)", zh: "记录到 Tally（共享菜单）"),
                     subtitle: L10n.text(
                         lang,
                         en: "Share any PayNow screenshot, Grab receipt, or DBS/OCBC email → Tally reads text & logs it.",
-                        vi: "Chia sẻ ảnh chụp PayNow, biên lai Grab, hoặc email ngân hàng → Tally tự đọc và lưu."
+                        vi: "Chia sẻ ảnh chụp PayNow, biên lai Grab, hoặc email ngân hàng → Tally tự đọc và lưu.",
+                        zh: "共享 PayNow 截图、Grab 收据或银行邮件 → Tally 自动识别并记账。"
                     ),
                     resourceName: "LogToTally",
                     lang: lang
@@ -44,22 +45,24 @@ struct ShortcutsSettingsPane: View {
                 shortcutInstallRow(
                     symbol: "bolt.fill",
                     tint: .positive,
-                    title: L10n.text(lang, en: "Quick Spend → Tally", vi: "Ghi nhanh → Tally"),
+                    title: L10n.text(lang, en: "Quick Spend → Tally", vi: "Ghi nhanh → Tally", zh: "快速记账 → Tally"),
                     subtitle: L10n.text(
                         lang,
                         en: "Pin to Lock Screen or Action Button: type \"Ya Kun 6.50\" or \"ăn phở 65k\" to log in 2 seconds.",
-                        vi: "Gắn lên Màn hình khoá hoặc nút Action: gõ \"Ya Kun 6.50\" hoặc \"ăn phở 65k\" là lưu ngay."
+                        vi: "Gắn lên Màn hình khoá hoặc nút Action: gõ \"Ya Kun 6.50\" hoặc \"ăn phở 65k\" là lưu ngay.",
+                        zh: "添加到锁屏或操作按钮：输入“咖啡 6.5”即可 2 秒完成记账。"
                     ),
                     resourceName: "QuickSpendTally",
                     lang: lang
                 )
             } header: {
-                formSectionHeader(L10n.text(lang, en: "1-Tap Ready-Made Shortcuts", vi: "Cài phím tắt làm sẵn (1 chạm)"))
+                formSectionHeader(L10n.text(lang, en: "1-Tap Ready-Made Shortcuts", vi: "Cài phím tắt làm sẵn (1 chạm)", zh: "一键安装现成快捷指令"))
             } footer: {
                 formSectionFooter(L10n.text(
                     lang,
                     en: "Tap Install, then choose \"Shortcuts\" in the share sheet (or AirDrop it straight to your wife's iPhone too).",
-                    vi: "Bấm Cài đặt rồi chọn \"Phím tắt\" (hoặc AirDrop thẳng file này sang iPhone của vợ)."
+                    vi: "Bấm Cài đặt rồi chọn \"Phím tắt\" (hoặc AirDrop thẳng file này sang iPhone của vợ).",
+                    zh: "点击安装后在共享菜单中选择“快捷指令”（也可以直接隔空投送给伴侣的 iPhone）。"
                 ))
             }
 
@@ -73,9 +76,9 @@ struct ShortcutsSettingsPane: View {
                     HStack {
                         SettingsIconTile(symbol: "arrow.up.forward.app.fill", tint: .ink, size: 30)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.text(lang, en: "Open Apple Shortcuts → Automations", vi: "Mở Phím tắt Apple → Tự động hoá"))
+                            Text(L10n.text(lang, en: "Open Apple Shortcuts → Automations", vi: "Mở Phím tắt Apple → Tự động hoá", zh: "打开 Apple 快捷指令 → 自动化"))
                                 .font(.appBodyMedium)
-                            Text(L10n.text(lang, en: "iOS requires picking the trigger once per phone", vi: "iOS yêu cầu tự chọn bộ kích hoạt 1 lần trên mỗi máy"))
+                            Text(L10n.text(lang, en: "iOS requires picking the trigger once per phone", vi: "iOS yêu cầu tự chọn bộ kích hoạt 1 lần trên mỗi máy", zh: "iOS 要求每台手机手动选择一次触发条件"))
                                 .font(.appCaption)
                                 .foregroundStyle(Color.textSecondary)
                         }
@@ -90,7 +93,7 @@ struct ShortcutsSettingsPane: View {
                 automationGuide(
                     symbol: "creditcard.fill",
                     tint: .positive,
-                    title: L10n.text(lang, en: "Apple Pay (Zero-touch)", vi: "Apple Pay (Hoàn toàn tự động)"),
+                    title: L10n.text(lang, en: "Apple Pay (Zero-touch)", vi: "Apple Pay (Hoàn toàn tự động)", zh: "Apple Pay（全自动）"),
                     steps: L10n.text(
                         lang,
                         en: """
@@ -100,6 +103,10 @@ struct ShortcutsSettingsPane: View {
                         vi: """
                         Kích hoạt: Giao dịch (Wallet) → chọn thẻ → Chạy ngay lập tức.
                         Thêm đúng 1 tác vụ: "Auto-Log to Tally" (tự lấy Đầu vào phím tắt) — chạy ngầm hoàn toàn.
+                        """,
+                        zh: """
+                        触发条件：交易（钱包）→ 选择银行卡 → 立即运行。
+                        添加 1 个操作：“Auto-Log to Tally”（自动使用快捷指令输入）— 全程后台静默运行。
                         """
                     )
                 )
@@ -107,7 +114,7 @@ struct ShortcutsSettingsPane: View {
                 automationGuide(
                     symbol: "envelope.fill",
                     tint: .info,
-                    title: L10n.text(lang, en: "DBS / OCBC / UOB / Trust Emails", vi: "Email DBS / OCBC / UOB / Trust"),
+                    title: L10n.text(lang, en: "DBS / OCBC / UOB / Trust Emails", vi: "Email DBS / OCBC / UOB / Trust", zh: "DBS / OCBC / UOB / Trust 邮件"),
                     steps: L10n.text(
                         lang,
                         en: """
@@ -117,6 +124,10 @@ struct ShortcutsSettingsPane: View {
                         vi: """
                         Kích hoạt: Email → Tiêu đề chứa "Transaction Alert" (hoặc Người gửi: dbs.com, ocbc.com, uob.com.sg, trustbank.sg).
                         Thêm đúng 1 tác vụ: "Auto-Log to Tally" với Đầu vào phím tắt.
+                        """,
+                        zh: """
+                        触发条件：电子邮件 → 主题包含“Transaction Alert”（或发件人：dbs.com、ocbc.com、uob.com.sg、trustbank.sg）。
+                        添加 1 个操作：“Auto-Log to Tally”并传入快捷指令输入。
                         """
                     )
                 )
@@ -124,7 +135,7 @@ struct ShortcutsSettingsPane: View {
                 automationGuide(
                     symbol: "message.fill",
                     tint: .caution,
-                    title: L10n.text(lang, en: "Bank SMS & PayNow", vi: "Tin nhắn SMS ngân hàng & PayNow"),
+                    title: L10n.text(lang, en: "Bank SMS & PayNow", vi: "Tin nhắn SMS ngân hàng & PayNow", zh: "银行短信与 PayNow"),
                     steps: L10n.text(
                         lang,
                         en: """
@@ -134,20 +145,24 @@ struct ShortcutsSettingsPane: View {
                         vi: """
                         Kích hoạt: Tin nhắn → Tin nhắn chứa "SGD" (hoặc "VND") → Chạy ngay lập tức.
                         Thêm đúng 1 tác vụ: "Auto-Log to Tally" với Đầu vào phím tắt.
+                        """,
+                        zh: """
+                        触发条件：信息 → 信息包含“SGD”（按需可添加“VND”）→ 立即运行。
+                        添加 1 个操作：“Auto-Log to Tally”并传入快捷指令输入。
                         """
                     )
                 )
 
                 Toggle(isOn: $settings.flagAutoCapturedForReview) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.text(lang, en: "Flag auto-captured items for review", vi: "Đánh dấu chờ duyệt cho giao dịch tự động"))
-                        Text(L10n.text(lang, en: "Shows a quick review card on Overview to verify categories.", vi: "Hiện thẻ duyệt nhanh ở Tổng quan để kiểm tra danh mục."))
+                        Text(L10n.text(lang, en: "Flag auto-captured items for review", vi: "Đánh dấu chờ duyệt cho giao dịch tự động", zh: "标记自动记录的账单待确认"))
+                        Text(L10n.text(lang, en: "Shows a quick review card on Overview to verify categories.", vi: "Hiện thẻ duyệt nhanh ở Tổng quan để kiểm tra danh mục.", zh: "在概览页显示快速确认卡片，方便核对分类。"))
                             .font(.appCaption)
                             .foregroundStyle(Color.textSecondary)
                     }
                 }
             } header: {
-                formSectionHeader(L10n.text(lang, en: "Automatic Background Capture (1 Action)", vi: "Tự động ghi ngầm (Chỉ 1 tác vụ)"))
+                formSectionHeader(L10n.text(lang, en: "Automatic Background Capture (1 Action)", vi: "Tự động ghi ngầm (Chỉ 1 tác vụ)", zh: "后台自动记账（仅需 1 步）"))
             }
 
             // Section 3: Interactive Bank Alert Parser Tester
@@ -176,11 +191,11 @@ struct ShortcutsSettingsPane: View {
                     if isTesting {
                         HStack(spacing: 6) {
                             ProgressView().controlSize(.small)
-                            Text(L10n.text(lang, en: "Testing…", vi: "Đang thử…"))
+                            Text(L10n.text(lang, en: "Testing…", vi: "Đang thử…", zh: "测试中…"))
                         }
                     } else {
                         Label(
-                            L10n.text(lang, en: "Test parser on this text", vi: "Thử đọc đoạn tin nhắn này"),
+                            L10n.text(lang, en: "Test parser on this text", vi: "Thử đọc đoạn tin nhắn này", zh: "测试解析此文本"),
                             systemImage: "play.fill"
                         )
                     }
@@ -204,12 +219,12 @@ struct ShortcutsSettingsPane: View {
                     }
                 }
             } header: {
-                formSectionHeader(L10n.text(lang, en: "Test Bank Alert Parser", vi: "Thử bộ đọc tin nhắn ngân hàng"))
+                formSectionHeader(L10n.text(lang, en: "Test Bank Alert Parser", vi: "Thử bộ đọc tin nhắn ngân hàng", zh: "测试银行通知解析"))
             }
         }
         .scrollContentBackground(.hidden)
         .pageBackground()
-        .navigationTitle(L10n.text(lang, en: "Auto-Capture", vi: "Tự động ghi"))
+        .navigationTitle(L10n.text(lang, en: "Auto-Capture", vi: "Tự động ghi", zh: "自动记账"))
         #if os(iOS)
         .sheet(item: $sharingShortcutURL) { item in
             ShortcutShareSheet(url: item.url)
@@ -235,7 +250,7 @@ struct ShortcutsSettingsPane: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 8)
-            Button(L10n.text(lang, en: "Install", vi: "Cài đặt")) {
+            Button(L10n.text(lang, en: "Install", vi: "Cài đặt", zh: "安装")) {
                 if let url = Bundle.main.url(forResource: resourceName, withExtension: "shortcut")
                     ?? Bundle.main.url(forResource: resourceName, withExtension: "shortcut", subdirectory: "Shortcuts") {
                     sharingShortcutURL = ShortcutFileItem(url: url)

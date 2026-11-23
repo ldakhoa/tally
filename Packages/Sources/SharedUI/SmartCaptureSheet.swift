@@ -28,7 +28,8 @@ public struct SmartCaptureSheet: View {
                     Text(L10n.text(
                         lang,
                         en: "Paste a DBS/OCBC/UOB/PayNow alert, bank SMS, or type naturally like \"FairPrice 24.80\" or \"ăn phở 65k\".",
-                        vi: "Dán tin nhắn DBS/OCBC/UOB/PayNow, SMS ngân hàng hoặc gõ nhanh như \"FairPrice 24.80\", \"ăn phở 65k\"."
+                        vi: "Dán tin nhắn DBS/OCBC/UOB/PayNow, SMS ngân hàng hoặc gõ nhanh như \"FairPrice 24.80\", \"ăn phở 65k\".",
+                        zh: "粘贴银行通知、短信，或直接输入如 \"FairPrice 24.80\"、\"咖啡 6.5\"。"
                     ))
                     .font(.appSecondary)
                     .foregroundStyle(Color.textSecondary)
@@ -43,7 +44,7 @@ public struct SmartCaptureSheet: View {
                         .buttonBorderShape(.capsule)
 
                         if !rawText.isEmpty {
-                            Button(L10n.text(lang, en: "Clear", vi: "Xoá")) {
+                            Button(L10n.text(lang, en: "Clear", vi: "Xoá", zh: "清空")) {
                                 rawText = ""
                                 draft = nil
                                 errorMessage = nil
@@ -67,13 +68,13 @@ public struct SmartCaptureSheet: View {
                             if isParsing {
                                 HStack(spacing: 8) {
                                     ProgressView().controlSize(.small)
-                                    Text(L10n.text(lang, en: "Reading…", vi: "Đang đọc…"))
+                                    Text(L10n.text(lang, en: "Reading…", vi: "Đang đọc…", zh: "解析中…"))
                                 }
                             } else {
                                 Label(
                                     settings.isAIReady && settings.autoParseWithAI
-                                        ? L10n.text(lang, en: "Parse with Claude", vi: "Đọc bằng Claude")
-                                        : L10n.text(lang, en: "Parse text", vi: "Phân tích"),
+                                        ? L10n.text(lang, en: "Parse with Claude", vi: "Đọc bằng Claude", zh: "用 Claude 解析")
+                                        : L10n.text(lang, en: "Parse text", vi: "Phân tích", zh: "解析文本"),
                                     systemImage: settings.isAIReady && settings.autoParseWithAI ? "sparkles" : "wand.and.stars"
                                 )
                             }
@@ -119,14 +120,14 @@ public struct SmartCaptureSheet: View {
                             }
 
                             HStack(spacing: 10) {
-                                Button(L10n.text(lang, en: "Edit details", vi: "Chỉnh sửa")) {
+                                Button(L10n.text(lang, en: "Edit details", vi: "Chỉnh sửa", zh: "编辑详情")) {
                                     showingEditor = true
                                 }
                                 .pillButton()
 
                                 Spacer()
 
-                                Button(L10n.text(lang, en: "Save now", vi: "Lưu ngay")) {
+                                Button(L10n.text(lang, en: "Save now", vi: "Lưu ngay", zh: "立即保存")) {
                                     saveDraft(draft)
                                 }
                                 .pillButton(prominent: true)
@@ -138,13 +139,13 @@ public struct SmartCaptureSheet: View {
                 .documentColumn()
             }
             .pageBackground()
-            .navigationTitle(L10n.text(lang, en: "Smart capture", vi: "Nhập nhanh thông minh"))
+            .navigationTitle(L10n.text(lang, en: "Smart capture", vi: "Nhập nhanh thông minh", zh: "智能记账"))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Close", vi: "Đóng")) { dismiss() }
+                    Button(L10n.text(lang, en: "Close", vi: "Đóng", zh: "关闭")) { dismiss() }
                 }
             }
             .sheet(isPresented: $showingEditor, onDismiss: { dismiss() }) {
@@ -176,7 +177,8 @@ public struct SmartCaptureSheet: View {
             errorMessage = L10n.text(
                 settings.language,
                 en: "Could not find an amount in that text. Try including a number like 65k or $12.50.",
-                vi: "Không tìm thấy số tiền trong đoạn văn bản. Hãy thử kèm số tiền như 65k hoặc 125,000 VND."
+                vi: "Không tìm thấy số tiền trong đoạn văn bản. Hãy thử kèm số tiền như 65k hoặc 125,000 VND.",
+                zh: "未在文本中找到金额，请尝试包含数字，例如 65 或 $12.50。"
             )
         }
     }
@@ -201,8 +203,8 @@ public struct SmartCaptureSheet: View {
             memberName: member.name,
             needsReview: false
         )
-        store.saveTransaction(record)
-        store.selectedMonth = record.monthKey
+        let outcome = store.saveAutoCapturedTransaction(record)
+        store.ensureVisible(dayKey: outcome.saved.dayKey)
         dismiss()
     }
 }

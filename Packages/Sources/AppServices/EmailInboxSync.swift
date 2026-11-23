@@ -4,14 +4,17 @@ import Observation
 import TallyCore
 
 /// Pulls forwarded bank alert emails from Tally's Cloudflare Email Inbox Worker (`tools/email-inbox`),
-/// parses each one via Claude AI (or the offline SG/VN parser), saves into `BudgetStore` (which syncs
-/// via iCloud to both phones), and immediately acknowledges/deletes them from the Worker.
+/// parses each one via Claude AI (or the offline SG/VN parser) using the email's real `receivedAt`
+/// date, saves into `BudgetStore` (which syncs via iCloud to both phones), and immediately
+/// acknowledges/deletes them from the Worker. Loops across batches until the inbox is drained.
 @MainActor
 @Observable
 public final class EmailInboxSync {
     public private(set) var isSyncing = false
     public private(set) var lastSynced: Date?
+    public private(set) var lastPulledCount = 0
     public private(set) var lastIngestedCount = 0
+    public private(set) var lastSkippedCount = 0
     public private(set) var lastError: String?
 
     @ObservationIgnored private var syncTask: Task<Void, Never>?
@@ -54,77 +57,121 @@ public final class EmailInboxSync {
 
         isSyncing = true
         lastError = nil
+        lastPulledCount = 0
+        lastIngestedCount = 0
+        lastSkippedCount = 0
         defer { isSyncing = false }
 
         let inboxClient = EmailInboxClient(baseURL: baseURL, secret: secret)
+        let aiClient = settings.autoParseWithAI ? settings.makeAIClient() : nil
+        let targetCurrency = settings.currency
+        let language = settings.language
+
         do {
-            let alerts = try await inboxClient.fetchInbox()
-            guard !alerts.isEmpty else {
-                lastSynced = Date()
-                lastIngestedCount = 0
-                return
-            }
+            // Drain all pending batches (up to 10 batches = 500 emails max per sync).
+            for _ in 0..<10 {
+                let alerts = try await inboxClient.fetchInbox()
+                guard !alerts.isEmpty else { break }
 
-            let aiClient = settings.autoParseWithAI ? settings.makeAIClient() : nil
-            let existingIDs = Set(store.transactions.map(\.id))
-            var ackIDs: [String] = []
-            var ingested = 0
+                lastPulledCount += alerts.count
+                let existingActiveIDs = Set(store.activeTransactions.map(\.id))
 
-            for alert in alerts {
-                let recordID = "email-\(alert.id)"
-                if existingIDs.contains(recordID) {
-                    ackIDs.append(alert.id)
-                    continue
+                // Process in chunks of 4 concurrently for fast backfill parsing.
+                var ackIDs: [String] = []
+                for chunkStart in stride(from: 0, to: alerts.count, by: 4) {
+                    let chunk = Array(alerts[chunkStart..<min(chunkStart + 4, alerts.count)])
+
+                    let parsedChunk: [(BankEmailAlert, Date, ParsedTransactionDraft?)] = await withTaskGroup(
+                        of: (BankEmailAlert, Date, ParsedTransactionDraft?).self
+                    ) { group in
+                        for alert in chunk {
+                            let recordID = "email-\(alert.id)"
+                            let emailDate = Self.parseISO8601(alert.receivedAt) ?? Date()
+                            if existingActiveIDs.contains(recordID) {
+                                group.addTask { (alert, emailDate, nil) }
+                                continue
+                            }
+                            let text = alert.combinedText
+                            group.addTask {
+                                let draft = await AITransactionParser.parse(
+                                    text: text,
+                                    source: .bankEmail,
+                                    defaultCurrency: targetCurrency,
+                                    language: language,
+                                    client: aiClient,
+                                    now: emailDate
+                                )
+                                return (alert, emailDate, draft)
+                            }
+                        }
+                        var results: [(BankEmailAlert, Date, ParsedTransactionDraft?)] = []
+                        for await item in group { results.append(item) }
+                        return results
+                    }
+
+                    for (alert, emailDate, parsed) in parsedChunk {
+                        let recordID = "email-\(alert.id)"
+                        if let parsed {
+                            let (memberID, memberName) = resolveMember(alert.member, settings: settings)
+                            let resolved = AITransactionParser.resolvedAmountAndNote(
+                                for: parsed,
+                                targetCurrency: targetCurrency,
+                                language: language,
+                                fallbackNote: alert.sender
+                            )
+                            let record = TransactionRecord(
+                                id: recordID,
+                                name: parsed.name,
+                                amountMinor: max(1, resolved.amountMinor),
+                                type: parsed.type,
+                                category: parsed.category,
+                                dayKey: parsed.dayKey,
+                                createdAt: emailDate,
+                                note: resolved.note,
+                                source: .bankEmail,
+                                rawSourceText: alert.combinedText,
+                                memberID: memberID,
+                                memberName: memberName,
+                                needsReview: settings.flagAutoCapturedForReview,
+                                updatedAt: Date(),
+                                isDeleted: false
+                            )
+                            let outcome = store.saveAutoCapturedTransaction(record, notifyCloud: true)
+                            if !outcome.wasDuplicate {
+                                lastIngestedCount += 1
+                            } else {
+                                lastSkippedCount += 1
+                            }
+                        } else {
+                            lastSkippedCount += 1
+                        }
+                        ackIDs.append(alert.id)
+                    }
                 }
 
-                let text = alert.combinedText
-                if let parsed = await AITransactionParser.parse(
-                    text: text,
-                    source: .bankEmail,
-                    defaultCurrency: settings.currency,
-                    language: settings.language,
-                    client: aiClient
-                ) {
-                    let (memberID, memberName) = resolveMember(alert.member, settings: settings)
-                    let resolved = AITransactionParser.resolvedAmountAndNote(
-                        for: parsed,
-                        targetCurrency: settings.currency,
-                        language: settings.language,
-                        fallbackNote: alert.sender
-                    )
-                    let record = TransactionRecord(
-                        id: recordID,
-                        name: parsed.name,
-                        amountMinor: max(1, resolved.amountMinor),
-                        type: parsed.type,
-                        category: parsed.category,
-                        dayKey: parsed.dayKey,
-                        createdAt: Date(),
-                        note: resolved.note,
-                        source: .bankEmail,
-                        rawSourceText: text,
-                        memberID: memberID,
-                        memberName: memberName,
-                        needsReview: settings.flagAutoCapturedForReview,
-                        updatedAt: Date(),
-                        isDeleted: false
-                    )
-                    store.saveTransaction(record, notifyCloud: true)
-                    ingested += 1
+                if !ackIDs.isEmpty {
+                    try await inboxClient.ack(ids: ackIDs)
                 }
-                ackIDs.append(alert.id)
+                // If fewer than 50 came back, the inbox is now drained.
+                if alerts.count < 50 { break }
             }
 
-            if !ackIDs.isEmpty {
-                try await inboxClient.ack(ids: ackIDs)
-            }
-            lastIngestedCount = ingested
             lastSynced = Date()
         } catch let err as EmailInboxError {
             lastError = err.localizedMessage(in: settings.language)
         } catch {
             lastError = error.localizedDescription
         }
+    }
+
+    private static func parseISO8601(_ raw: String) -> Date? {
+        guard !raw.isEmpty else { return nil }
+        let withFrac = ISO8601DateFormatter()
+        withFrac.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = withFrac.date(from: raw) { return d }
+        let plain = ISO8601DateFormatter()
+        plain.formatOptions = [.withInternetDateTime]
+        return plain.date(from: raw)
     }
 
     private func resolveMember(_ rawMember: String, settings: AppSettings) -> (String, String) {
@@ -139,6 +186,15 @@ public final class EmailInboxSync {
         let partner = settings.partnerDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
         if !partner.isEmpty && trimmed.caseInsensitiveCompare(partner) == .orderedSame {
             return (HouseholdMember.defaultPartnerID, partner)
+        }
+        let genericPartnerLabels: Set<String> = [
+            "wife", "partner", "husband", "spouse", "vợ", "vo", "chồng", "chong", "người thân"
+        ]
+        if settings.myDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !settings.cloudZoneRole.isSharedParticipant,
+           !genericPartnerLabels.contains(trimmed.lowercased()) {
+            settings.myDisplayName = trimmed
+            return (me.id, trimmed)
         }
         return ("member-\(trimmed.lowercased())", trimmed)
     }

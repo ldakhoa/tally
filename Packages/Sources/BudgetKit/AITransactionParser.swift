@@ -49,13 +49,13 @@ public enum AITransactionParser {
         if let client {
             let todayKey = DateKey.dayKey(from: now)
             let system = """
-            You extract a single COMPLETED personal budget transaction from bank alerts, bank emails, e-receipts, Apple Pay alerts, or quick notes in Vietnamese or English.
+            You extract a single COMPLETED personal budget transaction from bank alerts, bank emails, e-receipts, Apple Pay alerts, or quick notes in English, Vietnamese, or Chinese.
             CRITICAL FILTERING RULES:
-            - Set isTransaction = false (and amount = 0) for ANY promotional/marketing email, voucher/discount offer ("up to 50,000đ", "save $20", "win $1,000", "ưu đãi", "khuyến mãi", "giảm giá"), newsletter, OTP/verification code, login alert, card statement summary, or advertisement.
+            - Set isTransaction = false (and amount = 0) for ANY promotional/marketing email, voucher/discount offer ("up to 50,000đ", "save $20", "win $1,000", "ưu đãi", "khuyến mãi", "giảm giá", "优惠", "折扣", "促销"), newsletter, OTP/verification code, login alert, card statement summary, or advertisement.
             - Set isTransaction = true ONLY for an actual completed payment, transfer, receipt, debit, credit, salary, or refund.
             - Always report the EXACT original currency stated in the text (e.g. "50,000đ" or "VND" -> currency "VND"; "S$" or "SGD" -> currency "SGD"). Only use default currency \(defaultCurrency.rawValue) if no currency is shown.
             - Today's date is \(todayKey). Use it when no transaction date is present.
-            - Vietnamese shorthand: 65k = 65000 VND, 1.5tr = 1500000 VND.
+            - Vietnamese shorthand: 65k = 65000 VND, 1.5tr = 1500000 VND. Chinese shorthand: 1万 = 10000, 3千 = 3000.
             - Expense categories: \(CategoryID.expenseCategories.map(\.rawValue).joined(separator: ", ")).
             - Income categories: \(CategoryID.incomeCategories.map(\.rawValue).joined(separator: ", ")).
             - Make sure category matches type (expense vs income).
@@ -119,7 +119,7 @@ public enum AITransactionParser {
             currency: sourceCurrency,
             language: language
         )
-        let fxTag = L10n.text(language, en: "Orig: \(origFormatted)", vi: "Gốc: \(origFormatted)")
+        let fxTag = L10n.text(language, en: "Orig: \(origFormatted)", vi: "Gốc: \(origFormatted)", zh: "原币: \(origFormatted)")
         let combinedNote = baseNote.isEmpty ? fxTag : "\(baseNote) · \(fxTag)"
         return (targetCurrency.toStorageMinor(convertedMajor), combinedNote)
     }

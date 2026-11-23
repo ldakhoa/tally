@@ -1,0 +1,762 @@
+import AppServices
+import BudgetKit
+import Charts
+import DesignSystem
+import SharedUI
+import SwiftUI
+import TallyCore
+
+public struct StatisticsView: View {
+    public var onSelectTransactions: () -> Void
+
+    @Environment(AppSettings.self) private var settings
+    @Environment(BudgetStore.self) private var store
+
+    @State private var breakdownKind: TransactionType = .expense
+    @State private var editingTransaction: TransactionRecord?
+
+    public init(onSelectTransactions: @escaping () -> Void = {}) {
+        self.onSelectTransactions = onSelectTransactions
+    }
+
+    public var body: some View {
+        let lang = settings.language
+        let stats = store.statisticsSnapshot
+        let hasPeriodData = !stats.current.transactions.isEmpty
+        let hasAnyHistory = stats.monthlyTrend.contains { $0.transactionCount > 0 }
+
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    PeriodHeaderBar {
+                        Button {
+                            settings.isShowingQuickAdd = true
+                        } label: {
+                            Label(L10n.text(lang, en: "Add", vi: "Thêm", zh: "记一笔"), systemImage: "plus")
+                        }
+                        .pillButton(prominent: true)
+                    }
+
+                    MemberFilterBar()
+
+                    if !hasPeriodData && !hasAnyHistory {
+                        EmptyStateCard(
+                            symbol: "chart.bar.xaxis",
+                            title: L10n.text(lang, en: "No statistics yet", vi: "Chưa có dữ liệu thống kê", zh: "暂无统计数据"),
+                            message: L10n.text(
+                                lang,
+                                en: "Record expenses or sync bank emails to see spending trends, top merchants, and weekly habits.",
+                                vi: "Ghi nhận chi tiêu hoặc đồng bộ email ngân hàng để xem xu hướng, cửa hàng chi nhiều và thói quen theo tuần.",
+                                zh: "记账或同步银行邮件后，即可查看消费趋势、常用商户和每周习惯。"
+                            ),
+                            actionTitle: L10n.text(lang, en: "Add transaction", vi: "Thêm giao dịch", zh: "记一笔")
+                        ) {
+                            settings.isShowingQuickAdd = true
+                        }
+                    } else {
+                        // 1. Key highlights grid (Avg/day, vs. previous, savings rate, peak day)
+                        kpiGrid(stats, lang: lang)
+
+                        // 2. 6-month income vs. spending trend
+                        monthlyTrendCard(stats, lang: lang)
+
+                        // 3. Daily spending pace across the active period
+                        if stats.dailySeries.count > 1 && stats.current.spendingMinor > 0 {
+                            dailyPaceCard(stats, lang: lang)
+                        }
+
+                        // 4. Category breakdown (Expense / Income)
+                        categoryBreakdownCard(stats, lang: lang)
+
+                        // 5. Spending by day of week
+                        if stats.current.spendingMinor > 0 {
+                            weekdayPatternCard(stats, lang: lang)
+                        }
+
+                        // 6. Top merchants
+                        if !stats.topMerchants.isEmpty {
+                            topMerchantsCard(stats, lang: lang)
+                        }
+
+                        // 7. Household split (when >1 member has activity)
+                        if stats.current.memberBreakdown.count > 1 {
+                            householdSplitCard(stats, lang: lang)
+                        }
+
+                        // 8. Largest expenses in period
+                        if !stats.largestExpenses.isEmpty {
+                            largestExpensesCard(stats, lang: lang)
+                        }
+                    }
+                }
+                .documentColumn()
+            }
+            .pageBackground()
+            .navigationTitle(L10n.text(lang, en: "Statistics", vi: "Thống kê", zh: "统计"))
+            .toolbar { TopToolbarControls() }
+            .sheet(item: $editingTransaction) { tx in
+                TransactionEditorSheet(existing: tx)
+            }
+        }
+    }
+
+    // MARK: - KPI Highlights Grid
+
+    private func kpiGrid(_ stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
+        let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+        let currency = settings.currency
+        let compactVND = currency == .vnd
+
+        let deltaText: String
+        let deltaTint: Color
+        if let pct = stats.spendingChangePercent {
+            let rounded = Int(pct.rounded())
+            deltaText = rounded > 0 ? "+\(rounded)%" : "\(rounded)%"
+            deltaTint = rounded > 0 ? .accent : (rounded < 0 ? .positive : .textSecondary)
+        } else {
+            deltaText = "—"
+            deltaTint = .textSecondary
+        }
+
+        let prevNote = stats.previousSpendingMinor > 0
+            ? "\(L10n.text(lang, en: "Prev:", vi: "Kỳ trước:", zh: "上期：")) \(MoneyFormat.format(minor: stats.previousSpendingMinor, currency: currency, language: lang, compact: true))"
+            : L10n.text(lang, en: "No prior data", vi: "Chưa có kỳ trước", zh: "暂无上期数据")
+
+        let savingsRateText = stats.current.savingsRatePercent.map { "\($0)%" } ?? "—"
+        let netNote = MoneyFormat.format(
+            minor: stats.current.netSavingsMinor,
+            currency: currency,
+            language: lang,
+            compact: compactVND,
+            signed: true
+        )
+
+        return LazyVGrid(columns: columns, spacing: 12) {
+            statTile(
+                title: L10n.text(lang, en: "Avg / day", vi: "Chi TB / ngày", zh: "日均支出"),
+                value: MoneyFormat.format(
+                    minor: stats.averageDailySpendingMinor,
+                    currency: currency,
+                    language: lang,
+                    compact: compactVND && stats.averageDailySpendingMinor >= 10_000_000_00
+                ),
+                note: L10n.text(
+                    lang,
+                    en: "\(stats.spendingDaysCount) of \(stats.elapsedDaysCount) days",
+                    vi: "\(stats.spendingDaysCount)/\(stats.elapsedDaysCount) ngày có chi",
+                    zh: "\(stats.spendingDaysCount)/\(stats.elapsedDaysCount) 天有消费"
+                ),
+                symbol: "calendar.day.timeline.left",
+                tint: .info
+            )
+
+            statTile(
+                title: L10n.text(lang, en: "vs. Previous", vi: "So với kỳ trước", zh: "较上期"),
+                value: deltaText,
+                valueColor: deltaTint == .textSecondary ? .textPrimary : deltaTint,
+                note: prevNote,
+                symbol: (stats.spendingChangePercent ?? 0) > 0 ? "arrow.up.right" : "arrow.down.right",
+                tint: deltaTint
+            )
+
+            statTile(
+                title: L10n.text(lang, en: "Savings rate", vi: "Tỷ lệ tiết kiệm", zh: "结余率"),
+                value: savingsRateText,
+                valueColor: (stats.current.netSavingsMinor >= 0) ? .positive : .accent,
+                note: netNote,
+                symbol: "leaf.fill",
+                tint: .positive
+            )
+
+            Button {
+                if let peak = stats.highestSpendDay {
+                    store.selectedPeriod = .day(peak.dayKey)
+                    store.activityTypeFilter = .expense
+                    store.activityCategoryFilter = nil
+                    onSelectTransactions()
+                }
+            } label: {
+                statTileContent(
+                    title: L10n.text(lang, en: "Peak day", vi: "Ngày chi cao nhất", zh: "单日最高"),
+                    value: stats.highestSpendDay.map {
+                        MoneyFormat.format(
+                            minor: $0.spendingMinor,
+                            currency: currency,
+                            language: lang,
+                            compact: compactVND && $0.spendingMinor >= 10_000_000_00
+                        )
+                    } ?? "—",
+                    valueColor: .textPrimary,
+                    note: stats.highestSpendDay.map {
+                        DateKey.formatCompactDay($0.dayKey, language: lang)
+                    } ?? L10n.text(lang, en: "No expenses", vi: "Chưa có chi tiêu", zh: "暂无支出"),
+                    symbol: "flame.fill",
+                    tint: .accent,
+                    showChevron: stats.highestSpendDay != nil
+                )
+            }
+            .buttonStyle(.themedPlain)
+            .disabled(stats.highestSpendDay == nil)
+        }
+    }
+
+    private func statTile(
+        title: String,
+        value: String,
+        valueColor: Color = .textPrimary,
+        note: String,
+        symbol: String,
+        tint: Color
+    ) -> some View {
+        statTileContent(
+            title: title,
+            value: value,
+            valueColor: valueColor,
+            note: note,
+            symbol: symbol,
+            tint: tint,
+            showChevron: false
+        )
+    }
+
+    private func statTileContent(
+        title: String,
+        value: String,
+        valueColor: Color,
+        note: String,
+        symbol: String,
+        tint: Color,
+        showChevron: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                SettingsIconTile(symbol: symbol, tint: tint == .textSecondary ? nil : tint, size: 28)
+                Text(title)
+                    .font(.appCaption.weight(.medium))
+                    .foregroundStyle(Color.textSecondary)
+                    .lineLimit(1)
+                Spacer(minLength: 2)
+                if showChevron {
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 10, weight: .semibold))
+                        .foregroundStyle(Color.textSecondary.opacity(0.55))
+                }
+            }
+            Text(value)
+                .font(.appMetric)
+                .foregroundStyle(valueColor)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
+            Text(note)
+                .font(.appCaption)
+                .foregroundStyle(Color.textSecondary)
+                .lineLimit(1)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface(cornerRadius: 20)
+    }
+
+    // MARK: - 6-Month Trend Card
+
+    private func monthlyTrendCard(_ stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
+        let incomeLabel = L10n.text(lang, en: "Income", vi: "Thu", zh: "收入")
+        let spendLabel = L10n.text(lang, en: "Spending", vi: "Chi", zh: "支出")
+        let activeMonths = stats.monthlyTrend.filter { $0.spendingMinor > 0 }
+        let avgMonthlySpend: Int64 = activeMonths.isEmpty
+            ? 0
+            : activeMonths.reduce(Int64(0)) { $0 + $1.spendingMinor } / Int64(activeMonths.count)
+
+        return Card {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.text(lang, en: "6-month trend", vi: "Xu hướng 6 tháng", zh: "近 6 个月趋势"))
+                        .font(.appHeading)
+                    Text(
+                        avgMonthlySpend > 0
+                            ? "\(L10n.text(lang, en: "Avg spend:", vi: "Chi TB/tháng:", zh: "月均支出：")) \(MoneyFormat.format(minor: avgMonthlySpend, currency: settings.currency, language: lang, compact: true))"
+                            : L10n.text(lang, en: "Income vs. spending by month", vi: "Thu & chi theo từng tháng", zh: "每月收支对比")
+                    )
+                    .font(.appCaption)
+                    .foregroundStyle(Color.textSecondary)
+                }
+                Spacer()
+                HStack(spacing: 10) {
+                    legendDot(color: Color.positive.opacity(0.75), label: incomeLabel)
+                    legendDot(color: Color.ink, label: spendLabel)
+                }
+            }
+
+            Chart {
+                ForEach(stats.monthlyTrend) { point in
+                    let label = DateKey.formatShortMonth(point.monthKey, language: lang)
+                    BarMark(
+                        x: .value("Month", label),
+                        y: .value(incomeLabel, settings.currency.toMajor(point.incomeMinor))
+                    )
+                    .foregroundStyle(Color.positive.opacity(0.75))
+                    .cornerRadius(4)
+                    .position(by: .value("Kind", incomeLabel))
+
+                    BarMark(
+                        x: .value("Month", label),
+                        y: .value(spendLabel, settings.currency.toMajor(point.spendingMinor))
+                    )
+                    .foregroundStyle(point.monthKey == stats.current.monthKey ? Color.accent : Color.ink)
+                    .cornerRadius(4)
+                    .position(by: .value("Kind", spendLabel))
+                }
+            }
+            .chartLegend(.hidden)
+            .chartYAxis {
+                AxisMarks(position: .leading) { val in
+                    AxisGridLine().foregroundStyle(Color.hairline)
+                    AxisValueLabel {
+                        if let num = val.as(Double.self) {
+                            Text(MoneyFormat.format(
+                                minor: settings.currency.toStorageMinor(num),
+                                currency: settings.currency,
+                                language: lang,
+                                compact: true
+                            ))
+                            .font(.appCaption)
+                            .foregroundStyle(Color.textSecondary)
+                        }
+                    }
+                }
+            }
+            .chartXAxis {
+                AxisMarks { _ in
+                    AxisValueLabel()
+                        .font(.appCaption)
+                        .foregroundStyle(Color.textSecondary)
+                }
+            }
+            .frame(height: 180)
+
+            // Quick month pills to jump into any month in the 6-month window
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(stats.monthlyTrend) { point in
+                        let isSelected = store.selectedPeriod == .month(point.monthKey)
+                        Button {
+                            withAnimation(.snappy(duration: 0.2)) {
+                                store.selectedPeriod = .month(point.monthKey)
+                            }
+                        } label: {
+                            HStack(spacing: 4) {
+                                Text(DateKey.formatShortMonth(point.monthKey, language: lang))
+                                    .font(.appCaption.weight(.semibold))
+                                if point.spendingMinor > 0 {
+                                    Text(MoneyFormat.format(
+                                        minor: point.spendingMinor,
+                                        currency: settings.currency,
+                                        language: lang,
+                                        compact: true
+                                    ))
+                                    .font(.appCaption)
+                                    .monospacedDigit()
+                                    .foregroundStyle(isSelected ? Color.onInk.opacity(0.85) : Color.textSecondary)
+                                }
+                            }
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 5)
+                            .foregroundStyle(isSelected ? Color.onInk : Color.textPrimary)
+                            .background(isSelected ? Color.ink : Color.softFill, in: Capsule())
+                        }
+                        .buttonStyle(.themedPlain)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Daily Spending Pace
+
+    private func dailyPaceCard(_ stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
+        let avgMajor = settings.currency.toMajor(stats.averageDailySpendingMinor)
+        let avgLabel = L10n.text(lang, en: "Daily avg", vi: "TB ngày", zh: "日均")
+
+        return Card {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.text(lang, en: "Daily spending", vi: "Chi tiêu theo ngày", zh: "每日支出"))
+                        .font(.appHeading)
+                    Text(
+                        "\(L10n.text(lang, en: "Avg per transaction:", vi: "TB mỗi giao dịch:", zh: "笔均支出：")) \(MoneyFormat.format(minor: stats.averageExpenseMinor, currency: settings.currency, language: lang))"
+                    )
+                    .font(.appCaption)
+                    .foregroundStyle(Color.textSecondary)
+                }
+                Spacer()
+                Tag(
+                    text: MoneyFormat.format(minor: stats.current.spendingMinor, currency: settings.currency, language: lang, compact: true),
+                    color: .accent
+                )
+            }
+
+            Chart {
+                ForEach(stats.dailySeries) { point in
+                    BarMark(
+                        x: .value("Day", point.dayIndex),
+                        y: .value("Spend", settings.currency.toMajor(point.spendingMinor))
+                    )
+                    .foregroundStyle(
+                        point.dayKey == stats.highestSpendDay?.dayKey
+                            ? Color.accent
+                            : Color.ink.opacity(0.75)
+                    )
+                    .cornerRadius(3)
+                }
+
+                if avgMajor > 0 {
+                    RuleMark(y: .value(avgLabel, avgMajor))
+                        .foregroundStyle(Color.accent.opacity(0.75))
+                        .lineStyle(StrokeStyle(lineWidth: 1.25, dash: [4, 4]))
+                        .annotation(position: .top, alignment: .trailing) {
+                            Text("\(avgLabel) \(MoneyFormat.format(minor: stats.averageDailySpendingMinor, currency: settings.currency, language: lang, compact: true))")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Color.accent)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.cardBackground.opacity(0.9), in: Capsule())
+                        }
+                }
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading) { val in
+                    AxisGridLine().foregroundStyle(Color.hairline)
+                    AxisValueLabel {
+                        if let num = val.as(Double.self) {
+                            Text(MoneyFormat.format(
+                                minor: settings.currency.toStorageMinor(num),
+                                currency: settings.currency,
+                                language: lang,
+                                compact: true
+                            ))
+                            .font(.appCaption)
+                            .foregroundStyle(Color.textSecondary)
+                        }
+                    }
+                }
+            }
+            .chartXAxis {
+                AxisMarks(values: .automatic(desiredCount: 6)) { val in
+                    AxisValueLabel {
+                        if let idx = val.as(Int.self),
+                           let point = stats.dailySeries.first(where: { $0.dayIndex == idx }) {
+                            Text("\(DateKey.dayOfMonth(fromDayKey: point.dayKey))")
+                                .font(.appCaption)
+                                .foregroundStyle(Color.textSecondary)
+                        }
+                    }
+                }
+            }
+            .frame(height: 165)
+        }
+    }
+
+    // MARK: - Category Breakdown
+
+    private func categoryBreakdownCard(_ stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
+        let items = breakdownKind == .expense ? stats.current.categoryBreakdown : stats.incomeBreakdown
+        let totalMinor = breakdownKind == .expense ? stats.current.spendingMinor : stats.current.incomeMinor
+
+        return Card {
+            HStack(alignment: .center) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.text(lang, en: "By category", vi: "Theo danh mục", zh: "按分类统计"))
+                        .font(.appHeading)
+                    Text(L10n.text(lang, en: "Tap a category to view transactions", vi: "Chạm danh mục để xem giao dịch", zh: "点击分类查看明细"))
+                        .font(.appCaption)
+                        .foregroundStyle(Color.textSecondary)
+                }
+                Spacer()
+                HStack(spacing: 4) {
+                    ForEach(TransactionType.allCases) { kind in
+                        let selected = breakdownKind == kind
+                        Button {
+                            withAnimation(.snappy(duration: 0.18)) { breakdownKind = kind }
+                        } label: {
+                            Text(kind.title(in: lang))
+                                .font(.appCaption.weight(.semibold))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 5)
+                                .foregroundStyle(selected ? Color.onInk : Color.textSecondary)
+                                .background(selected ? Color.ink : Color.softFill, in: Capsule())
+                        }
+                        .buttonStyle(.themedPlain)
+                    }
+                }
+            }
+
+            if items.isEmpty {
+                Text(
+                    breakdownKind == .expense
+                        ? L10n.text(lang, en: "No expenses in this period.", vi: "Không có chi tiêu trong kỳ này.", zh: "本期暂无支出。")
+                        : L10n.text(lang, en: "No income in this period.", vi: "Không có thu nhập trong kỳ này.", zh: "本期暂无收入。")
+                )
+                .font(.appSecondary)
+                .foregroundStyle(Color.textSecondary)
+                .padding(.vertical, 8)
+            } else {
+                HStack(alignment: .center, spacing: 18) {
+                    ZStack {
+                        Chart(items) { item in
+                            SectorMark(
+                                angle: .value("Amount", Double(item.spentMinor)),
+                                innerRadius: .ratio(0.64),
+                                angularInset: 1.5
+                            )
+                            .foregroundStyle(item.category.color)
+                            .cornerRadius(4)
+                        }
+                        .frame(width: 120, height: 120)
+
+                        VStack(spacing: 1) {
+                            Text(MoneyFormat.format(minor: totalMinor, currency: settings.currency, language: lang, compact: true))
+                                .font(.appControl)
+                                .lineLimit(1)
+                            Text(breakdownKind == .expense
+                                 ? L10n.text(lang, en: "Spent", vi: "Tổng chi", zh: "总支出")
+                                 : L10n.text(lang, en: "Earned", vi: "Tổng thu", zh: "总收入"))
+                                .font(.system(size: 10, weight: .medium))
+                                .foregroundStyle(Color.textSecondary)
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(items.prefix(4)) { item in
+                            HStack(spacing: 6) {
+                                Circle().fill(item.category.color).frame(width: 8, height: 8)
+                                Text(item.category.title(in: lang))
+                                    .font(.appCaption)
+                                    .foregroundStyle(Color.textSecondary)
+                                    .lineLimit(1)
+                                Spacer(minLength: 4)
+                                Text("\(Int((item.share * 100).rounded()))%")
+                                    .font(.appCaption.weight(.semibold))
+                                    .monospacedDigit()
+                            }
+                        }
+                    }
+                }
+                .padding(.vertical, 4)
+
+                Divider().overlay(Color.hairline)
+
+                VStack(spacing: 12) {
+                    ForEach(items) { item in
+                        Button {
+                            store.activityTypeFilter = breakdownKind == .expense ? .expense : .income
+                            store.activityCategoryFilter = item.category
+                            onSelectTransactions()
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                HStack(spacing: 10) {
+                                    CategoryBadge(category: item.category, size: 32)
+                                    VStack(alignment: .leading, spacing: 1) {
+                                        Text(item.category.title(in: lang))
+                                            .font(.appBodyMedium)
+                                            .foregroundStyle(Color.textPrimary)
+                                        Text("\(Int((item.share * 100).rounded()))%")
+                                            .font(.appCaption)
+                                            .foregroundStyle(Color.textSecondary)
+                                    }
+                                    Spacer()
+                                    Text(MoneyFormat.format(minor: item.spentMinor, currency: settings.currency, language: lang))
+                                        .font(.appAmount)
+                                        .foregroundStyle(breakdownKind == .income ? Color.positive : Color.textPrimary)
+                                    Image(systemName: "chevron.right")
+                                        .font(.system(size: 10, weight: .semibold))
+                                        .foregroundStyle(Color.textSecondary.opacity(0.5))
+                                }
+                                TallyProgressBar(value: item.share, fill: item.category.color)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.themedPlain)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Day of Week Pattern
+
+    private func weekdayPatternCard(_ stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
+        let peak = stats.weekdayBreakdown.max(by: { $0.totalMinor < $1.totalMinor })
+
+        return Card {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(L10n.text(lang, en: "Spending by weekday", vi: "Chi tiêu theo thứ trong tuần", zh: "按星期消费"))
+                        .font(.appHeading)
+                    if let peak, peak.totalMinor > 0 {
+                        Text(L10n.text(
+                            lang,
+                            en: "Highest on \(DateKey.shortWeekdayLabel(weekday: peak.weekday, language: lang)) · \(MoneyFormat.format(minor: peak.totalMinor, currency: settings.currency, language: lang, compact: true))",
+                            vi: "Cao nhất vào \(DateKey.shortWeekdayLabel(weekday: peak.weekday, language: lang)) · \(MoneyFormat.format(minor: peak.totalMinor, currency: settings.currency, language: lang, compact: true))",
+                            zh: "周\(DateKey.shortWeekdayLabel(weekday: peak.weekday, language: lang))最高 · \(MoneyFormat.format(minor: peak.totalMinor, currency: settings.currency, language: lang, compact: true))"
+                        ))
+                        .font(.appCaption)
+                        .foregroundStyle(Color.textSecondary)
+                    }
+                }
+                Spacer()
+            }
+
+            Chart(stats.weekdayBreakdown) { item in
+                BarMark(
+                    x: .value("Day", DateKey.shortWeekdayLabel(weekday: item.weekday, language: lang)),
+                    y: .value("Spent", settings.currency.toMajor(item.totalMinor))
+                )
+                .foregroundStyle(item.weekday == peak?.weekday && item.totalMinor > 0 ? Color.accent : Color.ink.opacity(0.72))
+                .cornerRadius(5)
+            }
+            .chartYAxis {
+                AxisMarks(position: .leading) { val in
+                    AxisGridLine().foregroundStyle(Color.hairline)
+                    AxisValueLabel {
+                        if let num = val.as(Double.self) {
+                            Text(MoneyFormat.format(
+                                minor: settings.currency.toStorageMinor(num),
+                                currency: settings.currency,
+                                language: lang,
+                                compact: true
+                            ))
+                            .font(.appCaption)
+                            .foregroundStyle(Color.textSecondary)
+                        }
+                    }
+                }
+            }
+            .chartXAxis {
+                AxisMarks { _ in
+                    AxisValueLabel()
+                        .font(.appCaption)
+                        .foregroundStyle(Color.textSecondary)
+                }
+            }
+            .frame(height: 155)
+        }
+    }
+
+    // MARK: - Top Merchants
+
+    private func topMerchantsCard(_ stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
+        let maxMerchant = max(1, stats.topMerchants.first?.totalMinor ?? 1)
+
+        return Card {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.text(lang, en: "Top merchants", vi: "Cửa hàng chi nhiều nhất", zh: "常去商户"))
+                    .font(.appHeading)
+                Text(L10n.text(lang, en: "Ranked by total spend in period", vi: "Xếp hạng theo tổng chi trong kỳ", zh: "按本期总消费排序"))
+                    .font(.appCaption)
+                    .foregroundStyle(Color.textSecondary)
+            }
+
+            VStack(spacing: 12) {
+                ForEach(Array(stats.topMerchants.enumerated()), id: \.element.id) { idx, merchant in
+                    if idx > 0 { Divider().overlay(Color.hairline) }
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack(spacing: 10) {
+                            CategoryBadge(category: merchant.category, size: 32)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(merchant.displayName)
+                                    .font(.appBodyMedium)
+                                    .lineLimit(1)
+                                Text(
+                                    L10n.text(
+                                        lang,
+                                        en: "\(merchant.count)× · \(merchant.category.title(in: lang))",
+                                        vi: "\(merchant.count) lần · \(merchant.category.title(in: lang))",
+                                        zh: "\(merchant.count) 次 · \(merchant.category.title(in: lang))"
+                                    )
+                                )
+                                .font(.appCaption)
+                                .foregroundStyle(Color.textSecondary)
+                            }
+                            Spacer()
+                            Text(MoneyFormat.format(minor: merchant.totalMinor, currency: settings.currency, language: lang))
+                                .font(.appAmount)
+                        }
+                        TallyProgressBar(
+                            value: Double(merchant.totalMinor) / Double(maxMerchant),
+                            fill: merchant.category.color
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Household Split
+
+    private func householdSplitCard(_ stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
+        let totalSpent = max(1, stats.current.spendingMinor)
+
+        return Card {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.text(lang, en: "Household split", vi: "Chi tiêu theo thành viên", zh: "家庭成员支出"))
+                    .font(.appHeading)
+                Text(L10n.text(lang, en: "Share of period spending", vi: "Tỷ trọng chi tiêu trong kỳ", zh: "本期支出占比"))
+                    .font(.appCaption)
+                    .foregroundStyle(Color.textSecondary)
+            }
+
+            VStack(spacing: 12) {
+                ForEach(Array(stats.current.memberBreakdown.enumerated()), id: \.element.id) { idx, member in
+                    let share = Double(member.spendingMinor) / Double(totalSpent)
+                    let name = member.memberName.isEmpty
+                        ? L10n.text(lang, en: "Member", vi: "Thành viên", zh: "成员")
+                        : member.memberName
+                    let barColor: Color = idx == 0 ? .ink : (idx == 1 ? .accent : .info)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(name).font(.appBodyMedium)
+                            Spacer()
+                            Text("\(Int((share * 100).rounded()))%")
+                                .font(.appCaption.weight(.semibold))
+                                .foregroundStyle(Color.textSecondary)
+                            Text(MoneyFormat.format(minor: member.spendingMinor, currency: settings.currency, language: lang))
+                                .font(.appAmount)
+                        }
+                        TallyProgressBar(value: share, fill: barColor)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Largest Expenses
+
+    private func largestExpensesCard(_ stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
+        Card {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(L10n.text(lang, en: "Largest expenses", vi: "Khoản chi lớn nhất", zh: "最大支出"))
+                    .font(.appHeading)
+                Text(L10n.text(lang, en: "Tap to inspect or edit", vi: "Chạm để xem hoặc chỉnh sửa", zh: "点击查看或编辑"))
+                    .font(.appCaption)
+                    .foregroundStyle(Color.textSecondary)
+            }
+
+            VStack(spacing: 2) {
+                ForEach(Array(stats.largestExpenses.enumerated()), id: \.element.id) { idx, tx in
+                    if idx > 0 { Divider().overlay(Color.hairline) }
+                    TransactionRow(transaction: tx, showDate: true) {
+                        editingTransaction = tx
+                    }
+                }
+            }
+        }
+    }
+
+    private func legendDot(color: Color, label: String) -> some View {
+        HStack(spacing: 4) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text(label).font(.appCaption).foregroundStyle(Color.textSecondary)
+        }
+    }
+}

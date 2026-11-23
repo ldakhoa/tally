@@ -25,13 +25,13 @@ struct BackupSettingsPane: View {
                         showingExporter = true
                     }
                 } label: {
-                    Label(L10n.text(lang, en: "Export Tally JSON backup", vi: "Xuất file sao lưu JSON"), systemImage: "square.and.arrow.up")
+                    Label(L10n.text(lang, en: "Export Tally JSON backup", vi: "Xuất file sao lưu JSON", zh: "导出 Tally JSON 备份"), systemImage: "square.and.arrow.up")
                 }
 
                 Button {
                     showingImporter = true
                 } label: {
-                    Label(L10n.text(lang, en: "Import JSON backup (iOS or Web)", vi: "Nhập file sao lưu JSON (iOS hoặc Web)"), systemImage: "square.and.arrow.down")
+                    Label(L10n.text(lang, en: "Import JSON backup (iOS or Web)", vi: "Nhập file sao lưu JSON (iOS hoặc Web)", zh: "导入 JSON 备份（iOS 或网页版）"), systemImage: "square.and.arrow.down")
                 }
 
                 if let statusMessage {
@@ -40,35 +40,36 @@ struct BackupSettingsPane: View {
                         .foregroundStyle(Color.positive)
                 }
             } header: {
-                formSectionHeader(L10n.text(lang, en: "Backup & Portability", vi: "Sao lưu & Chuyển đổi"))
+                formSectionHeader(L10n.text(lang, en: "Backup & Portability", vi: "Sao lưu & Chuyển đổi", zh: "备份与迁移"))
             } footer: {
                 formSectionFooter(L10n.text(
                     lang,
                     en: "100% compatible with the Tally web app's JSON backup format.",
-                    vi: "Tương thích hoàn toàn với file sao lưu JSON của bản Tally web."
+                    vi: "Tương thích hoàn toàn với file sao lưu JSON của bản Tally web.",
+                    zh: "与 Tally 网页版 JSON 备份格式 100% 兼容。"
                 ))
             }
 
             Section {
                 Button {
                     store.loadSampleData(settings: settings)
-                    statusMessage = L10n.text(lang, en: "Sample data loaded.", vi: "Đã tải dữ liệu mẫu.")
+                    statusMessage = L10n.text(lang, en: "Sample data loaded.", vi: "Đã tải dữ liệu mẫu.", zh: "已加载示例数据。")
                 } label: {
-                    Label(L10n.text(lang, en: "Load sample household data", vi: "Tải dữ liệu mẫu gia đình"), systemImage: "sparkles.rectangle.stack")
+                    Label(L10n.text(lang, en: "Load sample household data", vi: "Tải dữ liệu mẫu gia đình", zh: "加载家庭示例数据"), systemImage: "sparkles.rectangle.stack")
                 }
 
                 Button(role: .destructive) {
                     confirmingReset = true
                 } label: {
-                    Label(L10n.text(lang, en: "Clear all transactions & budgets", vi: "Xoá toàn bộ giao dịch & ngân sách"), systemImage: "trash")
+                    Label(L10n.text(lang, en: "Clear all transactions & budgets", vi: "Xoá toàn bộ giao dịch & ngân sách", zh: "清空所有账单与预算"), systemImage: "trash")
                 }
             } header: {
-                formSectionHeader(L10n.text(lang, en: "Data management", vi: "Quản lý dữ liệu"))
+                formSectionHeader(L10n.text(lang, en: "Data management", vi: "Quản lý dữ liệu", zh: "数据管理"))
             }
         }
         .scrollContentBackground(.hidden)
         .pageBackground()
-        .navigationTitle(L10n.text(lang, en: "Backup & Data", vi: "Sao lưu & Dữ liệu"))
+        .navigationTitle(L10n.text(lang, en: "Backup & Data", vi: "Sao lưu & Dữ liệu", zh: "备份与数据"))
         .fileExporter(
             isPresented: $showingExporter,
             document: exportDocument,
@@ -76,7 +77,7 @@ struct BackupSettingsPane: View {
             defaultFilename: "tally-backup-\(DateKey.dayKey(from: Date()))"
         ) { result in
             if case .success = result {
-                statusMessage = L10n.text(lang, en: "Backup exported.", vi: "Đã xuất file sao lưu.")
+                statusMessage = L10n.text(lang, en: "Backup exported.", vi: "Đã xuất file sao lưu.", zh: "备份已导出。")
             }
         }
         .fileImporter(isPresented: $showingImporter, allowedContentTypes: [.json]) { result in
@@ -87,7 +88,7 @@ struct BackupSettingsPane: View {
                 if let data = try? Data(contentsOf: url) {
                     do {
                         try store.importBackup(data, settings: settings)
-                        statusMessage = L10n.text(lang, en: "Backup imported successfully.", vi: "Nhập dữ liệu thành công.")
+                        statusMessage = L10n.text(lang, en: "Backup imported successfully.", vi: "Nhập dữ liệu thành công.", zh: "备份导入成功。")
                     } catch {
                         statusMessage = error.localizedDescription
                     }
@@ -97,11 +98,11 @@ struct BackupSettingsPane: View {
             }
         }
         .confirmationDialog(
-            L10n.text(lang, en: "Clear all budget data?", vi: "Xoá toàn bộ dữ liệu ngân sách?"),
+            L10n.text(lang, en: "Clear all budget data?", vi: "Xoá toàn bộ dữ liệu ngân sách?", zh: "清空所有记账数据？"),
             isPresented: $confirmingReset,
             titleVisibility: .visible
         ) {
-            Button(L10n.text(lang, en: "Delete all", vi: "Xoá tất cả"), role: .destructive) {
+            Button(L10n.text(lang, en: "Delete all", vi: "Xoá tất cả", zh: "全部删除"), role: .destructive) {
                 store.resetAllLocalData()
             }
         }

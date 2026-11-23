@@ -108,7 +108,7 @@ public final class AppSettings {
 
     public var currentMember: HouseholdMember {
         let name = myDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
-        let fallback = L10n.text(language, en: "Me", vi: "Mình")
+        let fallback = L10n.text(language, en: "Me", vi: "Mình", zh: "我")
         return HouseholdMember(id: myMemberID, name: name.isEmpty ? fallback : name)
     }
 
@@ -222,7 +222,8 @@ public final class AppSettings {
                     let text = L10n.text(
                         lang,
                         en: "Connected\(answeredModel.map { " (\($0))" } ?? "").",
-                        vi: "Đã kết nối\(answeredModel.map { " (\($0))" } ?? "")."
+                        vi: "Đã kết nối\(answeredModel.map { " (\($0))" } ?? "").",
+                        zh: "已连接\(answeredModel.map { "（\($0)）" } ?? "")。"
                     )
                     self.connectionStatus = .connected(text)
                 case .failed(let message):

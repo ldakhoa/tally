@@ -27,6 +27,7 @@ let featureModules: [(name: String, dependencies: [String])] = [
     // Tier 1: top-level screens, independent of each other.
     ("OverviewUI", ["TallyCore", "BudgetKit", "DesignSystem", "AppServices", "SharedUI"]),
     ("TransactionsUI", ["TallyCore", "BudgetKit", "DesignSystem", "AppServices", "SharedUI"]),
+    ("StatisticsUI", ["TallyCore", "BudgetKit", "DesignSystem", "AppServices", "SharedUI"]),
     ("BudgetsUI", ["TallyCore", "BudgetKit", "DesignSystem", "AppServices", "SharedUI"]),
     ("GoalsUI", ["TallyCore", "BudgetKit", "DesignSystem", "AppServices", "SharedUI"]),
     ("AssistantUI", ["TallyCore", "ClaudeKit", "BudgetKit", "DesignSystem", "AppServices", "SharedUI"]),
@@ -47,8 +48,9 @@ let tests: [String: [String]] = [
 ]
 
 func makeTargets(_ name: String, dependencies: [String]) -> [Target] {
+    let resources: [Resource]? = name == "DesignSystem" ? [.process("Resources")] : nil
     var result: [Target] = [
-        .target(name: name, dependencies: dependencies.map { .target(name: $0) })
+        .target(name: name, dependencies: dependencies.map { .target(name: $0) }, resources: resources)
     ]
     if let extra = tests[name] {
         result.append(.testTarget(

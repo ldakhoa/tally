@@ -30,6 +30,17 @@ public enum CurrencyCode: String, CaseIterable, Codable, Identifiable, Hashable,
         }
     }
 
+    /// Ultra-short symbol for dense calendar day cells (e.g. `-$20`, `+$100`, `-65k`).
+    public var calendarSymbol: String {
+        switch self {
+        case .sgd, .usd, .aud, .cad: return "$"
+        case .eur: return "€"
+        case .gbp: return "£"
+        case .myr: return "RM"
+        case .vnd: return "₫"
+        }
+    }
+
     public func name(in language: AppLanguage) -> String {
         switch (self, language.resolved) {
         case (.vnd, .vietnamese): return "Đồng Việt Nam"
@@ -48,6 +59,14 @@ public enum CurrencyCode: String, CaseIterable, Codable, Identifiable, Hashable,
         case (.aud, .english): return "Australian Dollar"
         case (.cad, .english): return "Canadian Dollar"
         case (.myr, .english): return "Malaysian Ringgit"
+        case (.vnd, .chinese): return "越南盾"
+        case (.sgd, .chinese): return "新加坡元"
+        case (.usd, .chinese): return "美元"
+        case (.eur, .chinese): return "欧元"
+        case (.gbp, .chinese): return "英镑"
+        case (.aud, .chinese): return "澳元"
+        case (.cad, .chinese): return "加元"
+        case (.myr, .chinese): return "马来西亚林吉特"
         }
     }
 
@@ -159,5 +178,52 @@ public enum MoneyFormat {
             return "\(rounded)\(suffix)₫"
         }
         return "\(currency.narrowSymbol)\(rounded)\(suffix)"
+    }
+
+    /// Ultra-compact amount string designed to fit inside narrow 7-column calendar cells
+    /// (e.g. `-$20`, `+$100`, `-$4.5`, `+$2.4K`, `-65k`, `+25tr`).
+    public static func formatCalendarAmount(
+        minor: Int64,
+        currency: CurrencyCode,
+        language: AppLanguage = .english,
+        isIncome: Bool
+    ) -> String {
+        let absMajor = abs(currency.toMajor(minor))
+        let sign = isIncome ? "+" : "-"
+        let isVI = language.resolved == .vietnamese
+
+        let scaled: Double
+        let suffix: String
+        if absMajor >= 1_000_000_000 {
+            scaled = absMajor / 1_000_000_000
+            suffix = isVI ? "tỷ" : "B"
+        } else if absMajor >= 1_000_000 {
+            scaled = absMajor / 1_000_000
+            suffix = isVI ? "tr" : "M"
+        } else if absMajor >= 1_000 {
+            scaled = absMajor / 1_000
+            suffix = isVI ? "k" : "K"
+        } else {
+            scaled = absMajor
+            suffix = ""
+        }
+
+        let numberText: String
+        if suffix.isEmpty {
+            if currency.isZeroDecimal || scaled >= 10 || abs(scaled - scaled.rounded()) < 0.05 {
+                numberText = "\(Int64(scaled.rounded()))"
+            } else {
+                numberText = String(format: "%.1f", scaled)
+            }
+        } else if scaled >= 10 || abs(scaled - scaled.rounded()) < 0.05 {
+            numberText = "\(Int64(scaled.rounded()))"
+        } else {
+            numberText = String(format: "%.1f", scaled)
+        }
+
+        if currency == .vnd {
+            return suffix.isEmpty ? "\(sign)\(numberText)₫" : "\(sign)\(numberText)\(suffix)"
+        }
+        return "\(sign)\(currency.calendarSymbol)\(numberText)\(suffix)"
     }
 }

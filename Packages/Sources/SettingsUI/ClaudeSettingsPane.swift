@@ -35,10 +35,10 @@ struct ClaudeSettingsPane: View {
                                 if settings.connectionStatus == .checking {
                                     HStack(spacing: 6) {
                                         ProgressView().controlSize(.small)
-                                        Text(L10n.text(lang, en: "Testing…", vi: "Đang kiểm tra…"))
+                                        Text(L10n.text(lang, en: "Testing…", vi: "Đang kiểm tra…", zh: "测试中…"))
                                     }
                                 } else {
-                                    Text(L10n.text(lang, en: "Test connection", vi: "Kiểm tra kết nối"))
+                                    Text(L10n.text(lang, en: "Test connection", vi: "Kiểm tra kết nối", zh: "测试连接"))
                                 }
                             }
                             .pillButton()
@@ -68,13 +68,13 @@ struct ClaudeSettingsPane: View {
                             .foregroundStyle(Color.textSecondary)
                         }
                         Spacer()
-                        Button(L10n.text(lang, en: "Replace", vi: "Đổi")) {
+                        Button(L10n.text(lang, en: "Replace", vi: "Đổi", zh: "更换")) {
                             keyDraft = ""
                             isReplacing = true
                         }
                         .pillButton()
 
-                        Button(L10n.text(lang, en: "Remove", vi: "Xoá"), role: .destructive) {
+                        Button(L10n.text(lang, en: "Remove", vi: "Xoá", zh: "移除"), role: .destructive) {
                             confirmingRemoval = true
                         }
                         .pillButton()
@@ -90,14 +90,14 @@ struct ClaudeSettingsPane: View {
 
                         HStack {
                             if isReplacing {
-                                Button(L10n.text(lang, en: "Cancel", vi: "Huỷ")) {
+                                Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) {
                                     keyDraft = ""
                                     isReplacing = false
                                 }
                                 .pillButton()
                             }
                             Spacer()
-                            Button(L10n.text(lang, en: "Save key", vi: "Lưu key")) {
+                            Button(L10n.text(lang, en: "Save key", vi: "Lưu key", zh: "保存密钥")) {
                                 saveKey()
                             }
                             .pillButton(prominent: true)
@@ -107,7 +107,7 @@ struct ClaudeSettingsPane: View {
                         if let url = URL(string: "https://platform.claude.com/settings/keys") {
                             Link(destination: url) {
                                 Label(
-                                    L10n.text(lang, en: "Create a key in Claude Console", vi: "Tạo API key trên Claude Console"),
+                                    L10n.text(lang, en: "Create a key in Claude Console", vi: "Tạo API key trên Claude Console", zh: "在 Claude Console 创建密钥"),
                                     systemImage: "arrow.up.right.square"
                                 )
                                 .font(.appSecondary)
@@ -129,13 +129,13 @@ struct ClaudeSettingsPane: View {
                             .autocorrectionDisabled()
                             .tallyField()
                         HStack {
-                            Button(L10n.text(lang, en: "Cancel", vi: "Huỷ")) {
+                            Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) {
                                 workspaceDraft = settings.workspaceID
                                 isEditingWorkspace = false
                             }
                             .pillButton()
                             Spacer()
-                            Button(L10n.text(lang, en: "Save", vi: "Lưu")) {
+                            Button(L10n.text(lang, en: "Save", vi: "Lưu", zh: "保存")) {
                                 _ = settings.setWorkspaceID(workspaceDraft)
                                 isEditingWorkspace = false
                                 if settings.hasAPIKey { settings.checkConnection() }
@@ -151,7 +151,7 @@ struct ClaudeSettingsPane: View {
                         HStack {
                             Text("Workspace ID").foregroundStyle(Color.textPrimary)
                             Spacer()
-                            Text(settings.workspaceID.isEmpty ? L10n.text(lang, en: "Optional", vi: "Tuỳ chọn") : settings.workspaceID)
+                            Text(settings.workspaceID.isEmpty ? L10n.text(lang, en: "Optional", vi: "Tuỳ chọn", zh: "可选") : settings.workspaceID)
                                 .foregroundStyle(Color.textSecondary)
                                 .lineLimit(1)
                         }
@@ -163,7 +163,8 @@ struct ClaudeSettingsPane: View {
                 formSectionFooter(L10n.text(
                     lang,
                     en: "Stored only in Apple Keychain and sent only to api.anthropic.com. Never uploaded to CloudKit records.",
-                    vi: "Chỉ lưu trong Apple Keychain và chỉ gửi tới api.anthropic.com. Không bao giờ lưu vào CloudKit."
+                    vi: "Chỉ lưu trong Apple Keychain và chỉ gửi tới api.anthropic.com. Không bao giờ lưu vào CloudKit.",
+                    zh: "仅保存在 Apple 钥匙串中，且仅发送至 api.anthropic.com，绝不上传至 CloudKit。"
                 ))
             }
 
@@ -189,14 +190,14 @@ struct ClaudeSettingsPane: View {
 
                 Toggle(isOn: $settings.autoParseWithAI) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.text(lang, en: "Use Claude for bank alert parsing", vi: "Dùng Claude đọc thông báo ngân hàng"))
-                        Text(L10n.text(lang, en: "Falls back to offline parser if unavailable.", vi: "Tự dùng bộ đọc nội bộ nếu không có mạng."))
+                        Text(L10n.text(lang, en: "Use Claude for bank alert parsing", vi: "Dùng Claude đọc thông báo ngân hàng", zh: "使用 Claude 解析银行通知"))
+                        Text(L10n.text(lang, en: "Falls back to offline parser if unavailable.", vi: "Tự dùng bộ đọc nội bộ nếu không có mạng.", zh: "无网络时自动回退到本地解析。"))
                             .font(.appCaption)
                             .foregroundStyle(Color.textSecondary)
                     }
                 }
             } header: {
-                formSectionHeader(L10n.text(lang, en: "Model & Parsing", vi: "Model & Phân tích"))
+                formSectionHeader(L10n.text(lang, en: "Model & Parsing", vi: "Model & Phân tích", zh: "模型与解析"))
             }
         }
         .scrollContentBackground(.hidden)
@@ -207,11 +208,11 @@ struct ClaudeSettingsPane: View {
             workspaceDraft = settings.workspaceID
         }
         .confirmationDialog(
-            L10n.text(lang, en: "Remove API key?", vi: "Xoá API key?"),
+            L10n.text(lang, en: "Remove API key?", vi: "Xoá API key?", zh: "移除 API 密钥？"),
             isPresented: $confirmingRemoval,
             titleVisibility: .visible
         ) {
-            Button(L10n.text(lang, en: "Remove", vi: "Xoá"), role: .destructive) {
+            Button(L10n.text(lang, en: "Remove", vi: "Xoá", zh: "移除"), role: .destructive) {
                 _ = settings.setAPIKey("")
             }
         }
@@ -224,7 +225,7 @@ struct ClaudeSettingsPane: View {
             isReplacing = false
             settings.checkConnection()
         } else {
-            keyError = L10n.text(settings.language, en: "Could not save key to Keychain.", vi: "Không thể lưu key vào Keychain.")
+            keyError = L10n.text(settings.language, en: "Could not save key to Keychain.", vi: "Không thể lưu key vào Keychain.", zh: "无法将密钥保存到钥匙串。")
         }
     }
 
@@ -253,23 +254,23 @@ struct ClaudeSettingsPane: View {
 
     private func statusHeadline(lang: AppLanguage) -> String {
         guard settings.isAIReady else {
-            return L10n.text(lang, en: "Claude is not set up", vi: "Chưa kết nối Claude")
+            return L10n.text(lang, en: "Claude is not set up", vi: "Chưa kết nối Claude", zh: "尚未配置 Claude")
         }
         switch settings.connectionStatus {
-        case .unchecked: return L10n.text(lang, en: "Claude is ready", vi: "Claude đã sẵn sàng")
-        case .checking: return L10n.text(lang, en: "Checking connection…", vi: "Đang kiểm tra kết nối…")
-        case .connected: return L10n.text(lang, en: "Claude is connected", vi: "Đã kết nối Claude")
-        case .failed: return L10n.text(lang, en: "Connection failed", vi: "Kết nối thất bại")
+        case .unchecked: return L10n.text(lang, en: "Claude is ready", vi: "Claude đã sẵn sàng", zh: "Claude 已就绪")
+        case .checking: return L10n.text(lang, en: "Checking connection…", vi: "Đang kiểm tra kết nối…", zh: "正在检查连接…")
+        case .connected: return L10n.text(lang, en: "Claude is connected", vi: "Đã kết nối Claude", zh: "Claude 已连接")
+        case .failed: return L10n.text(lang, en: "Connection failed", vi: "Kết nối thất bại", zh: "连接失败")
         }
     }
 
     private func statusDetail(lang: AppLanguage) -> String {
         guard settings.isAIReady else {
-            return L10n.text(lang, en: "Paste your Anthropic API key below to start.", vi: "Dán Anthropic API key bên dưới để bắt đầu.")
+            return L10n.text(lang, en: "Paste your Anthropic API key below to start.", vi: "Dán Anthropic API key bên dưới để bắt đầu.", zh: "在下方粘贴您的 Anthropic API 密钥即可开始。")
         }
         switch settings.connectionStatus {
-        case .unchecked: return L10n.text(lang, en: "Model: \(settings.model.name)", vi: "Model: \(settings.model.name)")
-        case .checking: return L10n.text(lang, en: "Sending a short test request.", vi: "Đang gửi yêu cầu kiểm tra ngắn.")
+        case .unchecked: return L10n.text(lang, en: "Model: \(settings.model.name)", vi: "Model: \(settings.model.name)", zh: "模型：\(settings.model.name)")
+        case .checking: return L10n.text(lang, en: "Sending a short test request.", vi: "Đang gửi yêu cầu kiểm tra ngắn.", zh: "正在发送简短测试请求。")
         case .connected(let msg), .failed(let msg): return msg
         }
     }

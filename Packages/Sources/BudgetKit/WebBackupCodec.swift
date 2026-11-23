@@ -182,36 +182,42 @@ public enum SampleBudgetData {
             let value = currency == .vnd ? (sgd * scale).rounded() : sgd
             return currency.toStorageMinor(max(1, value))
         }
-        let isVI = language.resolved == .vietnamese
+        let resolvedLang = language.resolved
         let me = HouseholdMember.defaultMeID
         let partner = HouseholdMember.defaultPartnerID
         let todayDay = min(28, DateKey.dayOfMonth(fromDayKey: DateKey.dayKey(from: Date())))
 
-        let rows: [(Int, String, String, CategoryID, TransactionType, Double, String, String, TransactionSource)] = [
-            (todayDay, "Ya Kun Kaya Toast", "Ya Kun Kaya Toast", .food, .expense, 7.80, me, myName, .applePay),
-            (max(1, todayDay - 1), "Đi siêu thị FairPrice", "FairPrice groceries", .food, .expense, 94.50, partner, partnerName, .bankEmail),
-            (max(1, todayDay - 2), "SimplyGo MRT & Bus", "SimplyGo MRT & Bus", .transport, .expense, 28.40, me, myName, .applePay),
-            (max(1, todayDay - 3), "SP Group Điện & Nước", "SP Group utilities", .bills, .expense, 168.00, partner, partnerName, .bankEmail),
-            (max(1, todayDay - 4), "Ăn tối cùng bạn bè", "Dinner with friends", .food, .expense, 86.20, me, myName, .applePay),
-            (max(1, todayDay - 5), "Đồ gia dụng Shopee SG", "Shopee household items", .shopping, .expense, 112.00, partner, partnerName, .bankNotification),
-            (3, "Tiền thuê nhà", "Monthly rent", .housing, .expense, 2_800.00, me, myName, .bankEmail),
-            (2, "Lương tháng", "Monthly salary", .salary, .income, 6_500.00, me, myName, .bankEmail),
-            (2, "Lương tháng (Vợ)", "Salary (Partner)", .salary, .income, 4_200.00, partner, partnerName, .manual),
+        let rows: [(Int, String, String, String, CategoryID, TransactionType, Double, String, String, TransactionSource)] = [
+            (todayDay, "Ya Kun Kaya Toast", "Ya Kun Kaya Toast", "亚坤咖椰吐司", .food, .expense, 7.80, me, myName, .applePay),
+            (max(1, todayDay - 1), "Đi siêu thị FairPrice", "FairPrice groceries", "FairPrice 超市购物", .food, .expense, 94.50, partner, partnerName, .bankEmail),
+            (max(1, todayDay - 2), "SimplyGo MRT & Bus", "SimplyGo MRT & Bus", "地铁公交 SimplyGo", .transport, .expense, 28.40, me, myName, .applePay),
+            (max(1, todayDay - 3), "SP Group Điện & Nước", "SP Group utilities", "SP Group 水电费", .bills, .expense, 168.00, partner, partnerName, .bankEmail),
+            (max(1, todayDay - 4), "Ăn tối cùng bạn bè", "Dinner with friends", "和朋友聚餐", .food, .expense, 86.20, me, myName, .applePay),
+            (max(1, todayDay - 5), "Đồ gia dụng Shopee SG", "Shopee household items", "Shopee 日用品", .shopping, .expense, 112.00, partner, partnerName, .bankNotification),
+            (3, "Tiền thuê nhà", "Monthly rent", "每月房租", .housing, .expense, 2_800.00, me, myName, .bankEmail),
+            (2, "Lương tháng", "Monthly salary", "月薪", .salary, .income, 6_500.00, me, myName, .bankEmail),
+            (2, "Lương tháng (Vợ)", "Salary (Partner)", "月薪（伴侣）", .salary, .income, 4_200.00, partner, partnerName, .manual),
         ]
 
         let transactions = rows.enumerated().map { idx, r in
             let day = String(format: "%@-%02d", monthKey, min(DateKey.daysInMonth(monthKey), r.0))
+            let title: String
+            switch resolvedLang {
+            case .vietnamese: title = r.1
+            case .english: title = r.2
+            case .chinese: title = r.3
+            }
             return TransactionRecord(
                 id: "sample-tx-\(idx)",
-                name: isVI ? r.1 : r.2,
-                amountMinor: amt(r.5),
-                type: r.4,
-                category: r.3,
+                name: title,
+                amountMinor: amt(r.6),
+                type: r.5,
+                category: r.4,
                 dayKey: day,
                 createdAt: DateKey.date(fromDayKey: day) ?? Date(),
-                source: r.8,
-                memberID: r.6,
-                memberName: r.7,
+                source: r.9,
+                memberID: r.7,
+                memberName: r.8,
                 needsReview: idx == 0
             )
         }
@@ -225,9 +231,9 @@ public enum SampleBudgetData {
         ]
 
         let goals: [SavingsGoalRecord] = [
-            SavingsGoalRecord(id: "sample-goal-1", name: isVI ? "Quỹ dự phòng" : "Emergency fund", icon: .shield, targetMinor: amt(20_000), savedMinor: amt(13_500)),
-            SavingsGoalRecord(id: "sample-goal-2", name: isVI ? "Du lịch Nhật Bản" : "Japan trip", icon: .plane, targetMinor: amt(5_000), savedMinor: amt(2_100)),
-            SavingsGoalRecord(id: "sample-goal-3", name: isVI ? "Quỹ gia đình" : "Family fund", icon: .heart, targetMinor: amt(10_000), savedMinor: amt(4_500)),
+            SavingsGoalRecord(id: "sample-goal-1", name: L10n.text(language, en: "Emergency fund", vi: "Quỹ dự phòng", zh: "应急基金"), icon: .shield, targetMinor: amt(20_000), savedMinor: amt(13_500)),
+            SavingsGoalRecord(id: "sample-goal-2", name: L10n.text(language, en: "Japan trip", vi: "Du lịch Nhật Bản", zh: "日本旅行"), icon: .plane, targetMinor: amt(5_000), savedMinor: amt(2_100)),
+            SavingsGoalRecord(id: "sample-goal-3", name: L10n.text(language, en: "Family fund", vi: "Quỹ gia đình", zh: "家庭基金"), icon: .heart, targetMinor: amt(10_000), savedMinor: amt(4_500)),
         ]
 
         return (transactions, budgets, goals)

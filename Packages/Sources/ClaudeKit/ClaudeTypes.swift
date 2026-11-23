@@ -17,15 +17,18 @@ public struct ClaudeModel: Identifiable, Hashable, Sendable {
         case Self.opus.id:
             return L10n.text(language,
                 en: "Most thorough analysis and insights, slower and costs more.",
-                vi: "Phân tích sâu nhất, chậm hơn và tốn phí cao hơn.")
+                vi: "Phân tích sâu nhất, chậm hơn và tốn phí cao hơn.",
+                zh: "最深入的分析和洞察，速度较慢且费用较高。")
         case Self.sonnet.id:
             return L10n.text(language,
                 en: "Recommended. Fast, accurate parsing and budget advice.",
-                vi: "Khuyên dùng. Nhanh, đọc giao dịch chuẩn và tư vấn chi tiêu tốt.")
+                vi: "Khuyên dùng. Nhanh, đọc giao dịch chuẩn và tư vấn chi tiêu tốt.",
+                zh: "推荐。速度快，解析准确且预算建议实用。")
         default:
             return L10n.text(language,
                 en: "Fastest and cheapest — great for quick bank alert parsing.",
-                vi: "Nhanh và tiết kiệm nhất — rất hợp để đọc thông báo ngân hàng.")
+                vi: "Nhanh và tiết kiệm nhất — rất hợp để đọc thông báo ngân hàng.",
+                zh: "最快最省费用——适合快速解析银行通知。")
         }
     }
 }
@@ -61,6 +64,93 @@ public enum Effort: String, Codable, Sendable, CaseIterable {
     case low, medium, high, xhigh, max
 }
 
+public struct ClaudeTool: Codable, Hashable, Sendable {
+    public var name: String
+    public var description: String
+    public var inputSchema: JSONValue
+
+    enum CodingKeys: String, CodingKey {
+        case name
+        case description
+        case inputSchema = "input_schema"
+    }
+
+    public init(name: String, description: String, inputSchema: JSONValue) {
+        self.name = name
+        self.description = description
+        self.inputSchema = inputSchema
+    }
+}
+
+public struct ClaudeToolUse: Codable, Hashable, Sendable {
+    public var id: String
+    public var name: String
+    public var input: JSONValue
+
+    public init(id: String, name: String, input: JSONValue) {
+        self.id = id
+        self.name = name
+        self.input = input
+    }
+}
+
+public enum ClaudeContentBlock: Hashable, Sendable {
+    case text(String)
+    case toolUse(ClaudeToolUse)
+    case toolResult(toolUseID: String, content: String, isError: Bool = false)
+}
+
+extension ClaudeContentBlock: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case type, text, id, name, input
+        case toolUseID = "tool_use_id"
+        case content
+        case isError = "is_error"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let type = try container.decode(String.self, forKey: .type)
+        switch type {
+        case "text":
+            self = .text(try container.decode(String.self, forKey: .text))
+        case "tool_use":
+            let id = try container.decode(String.self, forKey: .id)
+            let name = try container.decode(String.self, forKey: .name)
+            let input = try container.decode(JSONValue.self, forKey: .input)
+            self = .toolUse(ClaudeToolUse(id: id, name: name, input: input))
+        case "tool_result":
+            let toolUseID = try container.decode(String.self, forKey: .toolUseID)
+            let content = try container.decode(String.self, forKey: .content)
+            let isError = try container.decodeIfPresent(Bool.self, forKey: .isError) ?? false
+            self = .toolResult(toolUseID: toolUseID, content: content, isError: isError)
+        default:
+            throw DecodingError.dataCorruptedError(forKey: .type, in: container, debugDescription: "Unknown content block type \(type)")
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .text(let value):
+            try container.encode("text", forKey: .type)
+            try container.encode(value, forKey: .text)
+        case .toolUse(let tool):
+            try container.encode("tool_use", forKey: .type)
+            try container.encode(tool.id, forKey: .id)
+            try container.encode(tool.name, forKey: .name)
+            try container.encode(tool.input, forKey: .input)
+        case .toolResult(let toolUseID, let content, let isError):
+            try container.encode("tool_result", forKey: .type)
+            try container.encode(toolUseID, forKey: .toolUseID)
+            try container.encode(content, forKey: .content)
+            if isError {
+                try container.encode(true, forKey: .isError)
+            }
+        }
+    }
+}
+
 public struct ClaudeMessage: Codable, Hashable, Sendable {
     public enum Role: String, Codable, Sendable {
         case user, assistant
@@ -68,14 +158,59 @@ public struct ClaudeMessage: Codable, Hashable, Sendable {
 
     public var role: Role
     public var content: String
+    public var blocks: [ClaudeContentBlock]?
+
+    enum CodingKeys: String, CodingKey {
+        case role, content
+    }
 
     public init(role: Role, content: String) {
         self.role = role
         self.content = content
+        self.blocks = nil
+    }
+
+    public init(role: Role, blocks: [ClaudeContentBlock]) {
+        self.role = role
+        self.content = blocks.compactMap {
+            if case .text(let t) = $0 { return t }
+            return nil
+        }.joined()
+        self.blocks = blocks
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.role = try container.decode(Role.self, forKey: .role)
+        if let str = try? container.decode(String.self, forKey: .content) {
+            self.content = str
+            self.blocks = nil
+        } else {
+            let decodedBlocks = try container.decode([ClaudeContentBlock].self, forKey: .content)
+            self.blocks = decodedBlocks
+            self.content = decodedBlocks.compactMap {
+                if case .text(let t) = $0 { return t }
+                return nil
+            }.joined()
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(role, forKey: .role)
+        if let blocks {
+            try container.encode(blocks, forKey: .content)
+        } else {
+            try container.encode(content, forKey: .content)
+        }
     }
 
     public static func user(_ content: String) -> ClaudeMessage { .init(role: .user, content: content) }
     public static func assistant(_ content: String) -> ClaudeMessage { .init(role: .assistant, content: content) }
+    public static func assistant(blocks: [ClaudeContentBlock]) -> ClaudeMessage { .init(role: .assistant, blocks: blocks) }
+    public static func toolResults(_ results: [(id: String, content: String, isError: Bool)]) -> ClaudeMessage {
+        .init(role: .user, blocks: results.map { .toolResult(toolUseID: $0.id, content: $0.content, isError: $0.isError) })
+    }
 }
 
 public struct ClaudeRequest: Hashable, Sendable {
@@ -84,6 +219,7 @@ public struct ClaudeRequest: Hashable, Sendable {
     public var maxTokens: Int
     public var effort: Effort
     public var jsonSchema: JSONValue?
+    public var tools: [ClaudeTool]
     public var cacheConversation: Bool
 
     public init(
@@ -92,6 +228,7 @@ public struct ClaudeRequest: Hashable, Sendable {
         maxTokens: Int = 4_096,
         effort: Effort = .low,
         jsonSchema: JSONValue? = nil,
+        tools: [ClaudeTool] = [],
         cacheConversation: Bool = false
     ) {
         self.system = system
@@ -99,12 +236,14 @@ public struct ClaudeRequest: Hashable, Sendable {
         self.maxTokens = maxTokens
         self.effort = effort
         self.jsonSchema = jsonSchema
+        self.tools = tools
         self.cacheConversation = cacheConversation
     }
 }
 
 public struct ClaudeCompletion: Hashable, Sendable {
     public var text: String
+    public var toolUses: [ClaudeToolUse]
     public var stopReason: String?
     public var model: String?
     public var inputTokens: Int?
@@ -112,12 +251,14 @@ public struct ClaudeCompletion: Hashable, Sendable {
 
     public init(
         text: String = "",
+        toolUses: [ClaudeToolUse] = [],
         stopReason: String? = nil,
         model: String? = nil,
         inputTokens: Int? = nil,
         outputTokens: Int? = nil
     ) {
         self.text = text
+        self.toolUses = toolUses
         self.stopReason = stopReason
         self.model = model
         self.inputTokens = inputTokens
@@ -125,6 +266,16 @@ public struct ClaudeCompletion: Hashable, Sendable {
     }
 
     public var wasTruncated: Bool { stopReason == "max_tokens" }
+    public var needsToolExecution: Bool { !toolUses.isEmpty }
+
+    public var assistantBlocks: [ClaudeContentBlock] {
+        var result: [ClaudeContentBlock] = []
+        if !text.isEmpty {
+            result.append(.text(text))
+        }
+        result.append(contentsOf: toolUses.map { .toolUse($0) })
+        return result
+    }
 }
 
 public enum ClaudeStreamEvent: Hashable, Sendable {
@@ -187,60 +338,68 @@ extension ClaudeError {
         case .missingAPIKey:
             return L10n.text(language,
                 en: "Add your Anthropic API key in Settings to use AI features.",
-                vi: "Thêm Anthropic API key trong Cài đặt để dùng tính năng AI.")
+                vi: "Thêm Anthropic API key trong Cài đặt để dùng tính năng AI.",
+                zh: "请在设置中添加您的 Anthropic API 密钥以使用 AI 功能。")
         case .api(let status, _, let message, _):
             switch apiProblem ?? .other {
             case .workspaceRequired:
                 return L10n.text(language,
                     en: "This API key needs a Workspace ID (starts with wrkspc_) in Settings.",
-                    vi: "API key này cần Workspace ID (bắt đầu bằng wrkspc_) trong Cài đặt.")
+                    vi: "API key này cần Workspace ID (bắt đầu bằng wrkspc_) trong Cài đặt.",
+                    zh: "此 API 密钥需要在设置中填写 Workspace ID（以 wrkspc_ 开头）。")
             case .invalidWorkspaceID:
                 return L10n.text(language,
                     en: "The Workspace ID in Settings is invalid.",
-                    vi: "Workspace ID trong Cài đặt không hợp lệ.")
+                    vi: "Workspace ID trong Cài đặt không hợp lệ.",
+                    zh: "设置中的 Workspace ID 无效。")
             case .workspaceNotFound:
                 return L10n.text(language,
                     en: "Workspace not found for this API key.",
-                    vi: "Không tìm thấy Workspace cho API key này.")
+                    vi: "Không tìm thấy Workspace cho API key này.",
+                    zh: "未找到此 API 密钥对应的 Workspace。")
             case .outOfCredit:
                 return L10n.text(language,
                     en: "Your Anthropic API account has run out of credit.",
-                    vi: "Tài khoản Anthropic API đã hết credit.")
+                    vi: "Tài khoản Anthropic API đã hết credit.",
+                    zh: "您的 Anthropic API 账户余额已用尽。")
             case .keyRejected:
                 return L10n.text(language,
                     en: "The API key was rejected. Check it in Settings.",
-                    vi: "API key bị từ chối. Hãy kiểm tra lại trong Cài đặt.")
+                    vi: "API key bị từ chối. Hãy kiểm tra lại trong Cài đặt.",
+                    zh: "API 密钥被拒绝，请在设置中检查。")
             case .billing:
                 return L10n.text(language,
                     en: "Check Billing in the Claude Console.",
-                    vi: "Kiểm tra mục Billing trên Claude Console.")
+                    vi: "Kiểm tra mục Billing trên Claude Console.",
+                    zh: "请在 Claude Console 中检查账单设置。")
             case .notAllowed:
                 return message.isEmpty
-                    ? L10n.text(language, en: "This API key is not allowed to do that.", vi: "API key không có quyền thực hiện yêu cầu này.")
+                    ? L10n.text(language, en: "This API key is not allowed to do that.", vi: "API key không có quyền thực hiện yêu cầu này.", zh: "此 API 密钥无权执行该操作。")
                     : message
             case .modelUnavailable:
                 return L10n.text(language,
                     en: "The selected model is unavailable for this key. Pick another in Settings.",
-                    vi: "Model đã chọn không khả dụng với key này. Hãy chọn model khác trong Cài đặt.")
+                    vi: "Model đã chọn không khả dụng với key này. Hãy chọn model khác trong Cài đặt.",
+                    zh: "所选模型对此密钥不可用，请在设置中更换模型。")
             case .rateLimited:
-                return L10n.text(language, en: "Rate limit reached. Try again in a moment.", vi: "Đạt giới hạn tốc độ. Thử lại sau giây lát.")
+                return L10n.text(language, en: "Rate limit reached. Try again in a moment.", vi: "Đạt giới hạn tốc độ. Thử lại sau giây lát.", zh: "已达到请求频率限制，请稍后再试。")
             case .overloaded:
-                return L10n.text(language, en: "Claude is overloaded right now. Try again shortly.", vi: "Claude đang quá tải. Thử lại sau giây lát.")
+                return L10n.text(language, en: "Claude is overloaded right now. Try again shortly.", vi: "Claude đang quá tải. Thử lại sau giây lát.", zh: "Claude 当前负载过高，请稍后重试。")
             case .serverError:
-                return L10n.text(language, en: "Claude API error (\(status)). Try again.", vi: "Lỗi Claude API (\(status)). Thử lại sau.")
+                return L10n.text(language, en: "Claude API error (\(status)). Try again.", vi: "Lỗi Claude API (\(status)). Thử lại sau.", zh: "Claude API 错误（\(status)），请重试。")
             case .other:
                 return message.isEmpty
-                    ? L10n.text(language, en: "Request failed (\(status)).", vi: "Yêu cầu thất bại (\(status)).")
+                    ? L10n.text(language, en: "Request failed (\(status)).", vi: "Yêu cầu thất bại (\(status)).", zh: "请求失败（\(status)）。")
                     : message
             }
         case .refused:
-            return L10n.text(language, en: "Claude declined to answer this request.", vi: "Claude từ chối trả lời yêu cầu này.")
+            return L10n.text(language, en: "Claude declined to answer this request.", vi: "Claude từ chối trả lời yêu cầu này.", zh: "Claude 拒绝回答此请求。")
         case .truncated:
-            return L10n.text(language, en: "The reply was cut off. Try again.", vi: "Phản hồi bị cắt ngắn. Hãy thử lại.")
+            return L10n.text(language, en: "The reply was cut off. Try again.", vi: "Phản hồi bị cắt ngắn. Hãy thử lại.", zh: "回复被截断，请重试。")
         case .malformedResponse(let detail):
             return detail
         case .network(let detail):
-            return L10n.text(language, en: "Network problem: \(detail)", vi: "Lỗi mạng: \(detail)")
+            return L10n.text(language, en: "Network problem: \(detail)", vi: "Lỗi mạng: \(detail)", zh: "网络问题：\(detail)")
         }
     }
 }

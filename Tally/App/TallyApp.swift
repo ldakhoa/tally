@@ -42,6 +42,8 @@ struct TallyApp: App {
                 .task {
                     settings.refreshKeychain()
                     cloudSync.start(settings: settings, store: store)
+                    store.reconcileMemberIdentities(settings: settings, notifyCloud: true)
+                    store.deduplicateExistingTransactions(notifyCloud: true)
                     emailInbox.syncIfConfigured(settings: settings, store: store)
                 }
                 .onChange(of: scenePhase) { _, phase in

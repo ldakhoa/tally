@@ -46,80 +46,80 @@ extension GoalIcon {
     public var tintBackground: Color { color.opacity(0.14) }
 }
 
-// MARK: - Typography (Avenir Next from Tally Web, scaled for Dynamic Type)
+// MARK: - Typography (Cozy SF Pro Rounded, scaled for Dynamic Type)
 
 extension Font {
     public static var appDisplay: Font {
-        .custom("AvenirNext-DemiBold", size: 32, relativeTo: .largeTitle)
+        .system(size: 32, weight: .bold, design: .rounded)
     }
 
     public static var appTitle: Font {
-        .custom("AvenirNext-DemiBold", size: 26, relativeTo: .title)
+        .system(size: 26, weight: .bold, design: .rounded)
     }
 
     public static var appSection: Font {
-        .custom("AvenirNext-DemiBold", size: 20, relativeTo: .title2)
+        .system(size: 20, weight: .bold, design: .rounded)
     }
 
     public static var appHeading: Font {
-        .custom("AvenirNext-DemiBold", size: 16.5, relativeTo: .headline)
+        .system(size: 16.5, weight: .semibold, design: .rounded)
     }
 
     public static var appBody: Font {
-        .custom("AvenirNext-Regular", size: 16, relativeTo: .body)
+        .system(size: 16, weight: .regular, design: .rounded)
     }
 
     public static var appBodyMedium: Font {
-        .custom("AvenirNext-Medium", size: 16, relativeTo: .body)
+        .system(size: 16, weight: .medium, design: .rounded)
     }
 
     public static var appSecondary: Font {
-        .custom("AvenirNext-Regular", size: 14.5, relativeTo: .subheadline)
+        .system(size: 14.5, weight: .regular, design: .rounded)
     }
 
     public static var appControl: Font {
-        .custom("AvenirNext-Medium", size: 14.5, relativeTo: .subheadline)
+        .system(size: 14.5, weight: .semibold, design: .rounded)
     }
 
     public static var appControlLarge: Font {
-        .custom("AvenirNext-DemiBold", size: 16, relativeTo: .body)
+        .system(size: 16, weight: .bold, design: .rounded)
     }
 
     public static var appCaption: Font {
-        .custom("AvenirNext-Regular", size: 12.5, relativeTo: .caption)
+        .system(size: 12.5, weight: .medium, design: .rounded)
     }
 
     public static var appLabel: Font {
-        .custom("AvenirNext-DemiBold", size: 12.5, relativeTo: .footnote)
+        .system(size: 12.5, weight: .bold, design: .rounded)
     }
 
     public static var appMetric: Font {
-        .custom("AvenirNext-DemiBold", size: 22, relativeTo: .title2).monospacedDigit()
+        .system(size: 22, weight: .bold, design: .rounded).monospacedDigit()
     }
 
     public static var appMetricHero: Font {
-        .custom("AvenirNext-DemiBold", size: 30, relativeTo: .largeTitle).monospacedDigit()
+        .system(size: 32, weight: .heavy, design: .rounded).monospacedDigit()
     }
 
     public static var appAmount: Font {
-        .custom("AvenirNext-DemiBold", size: 15.5, relativeTo: .body).monospacedDigit()
+        .system(size: 15.5, weight: .bold, design: .rounded).monospacedDigit()
     }
 }
 
 extension CGFloat {
-    public static let titleTracking: CGFloat = -0.5
-    public static let sectionTracking: CGFloat = -0.35
-    public static let lineSpacing: CGFloat = 2.0
+    public static let titleTracking: CGFloat = 0.0
+    public static let sectionTracking: CGFloat = 0.0
+    public static let lineSpacing: CGFloat = 2.5
 }
 
-// MARK: - Radii & Surfaces (Onsite iOS look: floating 24pt cards in light mode, hairline in dark)
+// MARK: - Radii & Surfaces (Cozy plush cards with warm honey shadows)
 
 public enum Radius {
-    public static let card: CGFloat = 24
-    public static let panel: CGFloat = 16
-    public static let field: CGFloat = 12
-    public static let row: CGFloat = 10
-    public static let control: CGFloat = 12
+    public static let card: CGFloat = 26
+    public static let panel: CGFloat = 18
+    public static let field: CGFloat = 14
+    public static let row: CGFloat = 12
+    public static let control: CGFloat = 14
 }
 
 extension View {
@@ -136,8 +136,8 @@ extension View {
     }
 
     public func floatingShadow(_ isOn: Bool = true) -> some View {
-        shadow(color: .black.opacity(isOn ? 0.065 : 0), radius: 10, y: 4)
-            .shadow(color: .black.opacity(isOn ? 0.035 : 0), radius: 1, y: 0.5)
+        shadow(color: Color(hex: 0x6B4423, alpha: isOn ? 0.085 : 0), radius: 14, y: 6)
+            .shadow(color: Color(hex: 0x6B4423, alpha: isOn ? 0.04 : 0), radius: 2, y: 1)
     }
 
     public func documentColumn(maxWidth: CGFloat = 760) -> some View {

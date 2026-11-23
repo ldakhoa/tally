@@ -170,4 +170,196 @@ final class BudgetKitTests: XCTestCase {
         XCTAssertEqual(items.first?.member, "Khoa")
         try await client.ack(ids: ["m1"])
     }
+
+    func testCrossSourceDeduplication() {
+        let t0 = Date(timeIntervalSince1970: 1_763_900_000)
+        let t2min = t0.addingTimeInterval(120)
+        let t5hrs = t0.addingTimeInterval(5 * 3600)
+
+        let applePay = TransactionRecord(
+            id: "ap-1", name: "FairPrice", amountMinor: 1_850, type: .expense, category: .food,
+            dayKey: "2026-11-23", createdAt: t0, source: .applePay, memberID: "khoa", memberName: "Khoa"
+        )
+
+        // 1. SMS arrives 2 minutes later for the exact same purchase with slightly different bank merchant string.
+        let sms = TransactionRecord(
+            id: "sms-1", name: "FAIRPRICE FINEST", amountMinor: 1_850, type: .expense, category: .food,
+            dayKey: "2026-11-23", createdAt: t2min, source: .bankNotification, memberID: "khoa", memberName: "Khoa"
+        )
+        XCTAssertNotNil(TransactionDeduplicator.findDuplicate(for: sms, in: [applePay]))
+
+        // 2. Bank email arrives hours later (or next morning past midnight) with NTUC FairPrice.
+        let delayedEmail = TransactionRecord(
+            id: "email-1", name: "NTUC FairPrice", amountMinor: 1_850, type: .expense, category: .food,
+            dayKey: "2026-11-24", createdAt: t5hrs, source: .bankEmail, memberID: "khoa", memberName: "Khoa"
+        )
+        XCTAssertNotNil(TransactionDeduplicator.findDuplicate(for: delayedEmail, in: [applePay]))
+
+        // 3. Different merchant string from Apple Pay vs corporate entity in DBS email within 20 minutes -> duplicate!
+        let corpEmail = TransactionRecord(
+            id: "email-2", name: "COFFEE CONCEPT PTE LTD", amountMinor: 1_850, type: .expense, category: .food,
+            dayKey: "2026-11-23", createdAt: t2min, source: .bankEmail, memberID: "khoa", memberName: "Khoa"
+        )
+        XCTAssertNotNil(TransactionDeduplicator.findDuplicate(for: corpEmail, in: [applePay]))
+
+        // 4. Two genuinely separate same-amount Apple Pay purchases 5 hours apart -> NOT a duplicate!
+        let secondTrip = TransactionRecord(
+            id: "ap-2", name: "FairPrice", amountMinor: 1_850, type: .expense, category: .food,
+            dayKey: "2026-11-23", createdAt: t5hrs, source: .applePay, memberID: "khoa", memberName: "Khoa"
+        )
+        XCTAssertNil(TransactionDeduplicator.findDuplicate(for: secondTrip, in: [applePay]))
+
+        // 5. Wife taps Apple Pay for the same amount at the same store -> NOT a duplicate (same source, different memberID)!
+        let wifeApplePay = TransactionRecord(
+            id: "ap-wife", name: "FairPrice", amountMinor: 1_850, type: .expense, category: .food,
+            dayKey: "2026-11-23", createdAt: t2min, source: .applePay, memberID: "wife", memberName: "Wife"
+        )
+        XCTAssertNil(TransactionDeduplicator.findDuplicate(for: wifeApplePay, in: [applePay]))
+
+        // 6. Cross-member Apple Pay ("Me") + Bank Email ("Khoa") for the same purchase (mismatched member label or shared card) -> IS a duplicate!
+        let guardianApplePay = TransactionRecord(
+            id: "ap-guardian", name: "Guardian Hillview", amountMinor: 1_740, type: .expense, category: .health,
+            dayKey: "2026-11-23", createdAt: t0, source: .applePay, memberID: "uuid-me", memberName: "Me"
+        )
+        let guardianEmail = TransactionRecord(
+            id: "email-guardian", name: "Guardian Hillview", amountMinor: 1_740, type: .expense, category: .health,
+            dayKey: "2026-11-23", createdAt: t5hrs, source: .bankEmail, rawSourceText: "DBS Alert SGD 17.40",
+            memberID: "member-khoa", memberName: "Khoa"
+        )
+        XCTAssertNotNil(TransactionDeduplicator.findDuplicate(for: guardianEmail, in: [guardianApplePay]))
+        XCTAssertNotNil(TransactionDeduplicator.findDuplicate(for: guardianApplePay, in: [guardianEmail]))
+
+        // 7. Deterministic sweep collapses already-stored Apple Pay + Bank Email duplicates regardless of order,
+        //    keeps Apple Pay as winner, merges rawSourceText, and never deletes two identical manual entries.
+        let sweepA = TransactionDeduplicator.findExistingDuplicates(in: [guardianApplePay, guardianEmail])
+        let sweepB = TransactionDeduplicator.findExistingDuplicates(in: [guardianEmail, guardianApplePay])
+        XCTAssertEqual(sweepA.duplicateIDsToDelete, ["email-guardian"])
+        XCTAssertEqual(sweepB.duplicateIDsToDelete, ["email-guardian"])
+        XCTAssertEqual(sweepA.updatedWinners.first?.id, "ap-guardian")
+        XCTAssertEqual(sweepA.updatedWinners.first?.rawSourceText, "DBS Alert SGD 17.40")
+
+        let manual1 = TransactionRecord(
+            id: "m1", name: "Coffee", amountMinor: 500, type: .expense, category: .food,
+            dayKey: "2026-11-23", createdAt: t0, source: .manual, memberID: "uuid-me", memberName: "Me"
+        )
+        let manual2 = TransactionRecord(
+            id: "m2", name: "Coffee", amountMinor: 500, type: .expense, category: .food,
+            dayKey: "2026-11-23", createdAt: t2min, source: .manual, memberID: "uuid-me", memberName: "Me"
+        )
+        let manualSweep = TransactionDeduplicator.findExistingDuplicates(in: [manual1, manual2])
+        XCTAssertTrue(manualSweep.duplicateIDsToDelete.isEmpty)
+    }
+
+    func testDailyCalendarTotalsAndStatisticsSnapshot() {
+        let txs = [
+            TransactionRecord(id: "o1", name: "FairPrice", amountMinor: 8_000, type: .expense, category: .food, dayKey: "2026-10-15", memberID: "me", memberName: "Khoa"),
+            TransactionRecord(id: "o2", name: "Salary", amountMinor: 500_000, type: .income, category: .salary, dayKey: "2026-10-01", memberID: "me", memberName: "Khoa"),
+            TransactionRecord(id: "n1", name: "FairPrice", amountMinor: 2_000, type: .expense, category: .food, dayKey: "2026-11-10", memberID: "me", memberName: "Khoa"),
+            TransactionRecord(id: "n2", name: "fairprice", amountMinor: 4_500, type: .expense, category: .food, dayKey: "2026-11-12", memberID: "wife", memberName: "Wife"),
+            TransactionRecord(id: "n3", name: "Grab", amountMinor: 1_500, type: .expense, category: .transport, dayKey: "2026-11-10", memberID: "me", memberName: "Khoa"),
+            TransactionRecord(id: "n4", name: "PayNow Refund", amountMinor: 10_000, type: .income, category: .other, dayKey: "2026-11-10", memberID: "me", memberName: "Khoa"),
+            TransactionRecord(id: "del", name: "Deleted", amountMinor: 99_900, type: .expense, category: .shopping, dayKey: "2026-11-10", memberID: "me", memberName: "Khoa", isDeleted: true),
+        ]
+
+        let daily = MonthlySnapshot.dailyTotals(allTransactions: txs)
+        XCTAssertEqual(daily["2026-11-10"]?.spendingMinor, 3_500)
+        XCTAssertEqual(daily["2026-11-10"]?.incomeMinor, 10_000)
+        XCTAssertEqual(daily["2026-11-10"]?.count, 3)
+
+        let meOnlyDaily = MonthlySnapshot.dailyTotals(allTransactions: txs, memberFilter: "me")
+        XCTAssertNil(meOnlyDaily["2026-11-12"])
+
+        let stats = StatisticsSnapshot.compute(
+            period: .month("2026-11"),
+            allTransactions: txs,
+            allBudgets: [],
+            trendMonths: 6,
+            todayKey: "2026-11-20"
+        )
+        XCTAssertEqual(stats.current.spendingMinor, 8_000)
+        XCTAssertEqual(stats.previousSpendingMinor, 8_000)
+        XCTAssertEqual(stats.spendingChangePercent ?? -1, 0, accuracy: 0.01)
+        XCTAssertEqual(stats.elapsedDaysCount, 20)
+        XCTAssertEqual(stats.spendingDaysCount, 2)
+        XCTAssertEqual(stats.averageDailySpendingMinor, 400)
+        XCTAssertEqual(stats.highestSpendDay?.dayKey, "2026-11-12")
+        XCTAssertEqual(stats.topMerchants.first?.normalizedKey, "fairprice")
+        XCTAssertEqual(stats.topMerchants.first?.totalMinor, 6_500)
+        XCTAssertEqual(stats.topMerchants.first?.count, 2)
+        XCTAssertEqual(stats.monthlyTrend.count, 6)
+        XCTAssertEqual(stats.monthlyTrend.last?.monthKey, "2026-11")
+        XCTAssertEqual(stats.monthlyTrend.dropLast().last?.monthKey, "2026-10")
+        XCTAssertEqual(stats.weekdayBreakdown.count, 7)
+
+        XCTAssertEqual(MoneyFormat.formatCalendarAmount(minor: 2_000, currency: .sgd, language: .english, isIncome: false), "-$20")
+        XCTAssertEqual(MoneyFormat.formatCalendarAmount(minor: 10_000, currency: .sgd, language: .english, isIncome: true), "+$100")
+        XCTAssertEqual(MoneyFormat.formatCalendarAmount(minor: 450, currency: .sgd, language: .english, isIncome: false), "-$4.5")
+        XCTAssertEqual(MoneyFormat.formatCalendarAmount(minor: 6_500_000, currency: .vnd, language: .vietnamese, isIncome: false), "-65k")
+    }
+
+    func testCrossAppAssistantToolDecodingAndChineseLocalization() throws {
+        // 1. Multiple transactions in one call (rent + credit card)
+        let addTxTool = ClaudeToolUse(
+            id: "t1",
+            name: AssistantToolCatalog.addTransactionsName,
+            input: [
+                "items": [
+                    ["name": "Tiền nhà", "amount": 3000, "type": "expense", "category": "housing"],
+                    ["name": "Trả thẻ tín dụng", "amount": 850.5, "type": "expense", "category": "bills", "member": "partner"],
+                ]
+            ]
+        )
+        let addDecoded = try AssistantToolCatalog.decode(addTxTool, defaultDayKey: "2026-11-23", defaultMonthKey: "2026-11").get()
+        if case .addTransactions(let items) = addDecoded {
+            XCTAssertEqual(items.count, 2)
+            XCTAssertEqual(items[0].name, "Tiền nhà")
+            XCTAssertEqual(items[0].category, .housing)
+            XCTAssertEqual(items[0].dayKey, "2026-11-23")
+            XCTAssertEqual(items[1].amountMajor, 850.5)
+            XCTAssertEqual(items[1].category, .bills)
+            XCTAssertEqual(items[1].memberHint, "partner")
+        } else {
+            XCTFail("Expected addTransactions command")
+        }
+
+        // 2. Setting monthly budgets
+        let budgetTool = ClaudeToolUse(
+            id: "t2",
+            name: AssistantToolCatalog.setBudgetsName,
+            input: [
+                "items": [
+                    ["category": "food", "limit": 1000],
+                    ["category": "shopping", "limit": 500],
+                ]
+            ]
+        )
+        let budgetDecoded = try AssistantToolCatalog.decode(budgetTool, defaultDayKey: "2026-11-23", defaultMonthKey: "2026-11").get()
+        if case .setBudgets(let monthKey, let items) = budgetDecoded {
+            XCTAssertEqual(monthKey, "2026-11")
+            XCTAssertEqual(items.count, 2)
+            XCTAssertEqual(items[0].category, .food)
+            XCTAssertEqual(items[0].limitMajor, 1000)
+        } else {
+            XCTFail("Expected setBudgets command")
+        }
+
+        // 3. Creating a savings goal
+        let goalTool = ClaudeToolUse(
+            id: "t3",
+            name: AssistantToolCatalog.createSavingsGoalName,
+            input: [
+                "name": "日本旅行",
+                "target_amount": 5000,
+                "saved_amount": 1000,
+                "icon": "plane",
+            ]
+        )
+        let goalDecoded = try AssistantToolCatalog.decode(goalTool, defaultDayKey: "2026-11-23", defaultMonthKey: "2026-11").get()
+        XCTAssertEqual(goalDecoded, .createSavingsGoal(name: "日本旅行", targetMajor: 5000, savedMajor: 1000, icon: .plane))
+
+        // 4. Chinese titles & prompts
+        XCTAssertEqual(CategoryID.housing.title(in: .chinese), "住房")
+        XCTAssertEqual(GoalIcon.plane.title(in: .chinese), "旅行")
+        XCTAssertEqual(BudgetAssistantPrompt.suggestedPrompts(in: .chinese).count, 4)
+    }
 }

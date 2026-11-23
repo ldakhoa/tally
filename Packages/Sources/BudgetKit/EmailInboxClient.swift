@@ -34,15 +34,15 @@ public enum EmailInboxError: Error, Equatable, Sendable {
     public func localizedMessage(in language: AppLanguage) -> String {
         switch self {
         case .invalidURL:
-            return L10n.text(language, en: "Enter a valid HTTPS Worker URL.", vi: "Nhập địa chỉ HTTPS hợp lệ của Worker.")
+            return L10n.text(language, en: "Enter a valid HTTPS Worker URL.", vi: "Nhập địa chỉ HTTPS hợp lệ của Worker.", zh: "请输入有效的 HTTPS Worker 地址。")
         case .missingSecret:
-            return L10n.text(language, en: "Enter your Inbox Secret token.", vi: "Nhập mã bí mật Inbox Secret.")
+            return L10n.text(language, en: "Enter your Inbox Secret token.", vi: "Nhập mã bí mật Inbox Secret.", zh: "请输入您的 Inbox Secret 密钥。")
         case .unauthorized:
-            return L10n.text(language, en: "Inbox Secret was rejected (401). Check your secret.", vi: "Mã bí mật bị từ chối (401). Kiểm tra lại INBOX_SECRET.")
+            return L10n.text(language, en: "Inbox Secret was rejected (401). Check your secret.", vi: "Mã bí mật bị từ chối (401). Kiểm tra lại INBOX_SECRET.", zh: "密钥被拒绝（401），请检查您的 Inbox Secret。")
         case .serverError(let code):
-            return L10n.text(language, en: "Email Inbox returned HTTP \(code).", vi: "Email Inbox trả về lỗi HTTP \(code).")
+            return L10n.text(language, en: "Email Inbox returned HTTP \(code).", vi: "Email Inbox trả về lỗi HTTP \(code).", zh: "邮件收件箱返回 HTTP \(code) 错误。")
         case .network(let detail):
-            return L10n.text(language, en: "Connection failed: \(detail)", vi: "Lỗi kết nối: \(detail)")
+            return L10n.text(language, en: "Connection failed: \(detail)", vi: "Lỗi kết nối: \(detail)", zh: "连接失败：\(detail)")
         }
     }
 }

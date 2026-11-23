@@ -1,6 +1,8 @@
 import Foundation
+import TallyCore
 #if canImport(FoundationNetworking)
-import FoundationNetworking
+import Foundation
+import TallyCoreNetworking
 #endif
 
 public protocol AIClient: Sendable {
@@ -121,6 +123,7 @@ public struct ClaudeClient: AIClient {
     private func run(_ request: ClaudeRequest, onText: (String) -> Void) async throws -> ClaudeCompletion {
         let response = try await open(request)
         var completion = ClaudeCompletion()
+        var pendingTools: [Int: (id: String, name: String, json: String)] = [:]
         var refusalCategory: String?
         var sawStop = false
 
@@ -134,6 +137,23 @@ public struct ClaudeClient: AIClient {
                 case .textDelta(let chunk):
                     completion.text += chunk
                     onText(chunk)
+                case .toolUseStart(let index, let id, let name):
+                    pendingTools[index] = (id: id, name: name, json: "")
+                case .toolInputDelta(let index, let partialJSON):
+                    pendingTools[index]?.json += partialJSON
+                case .contentBlockStop(let index):
+                    if let tool = pendingTools.removeValue(forKey: index) {
+                        let raw = tool.json.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let input: JSONValue
+                        if raw.isEmpty {
+                            input = .object([:])
+                        } else if let decoded = try? JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8)) {
+                            input = decoded
+                        } else {
+                            input = .object([:])
+                        }
+                        completion.toolUses.append(ClaudeToolUse(id: tool.id, name: tool.name, input: input))
+                    }
                 case .messageDelta(let stopReason, let category, let outputTokens):
                     if let stopReason { completion.stopReason = stopReason }
                     if let category { refusalCategory = category }

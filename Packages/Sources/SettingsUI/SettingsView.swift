@@ -10,11 +10,15 @@ import ThemeTokens
 import UniformTypeIdentifiers
 
 public struct SettingsView: View {
+    public var isModal: Bool
+
     @Environment(AppSettings.self) private var settings
     @Environment(CloudSync.self) private var cloudSync
     @Environment(\.dismiss) private var dismiss
 
-    public init() {}
+    public init(isModal: Bool = false) {
+        self.isModal = isModal
+    }
 
     public var body: some View {
         let lang = settings.language
@@ -27,7 +31,7 @@ public struct SettingsView: View {
                         settingsRow(
                             symbol: "slider.horizontal.3",
                             tint: nil,
-                            title: L10n.text(lang, en: "General & Appearance", vi: "Chung & Giao diện"),
+                            title: L10n.text(lang, en: "General & Appearance", vi: "Chung & Giao diện", zh: "通用与外观"),
                             detail: "\(settings.currency.rawValue) · \(settings.language.title(in: lang))"
                         )
                     }
@@ -41,7 +45,7 @@ public struct SettingsView: View {
                             title: "Claude AI",
                             detail: settings.isAIReady
                                 ? settings.model.name
-                                : L10n.text(lang, en: "Not set up", vi: "Chưa thiết lập")
+                                : L10n.text(lang, en: "Not set up", vi: "Chưa thiết lập", zh: "未配置")
                         )
                     }
 
@@ -51,8 +55,8 @@ public struct SettingsView: View {
                         settingsRow(
                             symbol: "bolt.horizontal.fill",
                             tint: .accent,
-                            title: L10n.text(lang, en: "Auto-Capture & Shortcuts", vi: "Tự động ghi & Phím tắt"),
-                            detail: L10n.text(lang, en: "Apple Pay, Bank Email & SMS", vi: "Apple Pay, Email & SMS ngân hàng")
+                            title: L10n.text(lang, en: "Auto-Capture & Shortcuts", vi: "Tự động ghi & Phím tắt", zh: "自动记账与快捷指令"),
+                            detail: L10n.text(lang, en: "Apple Pay, Bank Email & SMS", vi: "Apple Pay, Email & SMS ngân hàng", zh: "Apple Pay、银行邮件与短信")
                         )
                     }
 
@@ -62,10 +66,10 @@ public struct SettingsView: View {
                         settingsRow(
                             symbol: "envelope.badge.fill",
                             tint: settings.isEmailInboxConfigured ? .positive : .info,
-                            title: L10n.text(lang, en: "Cloud Bank Email Inbox", vi: "Hộp thư Email ngân hàng"),
+                            title: L10n.text(lang, en: "Cloud Bank Email Inbox", vi: "Hộp thư Email ngân hàng", zh: "云端银行邮件收件箱"),
                             detail: settings.isEmailInboxConfigured
-                                ? L10n.text(lang, en: "Connected", vi: "Đã kết nối")
-                                : L10n.text(lang, en: "Zero-Shortcuts Gmail / Mail sync", vi: "Tự động từ Gmail, không cần Phím tắt")
+                                ? L10n.text(lang, en: "Connected", vi: "Đã kết nối", zh: "已连接")
+                                : L10n.text(lang, en: "Zero-Shortcuts Gmail / Mail sync", vi: "Tự động từ Gmail, không cần Phím tắt", zh: "无需快捷指令自动同步 Gmail")
                         )
                     }
 
@@ -75,7 +79,7 @@ public struct SettingsView: View {
                         settingsRow(
                             symbol: "icloud.fill",
                             tint: cloudSync.phase == .running ? .info : .textSecondary,
-                            title: L10n.text(lang, en: "iCloud & Household", vi: "iCloud & Gia đình"),
+                            title: L10n.text(lang, en: "iCloud & Household", vi: "iCloud & Gia đình", zh: "iCloud 与家庭共享"),
                             detail: cloudStatusShort(lang: lang)
                         )
                     }
@@ -86,8 +90,8 @@ public struct SettingsView: View {
                         settingsRow(
                             symbol: "arrow.up.arrow.down.circle",
                             tint: nil,
-                            title: L10n.text(lang, en: "Backup & Data", vi: "Sao lưu & Dữ liệu"),
-                            detail: L10n.text(lang, en: "JSON import / export", vi: "Nhập / xuất JSON")
+                            title: L10n.text(lang, en: "Backup & Data", vi: "Sao lưu & Dữ liệu", zh: "备份与数据"),
+                            detail: L10n.text(lang, en: "JSON import / export", vi: "Nhập / xuất JSON", zh: "JSON 导入 / 导出")
                         )
                     }
                 }
@@ -97,10 +101,12 @@ public struct SettingsView: View {
             #endif
             .scrollContentBackground(.hidden)
             .pageBackground()
-            .navigationTitle(L10n.text(lang, en: "Settings", vi: "Cài đặt"))
+            .navigationTitle(L10n.text(lang, en: "Settings", vi: "Cài đặt", zh: "设置"))
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Done", vi: "Xong")) { dismiss() }
+                if isModal {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(L10n.text(lang, en: "Done", vi: "Xong", zh: "完成")) { dismiss() }
+                    }
                 }
             }
         }
@@ -121,14 +127,14 @@ public struct SettingsView: View {
         switch cloudSync.phase {
         case .running:
             return settings.cloudZoneRole.isSharedParticipant
-                ? L10n.text(lang, en: "Joined household", vi: "Đã tham gia gia đình")
+                ? L10n.text(lang, en: "Joined household", vi: "Đã tham gia gia đình", zh: "已加入家庭")
                 : (cloudSync.participantNames.isEmpty
-                    ? L10n.text(lang, en: "Synced", vi: "Đang đồng bộ")
-                    : L10n.text(lang, en: "Shared with \(cloudSync.participantNames.joined(separator: ", "))", vi: "Chia sẻ với \(cloudSync.participantNames.joined(separator: ", "))"))
-        case .off: return L10n.text(lang, en: "Off", vi: "Tắt")
-        case .noAccount: return L10n.text(lang, en: "Sign in to iCloud", vi: "Chưa đăng nhập iCloud")
-        case .unavailable: return L10n.text(lang, en: "Unavailable", vi: "Không khả dụng")
-        case .checkingAccount, .accountUnavailable: return L10n.text(lang, en: "Checking…", vi: "Đang kiểm tra…")
+                    ? L10n.text(lang, en: "Synced", vi: "Đang đồng bộ", zh: "已同步")
+                    : L10n.text(lang, en: "Shared with \(cloudSync.participantNames.joined(separator: ", "))", vi: "Chia sẻ với \(cloudSync.participantNames.joined(separator: ", "))", zh: "已与 \(cloudSync.participantNames.joined(separator: ", ")) 共享"))
+        case .off: return L10n.text(lang, en: "Off", vi: "Tắt", zh: "已关闭")
+        case .noAccount: return L10n.text(lang, en: "Sign in to iCloud", vi: "Chưa đăng nhập iCloud", zh: "请登录 iCloud")
+        case .unavailable: return L10n.text(lang, en: "Unavailable", vi: "Không khả dụng", zh: "不可用")
+        case .checkingAccount, .accountUnavailable: return L10n.text(lang, en: "Checking…", vi: "Đang kiểm tra…", zh: "检查中…")
         }
     }
 }

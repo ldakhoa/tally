@@ -145,8 +145,8 @@ public final class ThemeRuntime {
         }
         let tint = tokens.accent
         let text = tokens.text
-        let navTitleFont = UIFont(name: "AvenirNext-DemiBold", size: 17) ?? .systemFont(ofSize: 17, weight: .semibold)
-        let largeTitleBase = UIFont(name: "AvenirNext-DemiBold", size: 32) ?? .systemFont(ofSize: 32, weight: .semibold)
+        let navTitleFont = Self.roundedFont(size: 17, weight: .bold)
+        let largeTitleBase = Self.roundedFont(size: 32, weight: .bold)
         let largeTitleFont = UIFontMetrics(forTextStyle: .largeTitle).scaledFont(for: largeTitleBase)
 
         UINavigationBar.appearance().titleTextAttributes = [.foregroundColor: text, .font: navTitleFont]
@@ -161,6 +161,13 @@ public final class ThemeRuntime {
                 Self.applyText(text, navTitleFont: navTitleFont, largeTitleFont: largeTitleFont, toBarsIn: window)
             }
         }
+    }
+
+    @MainActor
+    private static func roundedFont(size: CGFloat, weight: UIFont.Weight) -> UIFont {
+        let base = UIFont.systemFont(ofSize: size, weight: weight)
+        guard let descriptor = base.fontDescriptor.withDesign(.rounded) else { return base }
+        return UIFont(descriptor: descriptor, size: size)
     }
 
     @MainActor

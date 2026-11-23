@@ -17,6 +17,11 @@ public struct ChangedSyncRecord: Hashable, Sendable {
     }
 }
 
+public enum ActivityTypeFilter: String, CaseIterable, Identifiable, Hashable, Sendable {
+    case all, expense, income, auto
+    public var id: String { rawValue }
+}
+
 /// Central reactive store for transactions, monthly budgets, and savings goals.
 /// Persists to SwiftData and notifies CloudSync whenever a local write occurs.
 @MainActor
@@ -36,6 +41,9 @@ public final class BudgetStore {
     }
     /// `nil` means all household members.
     public var selectedMemberID: String? = nil
+    /// Active Activity tab filters (also driven by tapping tiles/categories on Overview).
+    public var activityTypeFilter: ActivityTypeFilter = .all
+    public var activityCategoryFilter: CategoryID? = nil
 
     @ObservationIgnored public var onLocalChanges: (([ChangedSyncRecord]) -> Void)?
     @ObservationIgnored private let context: ModelContext
@@ -91,9 +99,27 @@ public final class BudgetStore {
         )
     }
 
-    /// Set of `YYYY-MM-DD` keys that have at least one active transaction (for calendar dots).
+    /// Rich multi-month & breakdown analytics for the Statistics tab.
+    public var statisticsSnapshot: StatisticsSnapshot {
+        StatisticsSnapshot.compute(
+            period: selectedPeriod,
+            allTransactions: transactions,
+            allBudgets: budgets,
+            memberFilter: selectedMemberID
+        )
+    }
+
+    /// Per-day spending & income totals keyed by `YYYY-MM-DD` (respects active member filter).
+    public var dailyCalendarTotals: [String: DailyCalendarTotal] {
+        MonthlySnapshot.dailyTotals(
+            allTransactions: transactions,
+            memberFilter: selectedMemberID
+        )
+    }
+
+    /// Set of `YYYY-MM-DD` keys that have at least one active transaction.
     public var transactionDayKeys: Set<String> {
-        Set(activeTransactions.map(\.dayKey))
+        Set(dailyCalendarTotals.keys)
     }
 
     /// Distinct household members seen in transactions plus the current device's profile.
@@ -104,7 +130,7 @@ public final class BudgetStore {
         for tx in activeTransactions {
             if map[tx.memberID] == nil {
                 let fallback = tx.memberName.isEmpty
-                    ? L10n.text(settings.language, en: "Partner", vi: "Người thân")
+                    ? L10n.text(settings.language, en: "Partner", vi: "Người thân", zh: "伴侣")
                     : tx.memberName
                 map[tx.memberID] = HouseholdMember(id: tx.memberID, name: fallback)
             }
@@ -146,6 +172,134 @@ public final class BudgetStore {
         if notifyCloud {
             onLocalChanges?([ChangedSyncRecord(kind: .transaction, id: stamped.id)])
         }
+    }
+
+    /// Saves an auto-captured transaction (Apple Pay, Bank Email, SMS, Paste) only if no
+    /// cross-source duplicate already exists; otherwise merges useful metadata into the existing
+    /// transaction without double-counting.
+    @discardableResult
+    public func saveAutoCapturedTransaction(
+        _ record: TransactionRecord,
+        notifyCloud: Bool = true
+    ) -> (saved: TransactionRecord, wasDuplicate: Bool) {
+        if let match = TransactionDeduplicator.findDuplicate(for: record, in: transactions) {
+            let merged = TransactionDeduplicator.mergeMetadata(existing: match.existing, duplicate: record)
+            if merged != match.existing {
+                saveTransaction(merged, notifyCloud: notifyCloud)
+            }
+            return (merged, true)
+        }
+        saveTransaction(record, notifyCloud: notifyCloud)
+        return (record, false)
+    }
+
+    /// Sweeps active transactions to deterministically remove cross-source auto-captured duplicates
+    /// (e.g., Apple Pay + Bank Email with different member labels or synced concurrently from two devices).
+    @discardableResult
+    public func deduplicateExistingTransactions(notifyCloud: Bool = true) -> Int {
+        let sweep = TransactionDeduplicator.findExistingDuplicates(in: transactions)
+        guard sweep.hasChanges else { return 0 }
+
+        var changed: [ChangedSyncRecord] = []
+        let now = Date()
+
+        for winner in sweep.updatedWinners {
+            upsertTransaction(winner)
+            changed.append(ChangedSyncRecord(kind: .transaction, id: winner.id))
+        }
+
+        for dupID in sweep.duplicateIDsToDelete {
+            guard var dup = transactions.first(where: { $0.id == dupID && !$0.isDeleted }) else { continue }
+            dup.isDeleted = true
+            dup.needsReview = false
+            dup.updatedAt = now
+            upsertTransaction(dup)
+            changed.append(ChangedSyncRecord(kind: .transaction, id: dupID))
+        }
+
+        guard !changed.isEmpty else { return 0 }
+        try? context.save()
+        reload()
+        if notifyCloud {
+            onLocalChanges?(changed)
+        }
+        return sweep.duplicateIDsToDelete.count
+    }
+
+    private static let genericPartnerLabels: Set<String> = [
+        "wife", "partner", "husband", "spouse", "vợ", "vo", "chồng", "chong", "người thân"
+    ]
+
+    /// Merges split member identities for the current user (e.g., local `"Me"` UUID + synthetic
+    /// `"member-khoa"` created by Email Inbox Sync before `myDisplayName` was set) into one
+    /// unified `(currentMember.id, currentMember.name)` profile and syncs updates to iCloud.
+    @discardableResult
+    public func reconcileMemberIdentities(settings: AppSettings, notifyCloud: Bool = true) -> Int {
+        let partnerTrimmed = settings.partnerDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        // If this is the household owner's device and myDisplayName was never set, adopt the sole
+        // non-partner synthetic email member (e.g. "member-khoa" -> "Khoa") as the owner's name.
+        if settings.myDisplayName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+           !settings.cloudZoneRole.isSharedParticipant {
+            var syntheticMembers: [String: String] = [:]
+            for tx in activeTransactions {
+                guard tx.memberID.hasPrefix("member-"),
+                      tx.memberID != HouseholdMember.defaultMeID,
+                      tx.memberID != HouseholdMember.defaultPartnerID
+                else { continue }
+                let name = tx.memberName.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty else { continue }
+                if !partnerTrimmed.isEmpty && name.caseInsensitiveCompare(partnerTrimmed) == .orderedSame {
+                    continue
+                }
+                if Self.genericPartnerLabels.contains(name.lowercased()) {
+                    continue
+                }
+                syntheticMembers[tx.memberID] = name
+            }
+            if syntheticMembers.count == 1, let onlyName = syntheticMembers.values.first {
+                settings.myDisplayName = onlyName
+            }
+        }
+
+        let trimmedMyName = settings.myDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedMyName.isEmpty else { return 0 }
+
+        let me = settings.currentMember
+        let syntheticMeID = "member-\(trimmedMyName.lowercased())"
+        let now = Date()
+        var changed: [ChangedSyncRecord] = []
+        var mergedAwayIDs: Set<String> = []
+
+        for var tx in activeTransactions {
+            if tx.memberID == me.id {
+                if tx.memberName != me.name {
+                    tx.memberName = me.name
+                    tx.updatedAt = now
+                    upsertTransaction(tx)
+                    changed.append(ChangedSyncRecord(kind: .transaction, id: tx.id))
+                }
+            } else if tx.memberID == syntheticMeID
+                        || tx.memberName.caseInsensitiveCompare(me.name) == .orderedSame {
+                mergedAwayIDs.insert(tx.memberID)
+                tx.memberID = me.id
+                tx.memberName = me.name
+                tx.updatedAt = now
+                upsertTransaction(tx)
+                changed.append(ChangedSyncRecord(kind: .transaction, id: tx.id))
+            }
+        }
+
+        guard !changed.isEmpty else { return 0 }
+        if let selected = selectedMemberID, mergedAwayIDs.contains(selected) {
+            selectedMemberID = me.id
+        }
+        try? context.save()
+        reload()
+        if notifyCloud {
+            onLocalChanges?(changed)
+        }
+        return changed.count
     }
 
     public func deleteTransaction(id: String) {
@@ -268,7 +422,7 @@ public final class BudgetStore {
             currency: settings.currency,
             language: settings.language,
             myName: settings.currentMember.name,
-            partnerName: partner.isEmpty ? L10n.text(settings.language, en: "Wife", vi: "Vợ") : partner
+            partnerName: partner.isEmpty ? L10n.text(settings.language, en: "Wife", vi: "Vợ", zh: "妻子") : partner
         )
         var changed: [ChangedSyncRecord] = []
         for tx in sample.transactions {
@@ -352,6 +506,7 @@ public final class BudgetStore {
         }
         try? context.save()
         reload()
+        deduplicateExistingTransactions(notifyCloud: true)
     }
 
     public func applyRemoteBudgets(_ incoming: [BudgetLimitRecord]) {
@@ -418,9 +573,22 @@ public final class BudgetStore {
         )
 
         if let live = BudgetStore.current {
-            live.saveTransaction(record, notifyCloud: true)
+            return live.saveAutoCapturedTransaction(record, notifyCloud: true).saved
         } else {
             let ctx = AppStore.container.mainContext
+            let existing = (try? ctx.fetch(FetchDescriptor<SDTransaction>()).map(\.record)) ?? []
+            if let match = TransactionDeduplicator.findDuplicate(for: record, in: existing) {
+                let merged = TransactionDeduplicator.mergeMetadata(existing: match.existing, duplicate: record)
+                if merged != match.existing {
+                    let targetID = merged.id
+                    let predicate = #Predicate<SDTransaction> { $0.recordID == targetID }
+                    if let row = (try? ctx.fetch(FetchDescriptor(predicate: predicate)))?.first {
+                        row.apply(merged)
+                        try? ctx.save()
+                    }
+                }
+                return merged
+            }
             ctx.insert(SDTransaction(from: record))
             try? ctx.save()
         }

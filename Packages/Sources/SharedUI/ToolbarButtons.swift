@@ -15,21 +15,14 @@ public struct TopToolbarControls: ToolbarContent {
             } label: {
                 Image(systemName: "bolt.horizontal.circle")
             }
-            .accessibilityLabel(L10n.text(settings.language, en: "Smart paste", vi: "Nhập nhanh AI"))
+            .accessibilityLabel(L10n.text(settings.language, en: "Smart paste", vi: "Nhập nhanh AI", zh: "AI 智能记账"))
 
             Button {
                 settings.isShowingAskTally = true
             } label: {
                 Image(systemName: "sparkles")
             }
-            .accessibilityLabel(L10n.text(settings.language, en: "Ask Tally AI", vi: "Hỏi Tally AI"))
-
-            Button {
-                settings.isShowingSettings = true
-            } label: {
-                Image(systemName: "gearshape")
-            }
-            .accessibilityLabel(L10n.text(settings.language, en: "Settings", vi: "Cài đặt"))
+            .accessibilityLabel(L10n.text(settings.language, en: "Ask Tally AI", vi: "Hỏi Tally AI", zh: "问问 Tally AI"))
         }
     }
 }

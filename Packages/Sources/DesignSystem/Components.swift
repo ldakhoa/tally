@@ -172,6 +172,8 @@ public struct TallyProgressBar: View {
     public let value: Double
     public var fill: Color
 
+    @State private var animatedValue: Double = 0
+
     public init(value: Double, fill: Color = .positive) {
         self.value = value
         self.fill = fill
@@ -179,15 +181,31 @@ public struct TallyProgressBar: View {
 
     public var body: some View {
         GeometryReader { proxy in
-            let clamped = min(1, max(0, value))
+            let clamped = min(1, max(0, animatedValue))
             ZStack(alignment: .leading) {
                 Capsule().fill(Color.trackFill)
                 Capsule()
-                    .fill(fill)
-                    .frame(width: max(clamped > 0 ? 6 : 0, proxy.size.width * clamped))
+                    .fill(
+                        LinearGradient(
+                            colors: [fill.opacity(0.85), fill],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .frame(width: max(clamped > 0 ? 10 : 0, proxy.size.width * clamped))
             }
         }
-        .frame(height: 8)
+        .frame(height: 10)
+        .onAppear {
+            withAnimation(.spring(response: 0.65, dampingFraction: 0.78)) {
+                animatedValue = value
+            }
+        }
+        .onChange(of: value) { _, newValue in
+            withAnimation(.spring(response: 0.5, dampingFraction: 0.78)) {
+                animatedValue = newValue
+            }
+        }
     }
 }
 
@@ -207,8 +225,9 @@ public struct EmptyStateCard: View {
     }
 
     public var body: some View {
-        VStack(spacing: 10) {
-            SettingsIconTile(symbol: symbol, size: 44)
+        VStack(spacing: 12) {
+            CozyPetDuoView(mood: .sleepy, petSize: 54)
+                .padding(.bottom, 2)
             Text(title)
                 .font(.appHeading)
                 .multilineTextAlignment(.center)
@@ -222,7 +241,7 @@ public struct EmptyStateCard: View {
                     .padding(.top, 4)
             }
         }
-        .padding(.vertical, 24)
+        .padding(.vertical, 26)
         .padding(.horizontal, 20)
         .frame(maxWidth: .infinity)
         .cardSurface()
@@ -285,8 +304,8 @@ private struct PillButtonBody: View {
             }
             .contentShape(shape)
             .opacity(isEnabled ? 1 : 0.4)
-            .scaleEffect(configuration.isPressed ? 0.97 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .animation(.spring(response: 0.24, dampingFraction: 0.52), value: configuration.isPressed)
     }
 }
 
@@ -344,8 +363,8 @@ private struct BlockButtonBody: View {
             }
             .contentShape(shape)
             .opacity(isEnabled ? 1 : 0.4)
-            .scaleEffect(configuration.isPressed ? 0.98 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? 0.96 : 1)
+            .animation(.spring(response: 0.24, dampingFraction: 0.55), value: configuration.isPressed)
     }
 }
 
@@ -366,8 +385,8 @@ public struct IconButtonStyle: ButtonStyle {
                 }
             }
             .contentShape(Circle())
-            .scaleEffect(configuration.isPressed ? 0.94 : 1)
-            .animation(.easeOut(duration: 0.12), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? 0.90 : 1)
+            .animation(.spring(response: 0.24, dampingFraction: 0.50), value: configuration.isPressed)
     }
 }
 

@@ -21,6 +21,7 @@ struct MessagesBody: Encodable {
     let stream = true
     let system: String?
     let messages: [ClaudeMessage]
+    let tools: [ClaudeTool]?
     let outputConfig: OutputConfig
     let cacheControl: CacheControl?
     let fallbacks: String?
@@ -31,6 +32,7 @@ struct MessagesBody: Encodable {
         case stream
         case system
         case messages
+        case tools
         case outputConfig = "output_config"
         case cacheControl = "cache_control"
         case fallbacks
@@ -41,6 +43,7 @@ struct MessagesBody: Encodable {
         self.maxTokens = request.maxTokens
         self.system = request.system
         self.messages = request.messages
+        self.tools = request.tools.isEmpty ? nil : request.tools
         self.outputConfig = OutputConfig(
             effort: request.effort,
             format: request.jsonSchema.map { OutputConfig.Format(schema: $0) }
@@ -101,6 +104,9 @@ struct APIErrorEnvelope: Decodable {
 enum StreamSignal: Equatable {
     case messageStart(model: String?, inputTokens: Int?)
     case textDelta(String)
+    case toolUseStart(index: Int, id: String, name: String)
+    case toolInputDelta(index: Int, partialJSON: String)
+    case contentBlockStop(index: Int)
     case messageDelta(stopReason: String?, refusalCategory: String?, outputTokens: Int?)
     case messageStop
     case error(type: String, message: String)
@@ -122,6 +128,12 @@ enum StreamDecoder {
             let usage: Usage?
         }
 
+        struct ContentBlock: Decodable {
+            let type: String?
+            let id: String?
+            let name: String?
+        }
+
         struct StopDetails: Decodable {
             let category: String?
         }
@@ -129,20 +141,29 @@ enum StreamDecoder {
         struct Delta: Decodable {
             let type: String?
             let text: String?
+            let partialJSON: String?
             let stopReason: String?
             let stopDetails: StopDetails?
             enum CodingKeys: String, CodingKey {
                 case type, text
+                case partialJSON = "partial_json"
                 case stopReason = "stop_reason"
                 case stopDetails = "stop_details"
             }
         }
 
         let type: String
+        let index: Int?
         let message: Message?
+        let contentBlock: ContentBlock?
         let delta: Delta?
         let usage: Usage?
         let error: APIErrorEnvelope.Detail?
+
+        enum CodingKeys: String, CodingKey {
+            case type, index, message, delta, usage, error
+            case contentBlock = "content_block"
+        }
     }
 
     static func decode(line: String) -> StreamSignal? {
@@ -155,9 +176,24 @@ enum StreamDecoder {
         switch event.type {
         case "message_start":
             return .messageStart(model: event.message?.model, inputTokens: event.message?.usage?.inputTokens)
+        case "content_block_start":
+            guard let idx = event.index,
+                  event.contentBlock?.type == "tool_use",
+                  let id = event.contentBlock?.id,
+                  let name = event.contentBlock?.name
+            else { return nil }
+            return .toolUseStart(index: idx, id: id, name: name)
         case "content_block_delta":
-            guard event.delta?.type == "text_delta", let text = event.delta?.text, !text.isEmpty else { return nil }
-            return .textDelta(text)
+            if event.delta?.type == "text_delta", let text = event.delta?.text, !text.isEmpty {
+                return .textDelta(text)
+            }
+            if event.delta?.type == "input_json_delta", let idx = event.index, let partial = event.delta?.partialJSON, !partial.isEmpty {
+                return .toolInputDelta(index: idx, partialJSON: partial)
+            }
+            return nil
+        case "content_block_stop":
+            guard let idx = event.index else { return nil }
+            return .contentBlockStop(index: idx)
         case "message_delta":
             return .messageDelta(
                 stopReason: event.delta?.stopReason,
