@@ -1,0 +1,11 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "tally-email-inbox",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [{ "name": "INBOX", "class_name": "EmailInbox" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["EmailInbox"] }]
+}
