@@ -132,8 +132,7 @@ public struct TransactionEditorSheet: View {
                         Button(role: .destructive) {
                             confirmingDelete = true
                         } label: {
-                            Image(systemName: "trash")
-                                .foregroundStyle(Color.negative)
+                            CozyUIIcon(.trash, size: 18, color: Color.negative)
                         }
                         .accessibilityLabel(L10n.text(lang, en: "Delete transaction", vi: "Xoá giao dịch", zh: "删除账单"))
                     }
@@ -298,9 +297,7 @@ public struct TransactionEditorSheet: View {
                     Button {
                         name = ""
                     } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .font(.system(size: 16))
-                            .foregroundStyle(Color.textSecondary.opacity(0.6))
+                        CozyUIIcon(.xmarkCircle, size: 17, color: Color.textSecondary.opacity(0.6))
                     }
                     .buttonStyle(.themedPlain)
                     .accessibilityLabel(L10n.text(lang, en: "Clear description", vi: "Xoá mô tả", zh: "清空描述"))
@@ -355,9 +352,11 @@ public struct TransactionEditorSheet: View {
                             }
                         } label: {
                             HStack(spacing: 6) {
-                                Image(systemName: item.symbol)
-                                    .font(.system(size: 12, weight: .semibold))
-                                    .foregroundStyle(selected ? Color.onInk : item.color)
+                                CozyCategoryIcon(
+                                    category: item,
+                                    size: 17,
+                                    style: selected ? .tinted(Color.onInk) : .watercolor
+                                )
                                 Text(item.title(in: lang))
                                     .font(.appCaption.weight(.semibold))
                                     .lineLimit(1)
@@ -403,9 +402,7 @@ public struct TransactionEditorSheet: View {
                     showingDatePicker = true
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: "calendar")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(Color.textSecondary)
+                        CozyUIIcon(.calendar, size: 14, color: Color.textSecondary)
                         Text(DateKey.formatFullDay(dayKey, language: lang))
                             .font(.appCaption.weight(.semibold))
                             .foregroundStyle(Color.textPrimary)
@@ -435,15 +432,11 @@ public struct TransactionEditorSheet: View {
                         }
                     } label: {
                         HStack(spacing: 6) {
-                            Image(systemName: "person.fill")
-                                .font(.system(size: 12, weight: .semibold))
-                                .foregroundStyle(Color.textSecondary)
+                            CozyUIIcon(.person, size: 14, color: Color.textSecondary)
                             Text(selectedMemberName.isEmpty ? settings.currentMember.name : selectedMemberName)
                                 .font(.appCaption.weight(.semibold))
                                 .foregroundStyle(Color.textPrimary)
-                            Image(systemName: "chevron.up.chevron.down")
-                                .font(.system(size: 9, weight: .semibold))
-                                .foregroundStyle(Color.textSecondary)
+                            CozyUIIcon(.chevronUpDown, size: 12, color: Color.textSecondary)
                         }
                         .padding(.horizontal, 12)
                         .frame(minHeight: 34)
@@ -464,9 +457,7 @@ public struct TransactionEditorSheet: View {
                     }
                 } label: {
                     HStack(spacing: 6) {
-                        Image(systemName: note.isEmpty ? "note.text.badge.plus" : "note.text")
-                            .font(.system(size: 12, weight: .semibold))
-                            .foregroundStyle(note.isEmpty ? Color.textSecondary : Color.accent)
+                        CozyUIIcon(.note, size: 14, color: note.isEmpty ? Color.textSecondary : Color.accent)
                         Text(
                             note.isEmpty
                                 ? L10n.text(lang, en: "Note", vi: "Ghi chú", zh: "备注")
@@ -490,9 +481,7 @@ public struct TransactionEditorSheet: View {
 
     private func noteInputCard(lang: AppLanguage) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: "note.text")
-                .font(.caption)
-                .foregroundStyle(Color.textSecondary)
+            CozyUIIcon(.note, size: 15, color: Color.textSecondary)
             TextField(
                 L10n.text(lang, en: "Card, split note, receipt details…", vi: "Thẻ, chia tiền, chi tiết hoá đơn…", zh: "银行卡、AA备注、小票详情…"),
                 text: $note
@@ -518,10 +507,8 @@ public struct TransactionEditorSheet: View {
             Button {
                 focusedField = nil
             } label: {
-                Image(systemName: "number.square")
-                    .font(.system(size: 18, weight: .semibold))
+                CozyUIIcon(.keypad, size: 19, color: Color.textPrimary)
                     .frame(width: 44, height: 44)
-                    .foregroundStyle(Color.textPrimary)
                     .background(Color.softFill, in: Circle())
             }
             .buttonStyle(.themedPlain)

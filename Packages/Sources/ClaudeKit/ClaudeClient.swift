@@ -159,6 +159,19 @@ public struct ClaudeClient: AIClient {
                     if let category { refusalCategory = category }
                     if let outputTokens { completion.outputTokens = outputTokens }
                 case .messageStop:
+                    for (_, tool) in pendingTools.sorted(by: { $0.key < $1.key }) {
+                        let raw = tool.json.trimmingCharacters(in: .whitespacesAndNewlines)
+                        let input: JSONValue
+                        if raw.isEmpty {
+                            input = .object([:])
+                        } else if let decoded = try? JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8)) {
+                            input = decoded
+                        } else {
+                            input = .object([:])
+                        }
+                        completion.toolUses.append(ClaudeToolUse(id: tool.id, name: tool.name, input: input))
+                    }
+                    pendingTools.removeAll()
                     sawStop = true
                 case .error(let type, let message):
                     throw ClaudeError.api(

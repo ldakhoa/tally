@@ -111,8 +111,30 @@ public enum CurrencyConverter {
     }
 }
 
-/// Formats integer-stored money values cleanly in English or Vietnamese.
+/// Formats integer-stored money values cleanly in English, Vietnamese, or Chinese.
 public enum MoneyFormat {
+    private static let formatterLock = NSLock()
+    private nonisolated(unsafe) static var cachedFormatters: [CurrencyCode: NumberFormatter] = [:]
+
+    private static func formatDecimal(_ absMajor: Double, currency: CurrencyCode) -> String {
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        let formatter: NumberFormatter
+        if let existing = cachedFormatters[currency] {
+            formatter = existing
+        } else {
+            let created = NumberFormatter()
+            created.numberStyle = .decimal
+            created.groupingSeparator = currency == .vnd ? "." : ","
+            created.decimalSeparator = currency == .vnd ? "," : "."
+            created.minimumFractionDigits = currency.fractionDigits
+            created.maximumFractionDigits = currency.fractionDigits
+            cachedFormatters[currency] = created
+            formatter = created
+        }
+        return formatter.string(from: NSNumber(value: absMajor)) ?? "\(Int64(absMajor))"
+    }
+
     public static func format(
         minor: Int64,
         currency: CurrencyCode,
@@ -135,14 +157,7 @@ public enum MoneyFormat {
             return signPrefix + formatCompact(absMajor, currency: currency, language: language)
         }
 
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        formatter.groupingSeparator = currency == .vnd ? "." : ","
-        formatter.decimalSeparator = currency == .vnd ? "," : "."
-        formatter.minimumFractionDigits = currency.fractionDigits
-        formatter.maximumFractionDigits = currency.fractionDigits
-
-        let number = formatter.string(from: NSNumber(value: absMajor)) ?? "\(Int64(absMajor))"
+        let number = formatDecimal(absMajor, currency: currency)
         if currency == .vnd {
             return "\(signPrefix)\(number) ₫"
         }

@@ -47,6 +47,10 @@ public final class AppSettings {
         }
     }
 
+    public var aiProvider: AIProvider {
+        didSet { defaults.set(aiProvider.rawValue, forKey: Keys.aiProvider) }
+    }
+
     public var modelID: String {
         didSet {
             defaults.set(modelID, forKey: Keys.modelID)
@@ -64,6 +68,13 @@ public final class AppSettings {
 
     public var syncsWithICloud: Bool {
         didSet { defaults.set(syncsWithICloud, forKey: Keys.syncsWithICloud) }
+    }
+
+    public var soundEffectsEnabled: Bool {
+        didSet {
+            defaults.set(soundEffectsEnabled, forKey: Keys.soundEffectsEnabled)
+            CozySounds.setEnabled(soundEffectsEnabled)
+        }
     }
 
     /// This device's household profile so transactions tag who logged them (e.g. Me vs Wife).
@@ -104,7 +115,59 @@ public final class AppSettings {
     public private(set) var connectionStatus: ConnectionStatus = .unchecked
 
     public var model: ClaudeModel { ClaudeModel.resolve(id: modelID) }
-    public var isAIReady: Bool { hasAPIKey }
+    public var appleIntelligenceStatus: AppleIntelligenceStatus { AppleIntelligenceStatus.current() }
+    public var isAppleIntelligenceAvailable: Bool { appleIntelligenceStatus.isAvailable }
+
+    public var isAIReady: Bool {
+        switch aiProvider {
+        case .appleIntelligence: return isAppleIntelligenceAvailable
+        case .claude: return hasAPIKey
+        case .auto: return isAppleIntelligenceAvailable || hasAPIKey
+        }
+    }
+
+    public func resolvedBackend(for purpose: AIRequestPurpose = .assistantChat) -> ResolvedAIBackend? {
+        switch aiProvider {
+        case .appleIntelligence:
+            return isAppleIntelligenceAvailable ? .appleIntelligence : nil
+        case .claude:
+            return hasAPIKey ? .claude : nil
+        case .auto:
+            switch purpose {
+            case .parsing, .siri:
+                if isAppleIntelligenceAvailable { return .appleIntelligence }
+                if hasAPIKey { return .claude }
+                return nil
+            case .assistantChat:
+                if hasAPIKey { return .claude }
+                if isAppleIntelligenceAvailable { return .appleIntelligence }
+                return nil
+            }
+        }
+    }
+
+    public func activeProviderSummary(in lang: AppLanguage) -> String {
+        switch aiProvider {
+        case .appleIntelligence:
+            return isAppleIntelligenceAvailable
+                ? L10n.text(lang, en: "Apple Intelligence (On-Device)", vi: "Apple Intelligence (Trên máy)", zh: "Apple 智能（本地）")
+                : appleIntelligenceStatus.headline(in: lang)
+        case .claude:
+            return hasAPIKey
+                ? model.name
+                : L10n.text(lang, en: "Claude · Not set up", vi: "Claude · Chưa thiết lập", zh: "Claude · 未配置")
+        case .auto:
+            if isAppleIntelligenceAvailable && hasAPIKey {
+                return L10n.text(lang, en: "Auto · Apple + Claude", vi: "Tự động · Apple + Claude", zh: "自动 · Apple + Claude")
+            } else if isAppleIntelligenceAvailable {
+                return L10n.text(lang, en: "Auto · Apple Intelligence", vi: "Tự động · Apple Intelligence", zh: "自动 · Apple 智能")
+            } else if hasAPIKey {
+                return L10n.text(lang, en: "Auto · \(model.name)", vi: "Tự động · \(model.name)", zh: "自动 · \(model.name)")
+            } else {
+                return L10n.text(lang, en: "Not set up", vi: "Chưa thiết lập", zh: "未配置")
+            }
+        }
+    }
 
     public var currentMember: HouseholdMember {
         let name = myDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -118,10 +181,12 @@ public final class AppSettings {
         let storedCurr = defaults.string(forKey: Keys.currency).flatMap(CurrencyCode.init(rawValue:)) ?? .sgd
         let storedTheme = AppTheme(storedName: defaults.string(forKey: Keys.theme))
         let storedAppearance = AppAppearance(storedName: defaults.string(forKey: Keys.appearance))
+        let storedProvider = defaults.string(forKey: Keys.aiProvider).flatMap(AIProvider.init(rawValue:)) ?? .auto
         let storedModel = defaults.string(forKey: Keys.modelID) ?? ClaudeModel.default.id
         let storedAutoAI = defaults.object(forKey: Keys.autoParseWithAI) as? Bool ?? true
         let storedFlagReview = defaults.object(forKey: Keys.flagAutoCaptured) as? Bool ?? true
         let storedSync = defaults.object(forKey: Keys.syncsWithICloud) as? Bool ?? true
+        let storedSounds = defaults.object(forKey: Keys.soundEffectsEnabled) as? Bool ?? true
         let storedMemberID = defaults.string(forKey: Keys.myMemberID) ?? UUID().uuidString
         let storedName = defaults.string(forKey: Keys.myDisplayName) ?? ""
         let storedPartner = defaults.string(forKey: Keys.partnerDisplayName) ?? ""
@@ -140,16 +205,19 @@ public final class AppSettings {
         self.currency = storedCurr
         self.theme = storedTheme
         self.appearance = storedAppearance
+        self.aiProvider = storedProvider
         self.modelID = storedModel
         self.autoParseWithAI = storedAutoAI
         self.flagAutoCapturedForReview = storedFlagReview
         self.syncsWithICloud = storedSync
+        self.soundEffectsEnabled = storedSounds
         self.myMemberID = storedMemberID
         self.myDisplayName = storedName
         self.partnerDisplayName = storedPartner
         self.cloudZoneRole = storedRole
         self.emailInboxURL = defaults.string(forKey: Keys.emailInboxURL) ?? ""
 
+        CozySounds.setEnabled(storedSounds)
         ThemeRuntime.shared.update(theme: storedTheme, appearance: storedAppearance)
         refreshKeychain()
     }
@@ -197,7 +265,7 @@ public final class AppSettings {
         return true
     }
 
-    public func makeAIClient() -> (any AIClient)? {
+    public func makeClaudeClient() -> (any AIClient)? {
         guard let creds = KeychainStore.readAPIKeyForRequest() else { return nil }
         return ClaudeClient(
             apiKey: creds.key,
@@ -206,9 +274,24 @@ public final class AppSettings {
         )
     }
 
+    public func makeAIClient(for purpose: AIRequestPurpose = .parsing) -> (any AIClient)? {
+        guard let backend = resolvedBackend(for: purpose) else { return nil }
+        switch backend {
+        case .appleIntelligence:
+            #if canImport(FoundationModels)
+            if #available(iOS 26.0, macOS 26.0, *) {
+                return AppleFoundationModelsClient()
+            }
+            #endif
+            return nil
+        case .claude:
+            return makeClaudeClient()
+        }
+    }
+
     public func checkConnection() {
         checkTask?.cancel()
-        guard let client = makeAIClient() else {
+        guard let client = makeClaudeClient() else {
             connectionStatus = .failed(ClaudeError.missingAPIKey.localizedMessage(in: language))
             return
         }
@@ -261,11 +344,13 @@ public final class AppSettings {
         static let currency = "tally.currency"
         static let theme = "tally.theme"
         static let appearance = "tally.appearance"
+        static let aiProvider = "tally.ai.provider"
         static let modelID = "tally.claude.model"
         static let workspaceID = "tally.claude.workspace"
         static let autoParseWithAI = "tally.ai.autoParse"
         static let flagAutoCaptured = "tally.capture.flagReview"
         static let syncsWithICloud = "tally.icloud.enabled"
+        static let soundEffectsEnabled = "tally.soundEffects"
         static let myMemberID = "tally.member.id"
         static let myDisplayName = "tally.member.name"
         static let partnerDisplayName = "tally.partner.name"

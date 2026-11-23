@@ -9,20 +9,13 @@ public struct TopToolbarControls: ToolbarContent {
     public init() {}
 
     public var body: some ToolbarContent {
-        ToolbarItemGroup(placement: .primaryAction) {
+        ToolbarItem(placement: .primaryAction) {
             Button {
                 settings.isShowingSmartCapture = true
             } label: {
-                Image(systemName: "bolt.horizontal.circle")
+                CozyUIIcon(.bolt, size: 19, color: Color.accent)
             }
             .accessibilityLabel(L10n.text(settings.language, en: "Smart paste", vi: "Nhập nhanh AI", zh: "AI 智能记账"))
-
-            Button {
-                settings.isShowingAskTally = true
-            } label: {
-                Image(systemName: "sparkles")
-            }
-            .accessibilityLabel(L10n.text(settings.language, en: "Ask Tally AI", vi: "Hỏi Tally AI", zh: "问问 Tally AI"))
         }
     }
 }

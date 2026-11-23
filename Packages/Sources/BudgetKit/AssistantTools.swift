@@ -4,7 +4,7 @@ import TallyCore
 
 // MARK: - Action Confirmation Receipt (Rendered in AskTallyView)
 
-public struct AssistantActionReceipt: Identifiable, Hashable, Sendable {
+public struct AssistantActionReceipt: Identifiable, Codable, Hashable, Sendable {
     public enum Kind: String, Codable, Hashable, Sendable {
         case transactionAdded
         case transactionUpdated

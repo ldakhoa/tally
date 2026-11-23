@@ -74,7 +74,10 @@ public struct GoalsView: View {
                         Button {
                             showingNewGoal = true
                         } label: {
-                            Label(L10n.text(lang, en: "New goal", vi: "Thêm mục tiêu", zh: "新建目标"), systemImage: "plus")
+                            HStack(spacing: 6) {
+                                CozyUIIcon(.plus, size: 14, color: Color.onInk)
+                                Text(L10n.text(lang, en: "New goal", vi: "Thêm mục tiêu", zh: "新建目标"))
+                            }
                         }
                         .pillButton(prominent: true)
                     }
@@ -101,17 +104,7 @@ public struct GoalsView: View {
                     ForEach(goals) { goal in
                         Card {
                             HStack(spacing: 12) {
-                                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                    .fill(goal.icon.tintBackground)
-                                    .frame(width: 42, height: 42)
-                                    .overlay {
-                                        RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                            .strokeBorder(goal.icon.color.opacity(0.22), lineWidth: 1)
-                                    }
-                                    .overlay {
-                                        Text(goal.icon.cuteEmoji)
-                                            .font(.system(size: 22))
-                                    }
+                                GoalBadge(icon: goal.icon, size: 42)
                                 VStack(alignment: .leading, spacing: 2) {
                                     Text(goal.name).font(.appHeading)
                                     Text("\(MoneyFormat.format(minor: goal.savedMinor, currency: settings.currency, language: lang)) / \(MoneyFormat.format(minor: goal.targetMinor, currency: settings.currency, language: lang))")
@@ -128,7 +121,10 @@ public struct GoalsView: View {
                                 Button {
                                     contributingGoal = goal
                                 } label: {
-                                    Label(L10n.text(lang, en: "Contribute", vi: "Góp thêm", zh: "存入一笔"), systemImage: "plus")
+                                    HStack(spacing: 6) {
+                                        CozyUIIcon(.plus, size: 14, color: Color.onInk)
+                                        Text(L10n.text(lang, en: "Contribute", vi: "Góp thêm", zh: "存入一笔"))
+                                    }
                                 }
                                 .pillButton(prominent: true)
 
@@ -184,12 +180,40 @@ private struct GoalEditorSheet: View {
 
                         VStack(alignment: .leading, spacing: 8) {
                             SectionLabel(L10n.text(lang, en: "Icon", vi: "Biểu tượng", zh: "图标"))
-                            ChipPicker(
-                                L10n.text(lang, en: "Icon", vi: "Biểu tượng", zh: "图标"),
-                                selection: $icon,
-                                options: GoalIcon.allCases,
-                                sideMargin: 0
-                            ) { "\($0.cuteEmoji) \($0.title(in: lang))" }
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 8) {
+                                    ForEach(GoalIcon.allCases) { item in
+                                        let selected = icon == item
+                                        Button {
+                                            CozyHaptics.selection()
+                                            withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) {
+                                                icon = item
+                                            }
+                                        } label: {
+                                            HStack(spacing: 6) {
+                                                CozyGoalIcon(
+                                                    goal: item,
+                                                    size: 18,
+                                                    style: selected ? .tinted(Color.onInk) : .watercolor
+                                                )
+                                                Text(item.title(in: lang))
+                                                    .font(.appControl)
+                                                    .lineLimit(1)
+                                            }
+                                            .padding(.horizontal, 12)
+                                            .frame(minHeight: 36)
+                                            .foregroundStyle(selected ? Color.onInk : Color.textPrimary)
+                                            .background(selected ? Color.ink : Color.cardBackground, in: Capsule())
+                                            .overlay(
+                                                Capsule()
+                                                    .strokeBorder(selected ? Color.clear : Color.hairlineStrong, lineWidth: 1)
+                                            )
+                                        }
+                                        .buttonStyle(.themedPlain)
+                                    }
+                                }
+                                .padding(.vertical, 2)
+                            }
                         }
 
                         // Custom-keypad amount fields (no iOS numeric keypad)
@@ -242,10 +266,8 @@ private struct GoalEditorSheet: View {
                         Button {
                             isNameFocused = false
                         } label: {
-                            Image(systemName: "number.square")
-                                .font(.system(size: 18, weight: .semibold))
+                            CozyUIIcon(.keypad, size: 19, color: Color.textPrimary)
                                 .frame(width: 44, height: 44)
-                                .foregroundStyle(Color.textPrimary)
                                 .background(Color.softFill, in: Circle())
                         }
                         .buttonStyle(.themedPlain)
@@ -286,8 +308,7 @@ private struct GoalEditorSheet: View {
                         Button(role: .destructive) {
                             confirmingDelete = true
                         } label: {
-                            Image(systemName: "trash")
-                                .foregroundStyle(Color.negative)
+                            CozyUIIcon(.trash, size: 18, color: Color.negative)
                         }
                         .accessibilityLabel(L10n.text(lang, en: "Delete goal", vi: "Xoá mục tiêu", zh: "删除目标"))
                     }
@@ -438,10 +459,7 @@ private struct ContributionSheet: View {
             VStack(spacing: 0) {
                 VStack(spacing: 14) {
                     HStack(spacing: 12) {
-                        Text(goal.icon.cuteEmoji)
-                            .font(.system(size: 28))
-                            .frame(width: 44, height: 44)
-                            .background(goal.icon.tintBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        GoalBadge(icon: goal.icon, size: 44)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(goal.name).font(.appHeading)
                             Text("\(MoneyFormat.format(minor: goal.savedMinor, currency: currency, language: lang)) / \(MoneyFormat.format(minor: goal.targetMinor, currency: currency, language: lang))")

@@ -55,7 +55,10 @@ public struct BudgetsView: View {
                 Button {
                     showingNewBudget = true
                 } label: {
-                    Label(L10n.text(lang, en: "Set limit", vi: "Đặt hạn mức", zh: "设置预算"), systemImage: "plus")
+                    HStack(spacing: 6) {
+                        CozyUIIcon(.plus, size: 14, color: Color.onInk)
+                        Text(L10n.text(lang, en: "Set limit", vi: "Đặt hạn mức", zh: "设置预算"))
+                    }
                 }
                 .pillButton(prominent: true)
             }
@@ -104,7 +107,10 @@ public struct BudgetsView: View {
                 Button {
                     _ = store.copyBudgetsFromPreviousMonth()
                 } label: {
-                    Label(L10n.text(lang, en: "Copy from previous month", vi: "Sao chép từ tháng trước", zh: "沿用上月预算"), systemImage: "doc.on.doc")
+                    HStack(spacing: 6) {
+                        CozyUIIcon(.copy, size: 15, color: Color.textPrimary)
+                        Text(L10n.text(lang, en: "Copy from previous month", vi: "Sao chép từ tháng trước", zh: "沿用上月预算"))
+                    }
                 }
                 .blockButton(prominent: false)
             } else {
@@ -201,9 +207,11 @@ private struct BudgetEditorSheet: View {
                                             }
                                         } label: {
                                             HStack(spacing: 6) {
-                                                Image(systemName: item.symbol)
-                                                    .font(.caption)
-                                                    .foregroundStyle(selected ? Color.onInk : item.color)
+                                                CozyCategoryIcon(
+                                                    category: item,
+                                                    size: 18,
+                                                    style: selected ? .tinted(Color.onInk) : .watercolor
+                                                )
                                                 Text(item.title(in: lang))
                                                     .font(.appCaption.weight(.medium))
                                                     .lineLimit(1)
@@ -267,8 +275,7 @@ private struct BudgetEditorSheet: View {
                         Button(role: .destructive) {
                             confirmingDelete = true
                         } label: {
-                            Image(systemName: "trash")
-                                .foregroundStyle(Color.negative)
+                            CozyUIIcon(.trash, size: 18, color: Color.negative)
                         }
                         .accessibilityLabel(L10n.text(lang, en: "Remove budget", vi: "Xoá hạn mức", zh: "删除预算"))
                     }

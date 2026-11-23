@@ -62,7 +62,10 @@ struct CloudSharingSettingsPane: View {
                             Text(L10n.text(lang, en: "Syncing…", vi: "Đang đồng bộ…", zh: "同步中…"))
                         }
                     } else {
-                        Label(L10n.text(lang, en: "Sync now", vi: "Đồng bộ ngay", zh: "立即同步"), systemImage: "arrow.triangle.2.circlepath")
+                        HStack(spacing: 8) {
+                            CozyUIIcon(.refresh, size: 16, color: Color.accent)
+                            Text(L10n.text(lang, en: "Sync now", vi: "Đồng bộ ngay", zh: "立即同步"))
+                        }
                     }
                 }
                 .disabled(!settings.syncsWithICloud || cloudSync.isSyncing)
@@ -98,12 +101,14 @@ struct CloudSharingSettingsPane: View {
                                 Text(L10n.text(lang, en: "Preparing iCloud invite…", vi: "Đang tạo lời mời iCloud…", zh: "正在准备 iCloud 邀请…"))
                             }
                         } else {
-                            Label(
-                                cloudSync.activeShare == nil
-                                    ? L10n.text(lang, en: "Invite wife / partner via iCloud", vi: "Mời vợ / chồng qua iCloud", zh: "通过 iCloud 邀请伴侣")
-                                    : L10n.text(lang, en: "Manage household sharing", vi: "Quản lý chia sẻ gia đình", zh: "管理家庭共享"),
-                                systemImage: "person.badge.plus"
-                            )
+                            HStack(spacing: 7) {
+                                CozyUIIcon(.people, size: 16, color: Color.onInk)
+                                Text(
+                                    cloudSync.activeShare == nil
+                                        ? L10n.text(lang, en: "Invite wife / partner via iCloud", vi: "Mời vợ / chồng qua iCloud", zh: "通过 iCloud 邀请伴侣")
+                                        : L10n.text(lang, en: "Manage household sharing", vi: "Quản lý chia sẻ gia đình", zh: "管理家庭共享")
+                                )
+                            }
                         }
                     }
                     .pillButton(prominent: true)

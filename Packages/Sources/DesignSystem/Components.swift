@@ -60,7 +60,7 @@ public struct SectionHeading: View {
                 .accessibilityAddTraits(.isHeader)
             if let action, let actionLabel {
                 Button(action: action) {
-                    Image(systemName: "arrow.right")
+                    CozyUIIcon(.arrowRight, size: 15, color: Color.textPrimary)
                 }
                 .buttonStyle(IconButtonStyle(filled: true))
                 .accessibilityLabel(actionLabel)
@@ -125,8 +125,12 @@ public struct Card<Content: View>: View {
             if let title {
                 HStack(spacing: 8) {
                     if let symbol {
-                        Image(systemName: symbol)
-                            .foregroundStyle(Color.textSecondary)
+                        if let cozy = CozyUIIconKind(sfSymbol: symbol) {
+                            CozyUIIcon(cozy, size: 16, color: Color.textSecondary)
+                        } else {
+                            Image(systemName: symbol)
+                                .foregroundStyle(Color.textSecondary)
+                        }
                     }
                     Text(title)
                         .font(.appHeading)
@@ -154,15 +158,20 @@ public struct SettingsIconTile: View {
     }
 
     public var body: some View {
-        RoundedRectangle(cornerRadius: size * 0.26, style: .continuous)
-            .fill(tint.map { AnyShapeStyle($0.gradient) } ?? AnyShapeStyle(Color.fieldBackground))
-            .frame(width: size, height: size)
-            .overlay {
-                Image(systemName: symbol)
-                    .font(.system(size: size * glyphScale, weight: .semibold))
-                    .foregroundStyle(tint == nil ? Color.ink : Color.onAccent)
-            }
-            .accessibilityHidden(true)
+        if let cozy = CozyUIIconKind(sfSymbol: symbol) {
+            CozySettingsStickerIcon(kind: cozy, size: size, tint: tint)
+        } else {
+            let iconColor = tint == nil ? Color.ink : Color.onAccent
+            RoundedRectangle(cornerRadius: size * 0.34, style: .continuous)
+                .fill(tint.map { AnyShapeStyle($0.gradient) } ?? AnyShapeStyle(Color.fieldBackground))
+                .frame(width: size, height: size)
+                .overlay {
+                    Image(systemName: symbol)
+                        .font(.system(size: size * glyphScale, weight: .semibold))
+                        .foregroundStyle(iconColor)
+                }
+                .accessibilityHidden(true)
+        }
     }
 }
 
@@ -460,11 +469,17 @@ public struct ChipPicker<Value: Hashable>: View {
                     let isSelected = option == selection
                     let floats = colorScheme == .light && !isSelected
                     Button {
-                        withAnimation(.snappy(duration: 0.2)) { selection = option }
+                        CozyHaptics.selection()
+                        CozySounds.play(.tick)
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) { selection = option }
                     } label: {
                         HStack(spacing: 6) {
                             if let sym = symbol(option) {
-                                Image(systemName: sym).imageScale(.small)
+                                if let cozy = CozyUIIconKind(sfSymbol: sym) {
+                                    CozyUIIcon(cozy, size: 14, color: isSelected ? Color.onInk : Color.textPrimary)
+                                } else {
+                                    Image(systemName: sym).imageScale(.small)
+                                }
                             }
                             Text(label(option)).lineLimit(1)
                         }

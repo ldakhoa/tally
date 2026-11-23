@@ -25,13 +25,19 @@ struct BackupSettingsPane: View {
                         showingExporter = true
                     }
                 } label: {
-                    Label(L10n.text(lang, en: "Export Tally JSON backup", vi: "Xuất file sao lưu JSON", zh: "导出 Tally JSON 备份"), systemImage: "square.and.arrow.up")
+                    HStack(spacing: 10) {
+                        CozyUIIcon(.exportBox, size: 17, color: Color.accent)
+                        Text(L10n.text(lang, en: "Export Tally JSON backup", vi: "Xuất file sao lưu JSON", zh: "导出 Tally JSON 备份"))
+                    }
                 }
 
                 Button {
                     showingImporter = true
                 } label: {
-                    Label(L10n.text(lang, en: "Import JSON backup (iOS or Web)", vi: "Nhập file sao lưu JSON (iOS hoặc Web)", zh: "导入 JSON 备份（iOS 或网页版）"), systemImage: "square.and.arrow.down")
+                    HStack(spacing: 10) {
+                        CozyUIIcon(.importBox, size: 17, color: Color.info)
+                        Text(L10n.text(lang, en: "Import JSON backup (iOS or Web)", vi: "Nhập file sao lưu JSON (iOS hoặc Web)", zh: "导入 JSON 备份（iOS 或网页版）"))
+                    }
                 }
 
                 if let statusMessage {
@@ -55,13 +61,19 @@ struct BackupSettingsPane: View {
                     store.loadSampleData(settings: settings)
                     statusMessage = L10n.text(lang, en: "Sample data loaded.", vi: "Đã tải dữ liệu mẫu.", zh: "已加载示例数据。")
                 } label: {
-                    Label(L10n.text(lang, en: "Load sample household data", vi: "Tải dữ liệu mẫu gia đình", zh: "加载家庭示例数据"), systemImage: "sparkles.rectangle.stack")
+                    HStack(spacing: 10) {
+                        CozyUIIcon(.sparkles, size: 17, color: Color.accent)
+                        Text(L10n.text(lang, en: "Load sample household data", vi: "Tải dữ liệu mẫu gia đình", zh: "加载家庭示例数据"))
+                    }
                 }
 
                 Button(role: .destructive) {
                     confirmingReset = true
                 } label: {
-                    Label(L10n.text(lang, en: "Clear all transactions & budgets", vi: "Xoá toàn bộ giao dịch & ngân sách", zh: "清空所有账单与预算"), systemImage: "trash")
+                    HStack(spacing: 10) {
+                        CozyUIIcon(.trash, size: 17, color: Color.negative)
+                        Text(L10n.text(lang, en: "Clear all transactions & budgets", vi: "Xoá toàn bộ giao dịch & ngân sách", zh: "清空所有账单与预算"))
+                    }
                 }
             } header: {
                 formSectionHeader(L10n.text(lang, en: "Data management", vi: "Quản lý dữ liệu", zh: "数据管理"))

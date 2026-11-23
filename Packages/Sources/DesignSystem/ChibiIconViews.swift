@@ -1,3 +1,4 @@
+import BudgetKit
 import SwiftUI
 
 #if os(iOS)
@@ -6,24 +7,97 @@ import UIKit
 import AppKit
 #endif
 
-// MARK: - Bundle Resource Image Loader
+// MARK: - In-Memory Cached Watercolor Asset Loader (Zero Disk I/O on Scroll)
 
-public enum ChibiAsset: String, Sendable {
+public enum CozyWatercolorAsset {
+    #if os(iOS)
+    private static let cache = NSCache<NSString, UIImage>()
+    #else
+    private static let cache = NSCache<NSString, NSImage>()
+    #endif
+    private static let lock = NSLock()
+    private nonisolated(unsafe) static var missingNames: Set<String> = []
+
+    public static func image(named name: String) -> Image? {
+        let key = name as NSString
+        #if os(iOS)
+        if let cached = cache.object(forKey: key) {
+            return Image(uiImage: cached)
+        }
+        #else
+        if let cached = cache.object(forKey: key) {
+            return Image(nsImage: cached)
+        }
+        #endif
+
+        lock.lock()
+        let isMissing = missingNames.contains(name)
+        lock.unlock()
+        if isMissing {
+            return nil
+        }
+
+        guard let url = Bundle.module.url(forResource: name, withExtension: "png") else {
+            lock.lock()
+            missingNames.insert(name)
+            lock.unlock()
+            return nil
+        }
+
+        #if os(iOS)
+        guard let rawImage = UIImage(contentsOfFile: url.path) else {
+            lock.lock()
+            missingNames.insert(name)
+            lock.unlock()
+            return nil
+        }
+        let decoded = rawImage.preparingForDisplay() ?? rawImage
+        cache.setObject(decoded, forKey: key)
+        return Image(uiImage: decoded)
+        #else
+        guard let nsImage = NSImage(contentsOfFile: url.path) else {
+            lock.lock()
+            missingNames.insert(name)
+            lock.unlock()
+            return nil
+        }
+        cache.setObject(nsImage, forKey: key)
+        return Image(nsImage: nsImage)
+        #endif
+    }
+
+    public static func categoryImage(for category: CategoryID) -> Image? {
+        image(named: "cat_\(category.rawValue)")
+    }
+
+    public static func goalImage(for goal: GoalIcon) -> Image? {
+        image(named: "goal_\(goal.rawValue)")
+    }
+
+    public static func settingsImage(for kind: CozyUIIconKind) -> Image? {
+        switch kind {
+        case .sliders: return image(named: "settings_general")
+        case .sparkles: return image(named: "settings_ai")
+        case .bolt: return image(named: "settings_shortcuts")
+        case .envelope: return image(named: "settings_email")
+        case .cloud: return image(named: "settings_icloud")
+        case .backup: return image(named: "settings_backup")
+        case .leaf: return image(named: "kpi_leaf")
+        case .flame: return image(named: "kpi_flame")
+        default: return nil
+        }
+    }
+}
+
+public enum ChibiAsset: String, CaseIterable, Sendable {
     case husband = "chibi_husband"
     case wife = "chibi_wife"
     case budgetPiggy = "icon_budget"
+    case incomePouch = "icon_income"
+    case spendingBag = "icon_spending"
 
     public var image: Image? {
-        guard let url = Bundle.module.url(forResource: rawValue, withExtension: "png") else {
-            return nil
-        }
-        #if os(iOS)
-        guard let uiImage = UIImage(contentsOfFile: url.path) else { return nil }
-        return Image(uiImage: uiImage)
-        #else
-        guard let nsImage = NSImage(contentsOfFile: url.path) else { return nil }
-        return Image(nsImage: nsImage)
-        #endif
+        CozyWatercolorAsset.image(named: rawValue)
     }
 }
 
@@ -63,8 +137,6 @@ public struct CoupleAvatarsBadge: View {
     public var avatarSize: CGFloat
     public var showHeart: Bool
 
-    @State private var heartPulse = false
-
     public init(avatarSize: CGFloat = 28, showHeart: Bool = true) {
         self.avatarSize = avatarSize
         self.showHeart = showHeart
@@ -81,16 +153,102 @@ public struct CoupleAvatarsBadge: View {
                     .font(.system(size: max(8, avatarSize * 0.3)))
                     .foregroundStyle(Color(hex: 0xF27D8D))
                     .offset(y: -avatarSize * 0.12)
-                    .scaleEffect(heartPulse ? 1.16 : 0.94)
-                    .onAppear {
-                        withAnimation(.easeInOut(duration: 1.4).repeatForever(autoreverses: true)) {
-                            heartPulse = true
-                        }
-                    }
             }
         }
         .accessibilityHidden(true)
     }
+}
+
+public struct CozyCoupleDuoView: View {
+    public var avatarSize: CGFloat
+
+    @State private var isBouncing = false
+    @State private var particles: [CoupleLoveParticle] = []
+
+    public init(avatarSize: CGFloat = 56) {
+        self.avatarSize = avatarSize
+    }
+
+    public var body: some View {
+        ZStack {
+            ForEach(particles) { item in
+                Image(systemName: item.symbol)
+                    .font(.system(size: item.size, weight: .bold))
+                    .foregroundStyle(item.color)
+                    .offset(x: item.x, y: item.animate ? -46 : -6)
+                    .scaleEffect(item.animate ? 1.15 : 0.4)
+                    .opacity(item.animate ? 0 : 0.95)
+            }
+
+            ZStack(alignment: .top) {
+                HStack(spacing: -avatarSize * 0.22) {
+                    ChibiAvatarView(asset: .husband, size: avatarSize)
+                        .rotationEffect(.degrees(isBouncing ? -5 : 0))
+                        .offset(y: isBouncing ? -8 : 0)
+
+                    ChibiAvatarView(asset: .wife, size: avatarSize)
+                        .rotationEffect(.degrees(isBouncing ? 5 : 0))
+                        .offset(y: isBouncing ? -9 : 0)
+                }
+
+                Image(systemName: "heart.fill")
+                    .font(.system(size: max(12, avatarSize * 0.28), weight: .bold))
+                    .foregroundStyle(Color(hex: 0xF27D8D))
+                    .scaleEffect(isBouncing ? 1.35 : 1.0)
+                    .offset(y: -avatarSize * 0.12)
+            }
+            .animation(.spring(response: 0.3, dampingFraction: 0.48), value: isBouncing)
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            triggerLoveBurst()
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Couple chibi avatars")
+        .accessibilityHint("Tap to send hearts")
+    }
+
+    private func triggerLoveBurst() {
+        CozyHaptics.soft()
+        CozySounds.play(.love)
+
+        isBouncing = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.36) {
+            isBouncing = false
+        }
+
+        let symbols = ["heart.fill", "sparkle", "heart.fill", "sparkle"]
+        let colors: [Color] = [Color(hex: 0xF27D8D), Color(hex: 0xF5B959), Color(hex: 0xE67360)]
+        let newBatch = (0..<4).map { idx in
+            CoupleLoveParticle(
+                symbol: symbols[idx % symbols.count],
+                color: colors[idx % colors.count],
+                x: CGFloat.random(in: -34...34),
+                size: CGFloat.random(in: 11...15)
+            )
+        }
+        particles.append(contentsOf: newBatch)
+
+        for particle in newBatch {
+            withAnimation(.easeOut(duration: 0.95)) {
+                if let index = particles.firstIndex(where: { $0.id == particle.id }) {
+                    particles[index].animate = true
+                }
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                particles.removeAll { $0.id == particle.id }
+            }
+        }
+    }
+}
+
+private struct CoupleLoveParticle: Identifiable {
+    let id = UUID()
+    let symbol: String
+    let color: Color
+    let x: CGFloat
+    let size: CGFloat
+    var animate = false
 }
 
 // MARK: - Cozy Watercolor-Style Metric Icons (Income, Spending, Budget, Household)
@@ -129,14 +287,27 @@ public struct CozyMetricIcon: View {
 /// Cute hand-drawn watercolor-style Income sticker: mint coin pouch + smiling gold coin + sparkles.
 private struct CozyIncomeSticker: View {
     let size: CGFloat
-    @State private var sparkle = false
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.34, style: .continuous)
+        if let img = ChibiAsset.incomePouch.image {
+            img
+                .resizable()
+                .scaledToFill()
+                .frame(width: size, height: size)
+                .clipShape(shape)
+                .overlay(shape.strokeBorder(Color(hex: 0x459E6E, alpha: 0.22), lineWidth: 1))
+                .accessibilityHidden(true)
+        } else {
+            vectorBody(shape: shape)
+        }
+    }
+
+    private func vectorBody(shape: RoundedRectangle) -> some View {
         let s = size / 36.0
         let ink = Color(hex: 0x4E382F)
-        let shape = RoundedRectangle(cornerRadius: size * 0.34, style: .continuous)
 
-        ZStack {
+        return ZStack {
             shape
                 .fill(
                     LinearGradient(
@@ -163,7 +334,6 @@ private struct CozyIncomeSticker: View {
                     .frame(width: 9 * s, height: 9 * s)
             }
             .offset(x: 4 * s, y: -6.5 * s)
-            .offset(y: sparkle ? -1.2 * s : 0.6 * s)
 
             // Chubby mint coin pouch with rosy cheeks & happy smile
             ZStack {
@@ -213,15 +383,10 @@ private struct CozyIncomeSticker: View {
                 .font(.system(size: 7.5 * s, weight: .bold))
                 .foregroundStyle(Color(hex: 0xF2B138))
                 .offset(x: -11 * s, y: -9 * s)
-                .scaleEffect(sparkle ? 1.18 : 0.82)
         }
         .frame(width: size, height: size)
         .overlay(shape.strokeBorder(Color(hex: 0x459E6E, alpha: 0.22), lineWidth: 1))
-        .onAppear {
-            withAnimation(.easeInOut(duration: 1.8).repeatForever(autoreverses: true)) {
-                sparkle = true
-            }
-        }
+        .drawingGroup()
         .accessibilityHidden(true)
     }
 }
@@ -229,14 +394,27 @@ private struct CozyIncomeSticker: View {
 /// Cute hand-drawn watercolor-style Spending sticker: peach shopping bag + mini boba cup + happy face.
 private struct CozySpendingSticker: View {
     let size: CGFloat
-    @State private var sway = false
 
     var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.34, style: .continuous)
+        if let img = ChibiAsset.spendingBag.image {
+            img
+                .resizable()
+                .scaledToFill()
+                .frame(width: size, height: size)
+                .clipShape(shape)
+                .overlay(shape.strokeBorder(Color(hex: 0xE67360, alpha: 0.24), lineWidth: 1))
+                .accessibilityHidden(true)
+        } else {
+            vectorBody(shape: shape)
+        }
+    }
+
+    private func vectorBody(shape: RoundedRectangle) -> some View {
         let s = size / 36.0
         let ink = Color(hex: 0x4E382F)
-        let shape = RoundedRectangle(cornerRadius: size * 0.34, style: .continuous)
 
-        ZStack {
+        return ZStack {
             shape
                 .fill(
                     LinearGradient(
@@ -270,7 +448,7 @@ private struct CozySpendingSticker: View {
                     .offset(y: -4.5 * s)
             }
             .offset(x: 7.5 * s, y: -2 * s)
-            .rotationEffect(.degrees(sway ? 4 : -2))
+            .rotationEffect(.degrees(3))
 
             // Cute coral-peach shopping bag with handle & smiling face
             ZStack {
@@ -316,15 +494,11 @@ private struct CozySpendingSticker: View {
                     .offset(y: 5.5 * s)
             }
             .offset(x: -3 * s, y: 2.5 * s)
-            .rotationEffect(.degrees(sway ? -2.5 : 2.5))
+            .rotationEffect(.degrees(-2))
         }
         .frame(width: size, height: size)
         .overlay(shape.strokeBorder(Color(hex: 0xE67360, alpha: 0.24), lineWidth: 1))
-        .onAppear {
-            withAnimation(.easeInOut(duration: 2.1).repeatForever(autoreverses: true)) {
-                sway = true
-            }
-        }
+        .drawingGroup()
         .accessibilityHidden(true)
     }
 }

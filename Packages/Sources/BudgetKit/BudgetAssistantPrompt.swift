@@ -69,7 +69,8 @@ public enum BudgetAssistantPrompt {
         - Whenever the user tells you what their monthly budget should be (e.g. food 800, housing 3000) — IMMEDIATELY call `set_budgets`.
         - Whenever the user asks to edit or delete a recent transaction, budget, or goal — call the matching update/delete tool using the IDs listed below.
         - Never claim you added/updated data without actually calling the corresponding tool first.
-        - After tools succeed, give a crisp, friendly confirmation summarizing what was saved and any helpful context (like remaining budget or goal progress).
+        - NAMING CONSISTENCY: Always translate generic transaction or savings goal names into the app's active language (\(language.resolved.rawValue)) so the ledger stays clean and consistent (e.g. if app language is English, save "tiền nhà" as "Rent", "trả thẻ tín dụng" as "Credit card payment", "房租" as "Rent"; keep proper brand/merchant names like FairPrice, Grab, PayNow, Guardian unchanged).
+        - After ANY tool call succeeds, ALWAYS write a crisp, friendly confirmation reply summarizing what was saved and any helpful context (like remaining budget or goal progress). Never return an empty reply.
         - For analytical questions, answer strictly from the live numbers below using short bullet points.
 
         Today's date: \(todayKey)

@@ -122,6 +122,27 @@ public enum DateKey {
     }
 
     /// Short month label for chart axes (e.g. `"Nov"`, `"Th11"`, or `"11月"`).
+    private static let formatterLock = NSLock()
+    private nonisolated(unsafe) static var cachedFormatters: [String: DateFormatter] = [:]
+
+    private static func format(_ date: Date, template: String, language: AppLanguage) -> String {
+        let locale = language.locale
+        let cacheKey = "\(locale.identifier)|\(template)"
+        formatterLock.lock()
+        defer { formatterLock.unlock() }
+        let formatter: DateFormatter
+        if let existing = cachedFormatters[cacheKey] {
+            formatter = existing
+        } else {
+            let created = DateFormatter()
+            created.locale = locale
+            created.setLocalizedDateFormatFromTemplate(template)
+            cachedFormatters[cacheKey] = created
+            formatter = created
+        }
+        return formatter.string(from: date)
+    }
+
     public static func formatShortMonth(_ monthKey: String, language: AppLanguage) -> String {
         guard let comps = yearAndMonth(fromMonthKey: monthKey) else { return monthKey }
         switch language.resolved {
@@ -131,10 +152,7 @@ public enum DateKey {
             return "\(comps.month)月"
         case .english:
             guard let date = date(fromMonthKey: monthKey) else { return monthKey }
-            let formatter = DateFormatter()
-            formatter.locale = language.locale
-            formatter.setLocalizedDateFormatFromTemplate("MMM")
-            return formatter.string(from: date)
+            return format(date, template: "MMM", language: language)
         }
     }
 
@@ -193,10 +211,7 @@ public enum DateKey {
 
     public static func formatMonth(_ monthKey: String, language: AppLanguage) -> String {
         guard let date = date(fromMonthKey: monthKey) else { return monthKey }
-        let formatter = DateFormatter()
-        formatter.locale = language.locale
-        formatter.setLocalizedDateFormatFromTemplate("MMMM yyyy")
-        let text = formatter.string(from: date)
+        let text = format(date, template: "MMMM yyyy", language: language)
         return text.prefix(1).uppercased() + text.dropFirst()
     }
 
@@ -207,10 +222,7 @@ public enum DateKey {
         guard let date = date(fromDayKey: dayKey) else { return dayKey }
         let refYear = calendar.component(.year, from: referenceDate)
         let targetYear = calendar.component(.year, from: date)
-        let formatter = DateFormatter()
-        formatter.locale = language.locale
-        formatter.setLocalizedDateFormatFromTemplate(targetYear == refYear ? "EEE, d MMM" : "EEE, d MMM yyyy")
-        return formatter.string(from: date)
+        return format(date, template: targetYear == refYear ? "EEE, d MMM" : "EEE, d MMM yyyy", language: language)
     }
 
     public static func formatCompactDay(_ dayKey: String, language: AppLanguage, referenceDate: Date = Date()) -> String {
@@ -220,10 +232,7 @@ public enum DateKey {
         guard let date = date(fromDayKey: dayKey) else { return dayKey }
         let refYear = calendar.component(.year, from: referenceDate)
         let targetYear = calendar.component(.year, from: date)
-        let formatter = DateFormatter()
-        formatter.locale = language.locale
-        formatter.setLocalizedDateFormatFromTemplate(targetYear == refYear ? "d MMM" : "d MMM yyyy")
-        return formatter.string(from: date)
+        return format(date, template: targetYear == refYear ? "d MMM" : "d MMM yyyy", language: language)
     }
 
     /// Complete date label: returns Today / Yesterday / Tomorrow when applicable,
@@ -233,19 +242,13 @@ public enum DateKey {
             return relative
         }
         guard let date = date(fromDayKey: dayKey) else { return dayKey }
-        let formatter = DateFormatter()
-        formatter.locale = language.locale
-        formatter.setLocalizedDateFormatFromTemplate("d MMM yyyy")
-        return formatter.string(from: date)
+        return format(date, template: "d MMM yyyy", language: language)
     }
 
     /// Always formats the absolute date (e.g. "23 Nov 2026"), even for Today/Yesterday/Tomorrow.
     public static func formatAbsoluteDay(_ dayKey: String, language: AppLanguage) -> String {
         guard let date = date(fromDayKey: dayKey) else { return dayKey }
-        let formatter = DateFormatter()
-        formatter.locale = language.locale
-        formatter.setLocalizedDateFormatFromTemplate("d MMM yyyy")
-        return formatter.string(from: date)
+        return format(date, template: "d MMM yyyy", language: language)
     }
 
     /// Formats an inclusive date range cleanly without truncation (e.g. "12 – 23 Nov 2026" or "28 Oct – 5 Nov 2026").
@@ -268,19 +271,11 @@ public enum DateKey {
 
         if sComps.year == eComps.year, sComps.month == eComps.month, let sDay = sComps.day {
             let endText = formatAbsoluteDay(hi, language: language)
-            if language.resolved == .english {
-                return "\(sDay) – \(endText)"
-            } else {
-                // Vietnamese: "12 – 23 thg 11, 2026"
-                return "\(sDay) – \(endText)"
-            }
+            return "\(sDay) – \(endText)"
         }
 
         if sComps.year == eComps.year {
-            let startFormatter = DateFormatter()
-            startFormatter.locale = language.locale
-            startFormatter.setLocalizedDateFormatFromTemplate("d MMM")
-            let startText = startFormatter.string(from: startDate)
+            let startText = format(startDate, template: "d MMM", language: language)
             let endText = formatAbsoluteDay(hi, language: language)
             return "\(startText) – \(endText)"
         }

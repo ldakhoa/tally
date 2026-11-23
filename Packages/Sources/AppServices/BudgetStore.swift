@@ -29,24 +29,75 @@ public enum ActivityTypeFilter: String, CaseIterable, Identifiable, Hashable, Se
 public final class BudgetStore {
     public static weak var current: BudgetStore?
 
-    public private(set) var transactions: [TransactionRecord] = []
-    public private(set) var budgets: [BudgetLimitRecord] = []
-    public private(set) var goals: [SavingsGoalRecord] = []
+    public private(set) var transactions: [TransactionRecord] = [] {
+        didSet { invalidateAllCaches() }
+    }
+    public private(set) var budgets: [BudgetLimitRecord] = [] {
+        didSet { invalidateAllCaches() }
+    }
+    public private(set) var goals: [SavingsGoalRecord] = [] {
+        didSet { _activeGoals = nil }
+    }
 
-    public var selectedPeriod: DatePeriod = .currentMonth()
+    public var selectedPeriod: DatePeriod = .currentMonth() {
+        didSet {
+            if oldValue != selectedPeriod {
+                invalidatePeriodCaches()
+            }
+        }
+    }
     /// Convenience accessor for the active `YYYY-MM` month (synchronized with `selectedPeriod`).
     public var selectedMonth: String {
         get { selectedPeriod.primaryMonthKey }
         set { selectedPeriod = .month(newValue) }
     }
     /// `nil` means all household members.
-    public var selectedMemberID: String? = nil
+    public var selectedMemberID: String? = nil {
+        didSet {
+            if oldValue != selectedMemberID {
+                invalidateMemberCaches()
+            }
+        }
+    }
     /// Active Activity tab filters (also driven by tapping tiles/categories on Overview).
     public var activityTypeFilter: ActivityTypeFilter = .all
     public var activityCategoryFilter: CategoryID? = nil
 
     @ObservationIgnored public var onLocalChanges: (([ChangedSyncRecord]) -> Void)?
     @ObservationIgnored private let context: ModelContext
+
+    // Memoized analytics caches (O(1) reads during 120fps tab switches & scrolling)
+    @ObservationIgnored private var _activeTransactions: [TransactionRecord]?
+    @ObservationIgnored private var _activeBudgets: [BudgetLimitRecord]?
+    @ObservationIgnored private var _activeGoals: [SavingsGoalRecord]?
+    @ObservationIgnored private var _pendingReviewTransactions: [TransactionRecord]?
+    @ObservationIgnored private var _snapshot: MonthlySnapshot?
+    @ObservationIgnored private var _monthlySnapshot: MonthlySnapshot?
+    @ObservationIgnored private var _statisticsSnapshot: StatisticsSnapshot?
+    @ObservationIgnored private var _dailyCalendarTotals: [String: DailyCalendarTotal]?
+
+    private func invalidateAllCaches() {
+        _activeTransactions = nil
+        _activeBudgets = nil
+        _pendingReviewTransactions = nil
+        _snapshot = nil
+        _monthlySnapshot = nil
+        _statisticsSnapshot = nil
+        _dailyCalendarTotals = nil
+    }
+
+    private func invalidatePeriodCaches() {
+        _snapshot = nil
+        _monthlySnapshot = nil
+        _statisticsSnapshot = nil
+    }
+
+    private func invalidateMemberCaches() {
+        _snapshot = nil
+        _monthlySnapshot = nil
+        _statisticsSnapshot = nil
+        _dailyCalendarTotals = nil
+    }
 
     public init(context: ModelContext? = nil) {
         self.context = context ?? AppStore.container.mainContext
@@ -65,56 +116,88 @@ public final class BudgetStore {
     }
 
     public var activeTransactions: [TransactionRecord] {
-        transactions.filter { !$0.isDeleted }
+        _ = transactions
+        if let cached = _activeTransactions { return cached }
+        let computed = transactions.filter { !$0.isDeleted }
+        _activeTransactions = computed
+        return computed
     }
 
     public var activeBudgets: [BudgetLimitRecord] {
-        budgets.filter { !$0.isDeleted }
+        _ = budgets
+        if let cached = _activeBudgets { return cached }
+        let computed = budgets.filter { !$0.isDeleted }
+        _activeBudgets = computed
+        return computed
     }
 
     public var activeGoals: [SavingsGoalRecord] {
-        goals.filter { !$0.isDeleted }
+        _ = goals
+        if let cached = _activeGoals { return cached }
+        let computed = goals.filter { !$0.isDeleted }
+        _activeGoals = computed
+        return computed
     }
 
     public var pendingReviewTransactions: [TransactionRecord] {
-        activeTransactions.filter(\.needsReview).sorted { $0.createdAt > $1.createdAt }
+        _ = transactions
+        if let cached = _pendingReviewTransactions { return cached }
+        let computed = activeTransactions.filter(\.needsReview).sorted { $0.createdAt > $1.createdAt }
+        _pendingReviewTransactions = computed
+        return computed
     }
 
     public var snapshot: MonthlySnapshot {
-        MonthlySnapshot.compute(
+        _ = transactions; _ = budgets; _ = selectedPeriod; _ = selectedMemberID
+        if let cached = _snapshot { return cached }
+        let computed = MonthlySnapshot.compute(
             period: selectedPeriod,
             allTransactions: transactions,
             allBudgets: budgets,
             memberFilter: selectedMemberID
         )
+        _snapshot = computed
+        return computed
     }
 
     /// Full-month snapshot for `selectedPeriod.primaryMonthKey` (used by monthly Budgets).
     public var monthlySnapshot: MonthlySnapshot {
-        MonthlySnapshot.compute(
+        _ = transactions; _ = budgets; _ = selectedPeriod; _ = selectedMemberID
+        if let cached = _monthlySnapshot { return cached }
+        let computed = MonthlySnapshot.compute(
             period: .month(selectedPeriod.primaryMonthKey),
             allTransactions: transactions,
             allBudgets: budgets,
             memberFilter: selectedMemberID
         )
+        _monthlySnapshot = computed
+        return computed
     }
 
     /// Rich multi-month & breakdown analytics for the Statistics tab.
     public var statisticsSnapshot: StatisticsSnapshot {
-        StatisticsSnapshot.compute(
+        _ = transactions; _ = budgets; _ = selectedPeriod; _ = selectedMemberID
+        if let cached = _statisticsSnapshot { return cached }
+        let computed = StatisticsSnapshot.compute(
             period: selectedPeriod,
             allTransactions: transactions,
             allBudgets: budgets,
             memberFilter: selectedMemberID
         )
+        _statisticsSnapshot = computed
+        return computed
     }
 
     /// Per-day spending & income totals keyed by `YYYY-MM-DD` (respects active member filter).
     public var dailyCalendarTotals: [String: DailyCalendarTotal] {
-        MonthlySnapshot.dailyTotals(
+        _ = transactions; _ = selectedMemberID
+        if let cached = _dailyCalendarTotals { return cached }
+        let computed = MonthlySnapshot.dailyTotals(
             allTransactions: transactions,
             memberFilter: selectedMemberID
         )
+        _dailyCalendarTotals = computed
+        return computed
     }
 
     /// Set of `YYYY-MM-DD` keys that have at least one active transaction.

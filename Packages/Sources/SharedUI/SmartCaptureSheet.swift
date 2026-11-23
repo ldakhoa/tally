@@ -73,7 +73,7 @@ public struct SmartCaptureSheet: View {
                             } else {
                                 Label(
                                     settings.isAIReady && settings.autoParseWithAI
-                                        ? L10n.text(lang, en: "Parse with Claude", vi: "Đọc bằng Claude", zh: "用 Claude 解析")
+                                        ? L10n.text(lang, en: "Parse with AI", vi: "Đọc bằng AI", zh: "用 AI 解析")
                                         : L10n.text(lang, en: "Parse text", vi: "Phân tích", zh: "解析文本"),
                                     systemImage: settings.isAIReady && settings.autoParseWithAI ? "sparkles" : "wand.and.stars"
                                 )

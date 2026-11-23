@@ -6,6 +6,12 @@
 	<string>iCloud.com.ldakhoa.tally</string>
 	<key>CKSharingSupported</key>
 	<true/>
+	<key>CADisableMinimumFrameDurationOnPhone</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Tally uses the microphone to dictate expenses, budgets, and questions in English, Vietnamese, or Chinese.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Tally uses speech recognition to transcribe your voice into transactions, budgets, and goals in English, Vietnamese, or Chinese.</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>remote-notification</string>

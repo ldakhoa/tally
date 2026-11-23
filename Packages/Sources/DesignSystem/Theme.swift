@@ -136,8 +136,7 @@ extension View {
     }
 
     public func floatingShadow(_ isOn: Bool = true) -> some View {
-        shadow(color: Color(hex: 0x6B4423, alpha: isOn ? 0.085 : 0), radius: 14, y: 6)
-            .shadow(color: Color(hex: 0x6B4423, alpha: isOn ? 0.04 : 0), radius: 2, y: 1)
+        shadow(color: Color(hex: 0x6B4423, alpha: isOn ? 0.08 : 0), radius: 8, y: 3)
     }
 
     public func documentColumn(maxWidth: CGFloat = 760) -> some View {
@@ -176,20 +175,34 @@ private struct CardSurface: ViewModifier {
     }
 }
 
+private struct TabBarBottomInsetKey: EnvironmentKey {
+    static let defaultValue: CGFloat = 0
+}
+
+extension EnvironmentValues {
+    public var tabBarBottomInset: CGFloat {
+        get { self[TabBarBottomInsetKey.self] }
+        set { self[TabBarBottomInsetKey.self] = newValue }
+    }
+}
+
 private struct DocumentColumnPadding: ViewModifier {
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
     #endif
+    @Environment(\.tabBarBottomInset) private var tabBarBottomInset
 
     func body(content: Content) -> some View {
         #if os(iOS)
         content
             .padding(.horizontal, horizontalSizeClass == .regular ? 24 : 16)
-            .padding(.vertical, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 16 + tabBarBottomInset)
         #else
         content
             .padding(.horizontal, 24)
-            .padding(.vertical, 16)
+            .padding(.top, 16)
+            .padding(.bottom, 16 + tabBarBottomInset)
         #endif
     }
 }

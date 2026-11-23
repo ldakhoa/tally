@@ -129,4 +129,11 @@ final class TallyCoreTests: XCTestCase {
         XCTAssertEqual(DateKey.shortWeekdayLabel(weekday: 1, language: .chinese), "日")
         XCTAssertEqual(CurrencyCode.sgd.name(in: .chinese), "新加坡元")
     }
+
+    func testAIProviderLocalization() {
+        XCTAssertEqual(AIProvider.allCases, [.auto, .appleIntelligence, .claude])
+        XCTAssertEqual(AIProvider.appleIntelligence.title(in: .chinese), "Apple 智能")
+        XCTAssertEqual(AIProvider.auto.shortTitle(in: .vietnamese), "Tự động")
+        XCTAssertEqual(AIProvider.claude.shortTitle(in: .english), "Claude")
+    }
 }

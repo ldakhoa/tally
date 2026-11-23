@@ -18,10 +18,11 @@ public struct MonthSwitcher: View {
 
         HStack(spacing: 2) {
             Button {
-                withAnimation(.snappy(duration: 0.2)) { store.shiftPeriod(by: -1) }
+                CozyHaptics.light()
+                CozySounds.play(.tick)
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) { store.shiftPeriod(by: -1) }
             } label: {
-                Image(systemName: "chevron.left")
-                    .font(.appControl)
+                CozyUIIcon(.chevronLeft, size: 16, color: Color.textPrimary)
                     .frame(width: 32, height: 32)
                     .contentShape(Rectangle())
             }
@@ -32,16 +33,12 @@ public struct MonthSwitcher: View {
                 showingPicker = true
             } label: {
                 HStack(spacing: 6) {
-                    Image(systemName: "calendar")
-                        .font(.appCaption)
-                        .foregroundStyle(Color.textSecondary)
+                    CozyUIIcon(.calendar, size: 14, color: Color.textSecondary)
                     Text(title)
                         .font(.appControl)
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
-                    Image(systemName: "chevron.down")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color.textSecondary)
+                    CozyUIIcon(.chevronDown, size: 12, color: Color.textSecondary)
                 }
                 .padding(.horizontal, 6)
                 .frame(minHeight: 32)
@@ -51,10 +48,11 @@ public struct MonthSwitcher: View {
             .accessibilityLabel(L10n.text(lang, en: "Choose date or period: \(title)", vi: "Chọn ngày hoặc khoảng thời gian: \(title)", zh: "选择日期或时间段：\(title)"))
 
             Button {
-                withAnimation(.snappy(duration: 0.2)) { store.shiftPeriod(by: 1) }
+                CozyHaptics.light()
+                CozySounds.play(.tick)
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.78)) { store.shiftPeriod(by: 1) }
             } label: {
-                Image(systemName: "chevron.right")
-                    .font(.appControl)
+                CozyUIIcon(.chevronRight, size: 16, color: Color.textPrimary)
                     .frame(width: 32, height: 32)
                     .contentShape(Rectangle())
             }
@@ -248,6 +246,8 @@ public struct MemberFilterBar: View {
                         let isSelected = (store.selectedMemberID ?? "__all__") == id
                         let floats = colorScheme == .light && !isSelected
                         Button {
+                            CozyHaptics.selection()
+                            CozySounds.play(.tick)
                             withAnimation(.spring(response: 0.28, dampingFraction: 0.72)) {
                                 store.selectedMemberID = (id == "__all__") ? nil : id
                             }
@@ -301,18 +301,61 @@ public struct CategoryBadge: View {
     }
 
     public var body: some View {
-        RoundedRectangle(cornerRadius: size * 0.34, style: .continuous)
-            .fill(category.color.opacity(0.18))
-            .frame(width: size, height: size)
-            .overlay {
-                RoundedRectangle(cornerRadius: size * 0.34, style: .continuous)
-                    .strokeBorder(category.color.opacity(0.28), lineWidth: 1)
+        let shape = RoundedRectangle(cornerRadius: size * 0.34, style: .continuous)
+        Group {
+            if let img = CozyWatercolorAsset.categoryImage(for: category) {
+                img
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: size, height: size)
+                    .clipShape(shape)
+            } else {
+                shape
+                    .fill(category.color.opacity(0.18))
+                    .frame(width: size, height: size)
+                    .overlay {
+                        CozyCategoryIcon(category: category, size: size * 0.68, style: .watercolor)
+                    }
             }
-            .overlay {
-                Text(category.cuteEmoji)
-                    .font(.system(size: size * 0.54))
+        }
+        .overlay {
+            shape.strokeBorder(category.color.opacity(0.28), lineWidth: 1)
+        }
+        .accessibilityHidden(true)
+    }
+}
+
+public struct GoalBadge: View {
+    public let icon: GoalIcon
+    public var size: CGFloat
+
+    public init(icon: GoalIcon, size: CGFloat = 38) {
+        self.icon = icon
+        self.size = size
+    }
+
+    public var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.34, style: .continuous)
+        Group {
+            if let img = CozyWatercolorAsset.goalImage(for: icon) {
+                img
+                    .resizable()
+                    .scaledToFill()
+                    .frame(width: size, height: size)
+                    .clipShape(shape)
+            } else {
+                shape
+                    .fill(icon.tintBackground)
+                    .frame(width: size, height: size)
+                    .overlay {
+                        CozyGoalIcon(goal: icon, size: size * 0.64, style: .watercolor)
+                    }
             }
-            .accessibilityHidden(true)
+        }
+        .overlay {
+            shape.strokeBorder(icon.color.opacity(0.24), lineWidth: 1)
+        }
+        .accessibilityHidden(true)
     }
 }
 
@@ -346,26 +389,19 @@ public struct TransactionRow: View {
                     }
                 }
 
-                HStack(spacing: 6) {
-                    Text(transaction.category.title(in: settings.language))
-                    if showDate {
-                        Text("·")
-                        Text(DateKey.formatCompactDay(transaction.dayKey, language: settings.language))
-                            .fixedSize(horizontal: true, vertical: false)
-                    }
-                    if !transaction.memberName.isEmpty {
-                        Text("·")
-                        Text(transaction.memberName)
-                    }
+                HStack(spacing: 5) {
+                    Text(metadataSubtitle)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
                     if transaction.source != .manual {
-                        Image(systemName: transaction.source.symbol)
-                            .font(.system(size: 10, weight: .semibold))
+                        CozyUIIcon(.from(source: transaction.source), size: 11, color: Color.textSecondary)
+                            .fixedSize()
                     }
                 }
                 .font(.appCaption)
                 .foregroundStyle(Color.textSecondary)
-                .lineLimit(1)
             }
+            .layoutPriority(1)
 
             Spacer(minLength: 8)
 
@@ -373,6 +409,7 @@ public struct TransactionRow: View {
                 .font(.appAmount)
                 .foregroundStyle(transaction.type == .income ? Color.positive : Color.textPrimary)
                 .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.vertical, 6)
         .contentShape(Rectangle())
@@ -383,6 +420,17 @@ public struct TransactionRow: View {
         } else {
             row
         }
+    }
+
+    private var metadataSubtitle: String {
+        var parts: [String] = [transaction.category.title(in: settings.language)]
+        if showDate {
+            parts.append(DateKey.formatCompactDay(transaction.dayKey, language: settings.language))
+        }
+        if !transaction.memberName.isEmpty {
+            parts.append(transaction.memberName)
+        }
+        return parts.joined(separator: " · ")
     }
 
     private var formattedAmount: String {

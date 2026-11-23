@@ -15,6 +15,7 @@ public struct SettingsView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(CloudSync.self) private var cloudSync
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.tabBarBottomInset) private var tabBarBottomInset
 
     public init(isModal: Bool = false) {
         self.isModal = isModal
@@ -42,10 +43,8 @@ public struct SettingsView: View {
                         settingsRow(
                             symbol: "sparkles",
                             tint: settings.isAIReady ? .positive : .caution,
-                            title: "Claude AI",
-                            detail: settings.isAIReady
-                                ? settings.model.name
-                                : L10n.text(lang, en: "Not set up", vi: "Chưa thiết lập", zh: "未配置")
+                            title: L10n.text(lang, en: "AI Assistant", vi: "Trợ lý AI", zh: "AI 助手"),
+                            detail: settings.activeProviderSummary(in: lang)
                         )
                     }
 
@@ -100,6 +99,7 @@ public struct SettingsView: View {
             .listStyle(.insetGrouped)
             #endif
             .scrollContentBackground(.hidden)
+            .contentMargins(.bottom, tabBarBottomInset, for: .scrollContent)
             .pageBackground()
             .navigationTitle(L10n.text(lang, en: "Settings", vi: "Cài đặt", zh: "设置"))
             .toolbar {
@@ -114,7 +114,7 @@ public struct SettingsView: View {
 
     private func settingsRow(symbol: String, tint: Color?, title: String, detail: String) -> some View {
         HStack(spacing: 12) {
-            SettingsIconTile(symbol: symbol, tint: tint, size: 32)
+            SettingsIconTile(symbol: symbol, tint: tint, size: 36)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title).font(.appBodyMedium)
                 Text(detail).font(.appCaption).foregroundStyle(Color.textSecondary)

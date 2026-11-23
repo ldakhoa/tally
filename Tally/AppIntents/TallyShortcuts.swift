@@ -53,7 +53,45 @@ enum CategoryAppEnum: String, AppEnum {
     }
 }
 
-// MARK: - 0. Unified 1-Action Auto-Log Intent (Zero Multi-Field Wiring!)
+// MARK: - 0A. Natural-Language Siri & Cross-App Assistant Intent
+
+/// Speak or type naturally to Siri in Vietnamese, English, or Chinese:
+/// e.g. "Hôm nay tôi mới PayNow cho bạn $5 tiền ăn trưa", "Đặt ngân sách ăn uống 800",
+/// or "Tạo mục tiêu tiết kiệm đi Nhật 5000".
+/// Powered by Apple Foundation Models (on-device) or Claude according to Settings, with offline fallback.
+struct TellTallyIntent: AppIntent {
+    static var title: LocalizedStringResource = "Tell Tally"
+    static var description = IntentDescription(
+        "Speak or type naturally in Vietnamese, English, or Chinese to log expenses, set budgets, create savings goals, or ask about spending."
+    )
+    static var openAppWhenRun: Bool = false
+
+    @Parameter(
+        title: "Message",
+        description: "What you spent, earned, or want to update in Tally.",
+        requestValueDialog: IntentDialog("What would you like to tell Tally?")
+    )
+    var message: String
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Tell Tally \(\.$message)")
+    }
+
+    @MainActor
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        let settings = AppSettings()
+        let store = BudgetStore.current ?? BudgetStore()
+        store.reload()
+        let outcome = await AssistantService.runOneShot(
+            message: message,
+            settings: settings,
+            store: store
+        )
+        return .result(dialog: IntentDialog(stringLiteral: outcome.reply))
+    }
+}
+
+// MARK: - 0B. Unified 1-Action Auto-Log Intent (Zero Multi-Field Wiring!)
 
 /// The simplest possible Shortcuts action: takes a single text input (auto-connected to
 /// Shortcut Input or the previous action's result) — works for Apple Pay, DBS/OCBC/UOB/Trust
@@ -331,6 +369,17 @@ struct GetSpendingSummaryIntent: AppIntent {
 
 struct TallyShortcutsProvider: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
+        AppShortcut(
+            intent: TellTallyIntent(),
+            phrases: [
+                "Tell \(.applicationName)",
+                "Ask \(.applicationName)",
+                "Log with \(.applicationName)",
+                "Record in \(.applicationName)",
+            ],
+            shortTitle: "Tell Tally",
+            systemImageName: "sparkles"
+        )
         AppShortcut(
             intent: AutoLogTransactionIntent(),
             phrases: [

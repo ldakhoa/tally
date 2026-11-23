@@ -180,10 +180,12 @@ public struct AmountKeypadView: View {
             haptic(.light)
             engine.tapBackspace()
         } label: {
-            Image(systemName: "delete.left")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(engine.isEmpty ? Color.textSecondary.opacity(0.45) : Color.accent)
-                .frame(maxWidth: .infinity, minHeight: 46, maxHeight: 48)
+            CozyUIIcon(
+                .backspace,
+                size: 22,
+                color: engine.isEmpty ? Color.textSecondary.opacity(0.45) : Color.accent
+            )
+            .frame(maxWidth: .infinity, minHeight: 46, maxHeight: 48)
                 .background(
                     RoundedRectangle(cornerRadius: 13, style: .continuous)
                         .fill(Color.softFill)

@@ -64,7 +64,10 @@ struct EmailInboxSettingsPane: View {
                                             Text(L10n.text(lang, en: "Checking…", vi: "Đang kiểm tra…", zh: "检查中…"))
                                         }
                                     } else {
-                                        Label(L10n.text(lang, en: "Check inbox now", vi: "Kiểm tra ngay", zh: "立即检查"), systemImage: "arrow.clockwise")
+                                        HStack(spacing: 6) {
+                                            CozyUIIcon(.refresh, size: 14, color: Color.onInk)
+                                            Text(L10n.text(lang, en: "Check inbox now", vi: "Kiểm tra ngay", zh: "立即检查"))
+                                        }
                                     }
                                 }
                                 .pillButton(prominent: true)

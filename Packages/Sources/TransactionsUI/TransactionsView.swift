@@ -30,15 +30,18 @@ public struct TransactionsView: View {
 
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
+                LazyVStack(alignment: .leading, spacing: 14) {
                     PeriodHeaderBar {
                         Button {
                             withAnimation(.snappy(duration: 0.2)) {
                                 showInlineCalendar.toggle()
                             }
                         } label: {
-                            Image(systemName: showInlineCalendar ? "list.bullet" : "calendar")
-                                .font(.appControl)
+                            CozyUIIcon(
+                                showInlineCalendar ? .list : .calendar,
+                                size: 16,
+                                color: showInlineCalendar ? Color.onInk : Color.textPrimary
+                            )
                         }
                         .pillButton(prominent: showInlineCalendar)
                         .accessibilityLabel(
@@ -46,13 +49,6 @@ public struct TransactionsView: View {
                                 ? L10n.text(lang, en: "Hide calendar", vi: "Ẩn lịch", zh: "隐藏日历")
                                 : L10n.text(lang, en: "Show calendar", vi: "Hiện lịch", zh: "显示日历")
                         )
-
-                        Button {
-                            settings.isShowingQuickAdd = true
-                        } label: {
-                            Label(L10n.text(lang, en: "Add", vi: "Thêm", zh: "记一笔"), systemImage: "plus")
-                        }
-                        .pillButton(prominent: true)
                     }
 
                     if showInlineCalendar {
@@ -79,25 +75,8 @@ public struct TransactionsView: View {
                         )
                     }
 
-                    // Transaction type filter chips
-                    ChipPicker(
-                        L10n.text(lang, en: "Filter", vi: "Bộ lọc", zh: "筛选"),
-                        selection: $store.activityTypeFilter,
-                        options: ActivityTypeFilter.allCases,
-                        sideMargin: 0
-                    ) { option in
-                        switch option {
-                        case .all: return L10n.text(lang, en: "All", vi: "Tất cả", zh: "全部")
-                        case .expense: return "🛍️ " + L10n.text(lang, en: "Expenses", vi: "Chi tiêu", zh: "支出")
-                        case .income: return "💰 " + L10n.text(lang, en: "Income", vi: "Thu nhập", zh: "收入")
-                        case .auto: return "⚡ " + L10n.text(lang, en: "Auto-captured", vi: "Tự động", zh: "自动记录")
-                        }
-                    } symbol: { option in
-                        option == .all ? "pawprint.fill" : nil
-                    }
-
-                    // Category filter strip (works directly inside Transactions)
-                    categoryFilterBar(lang: lang)
+                    // Single unified filter strip: Type menu pill + Category chips
+                    unifiedFilterBar(lang: lang)
 
                     MemberFilterBar()
 
@@ -195,7 +174,38 @@ public struct TransactionsView: View {
         }
     }
 
-    // MARK: - Category Filter Bar
+    // MARK: - Unified Filter Bar (Type Menu + Category Chips in 1 row)
+
+    private func typeFilterLabel(_ option: ActivityTypeFilter, lang: AppLanguage) -> String {
+        switch option {
+        case .all: return L10n.text(lang, en: "All", vi: "Tất cả", zh: "全部")
+        case .expense: return L10n.text(lang, en: "Expenses", vi: "Chi tiêu", zh: "支出")
+        case .income: return L10n.text(lang, en: "Income", vi: "Thu nhập", zh: "收入")
+        case .auto: return L10n.text(lang, en: "Auto", vi: "Tự động", zh: "自动")
+        }
+    }
+
+    @ViewBuilder
+    private func typeFilterIcon(_ option: ActivityTypeFilter, isSelected: Bool) -> some View {
+        switch option {
+        case .all:
+            CozyUIIcon(.sparkles, size: 13, color: isSelected ? Color.onInk : Color.accent)
+        case .expense:
+            CozyCategoryIcon(
+                category: .shopping,
+                size: 15,
+                style: isSelected ? .tinted(Color.onInk) : .watercolor
+            )
+        case .income:
+            CozyCategoryIcon(
+                category: .salary,
+                size: 15,
+                style: isSelected ? .tinted(Color.onInk) : .watercolor
+            )
+        case .auto:
+            CozyUIIcon(.bolt, size: 13, color: isSelected ? Color.onInk : Color.accent)
+        }
+    }
 
     private var filterCategories: [CategoryID] {
         switch store.activityTypeFilter {
@@ -208,15 +218,62 @@ public struct TransactionsView: View {
         }
     }
 
-    private func categoryFilterBar(lang: AppLanguage) -> some View {
+    private func unifiedFilterBar(lang: AppLanguage) -> some View {
         let categories = filterCategories
+        let isTypeFiltered = store.activityTypeFilter != .all
         return ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
+                    // Compact Type dropdown pill
+                    Menu {
+                        ForEach(ActivityTypeFilter.allCases) { option in
+                            Button {
+                                withAnimation(.snappy(duration: 0.18)) {
+                                    store.activityTypeFilter = option
+                                }
+                            } label: {
+                                if store.activityTypeFilter == option {
+                                    Label(typeFilterLabel(option, lang: lang), systemImage: "checkmark")
+                                } else {
+                                    Text(typeFilterLabel(option, lang: lang))
+                                }
+                            }
+                        }
+                    } label: {
+                        HStack(spacing: 5) {
+                            typeFilterIcon(store.activityTypeFilter, isSelected: isTypeFiltered)
+                            Text(typeFilterLabel(store.activityTypeFilter, lang: lang))
+                                .font(.appCaption.weight(.semibold))
+                                .lineLimit(1)
+                            CozyUIIcon(
+                                .chevronDown,
+                                size: 12,
+                                color: isTypeFiltered ? Color.onInk.opacity(0.8) : Color.textSecondary
+                            )
+                        }
+                        .padding(.horizontal, 12)
+                        .frame(minHeight: 34)
+                        .foregroundStyle(isTypeFiltered ? Color.onInk : Color.textPrimary)
+                        .background {
+                            Capsule()
+                                .fill(isTypeFiltered ? Color.ink : Color.cardBackground)
+                                .floatingShadow(colorScheme == .light && !isTypeFiltered)
+                        }
+                        .overlay {
+                            if !isTypeFiltered && colorScheme != .light {
+                                Capsule().strokeBorder(Color.hairlineStrong, lineWidth: 1)
+                            }
+                        }
+                    }
+
+                    Rectangle()
+                        .fill(Color.hairlineStrong)
+                        .frame(width: 1, height: 18)
+
                     categoryChip(
                         id: "__all__",
-                        emoji: "🏷️",
-                        title: L10n.text(lang, en: "All categories", vi: "Mọi danh mục", zh: "全部分类"),
+                        category: nil,
+                        title: L10n.text(lang, en: "All", vi: "Mọi mục", zh: "全部"),
                         isSelected: store.activityCategoryFilter == nil
                     ) {
                         withAnimation(.snappy(duration: 0.18)) {
@@ -228,7 +285,7 @@ public struct TransactionsView: View {
                         let isSelected = store.activityCategoryFilter == cat
                         categoryChip(
                             id: cat.rawValue,
-                            emoji: cat.cuteEmoji,
+                            category: cat,
                             title: cat.title(in: lang),
                             isSelected: isSelected
                         ) {
@@ -240,7 +297,7 @@ public struct TransactionsView: View {
                 }
                 .padding(.vertical, 3)
             }
-            .accessibilityLabel(L10n.text(lang, en: "Filter by category", vi: "Lọc theo danh mục", zh: "按分类筛选"))
+            .accessibilityLabel(L10n.text(lang, en: "Filter transactions", vi: "Lọc giao dịch", zh: "筛选账单"))
             .onChange(of: store.activityCategoryFilter) { _, newCat in
                 withAnimation(.snappy(duration: 0.2)) {
                     proxy.scrollTo(newCat?.rawValue ?? "__all__", anchor: .center)
@@ -256,16 +313,23 @@ public struct TransactionsView: View {
 
     private func categoryChip(
         id: String,
-        emoji: String,
+        category: CategoryID?,
         title: String,
         isSelected: Bool,
         action: @escaping () -> Void
     ) -> some View {
         let floats = colorScheme == .light && !isSelected
         return Button(action: action) {
-            HStack(spacing: 5) {
-                Text(emoji)
-                    .font(.system(size: 13))
+            HStack(spacing: 6) {
+                if let category {
+                    CozyCategoryIcon(
+                        category: category,
+                        size: 16,
+                        style: isSelected ? .tinted(Color.onInk) : .watercolor
+                    )
+                } else {
+                    CozyUIIcon(.sparkles, size: 14, color: isSelected ? Color.onInk : Color.accent)
+                }
                 Text(title)
                     .font(.appCaption.weight(.semibold))
                     .lineLimit(1)

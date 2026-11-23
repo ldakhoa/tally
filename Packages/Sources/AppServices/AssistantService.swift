@@ -4,7 +4,7 @@ import Foundation
 import Observation
 import TallyCore
 
-public struct ChatEntry: Identifiable, Hashable, Sendable {
+public struct ChatEntry: Identifiable, Codable, Hashable, Sendable {
     public let id: UUID
     public let role: ClaudeMessage.Role
     public var text: String
@@ -26,138 +26,553 @@ public struct ChatEntry: Identifiable, Hashable, Sendable {
     }
 }
 
+public struct ChatSession: Identifiable, Codable, Hashable, Sendable {
+    public let id: UUID
+    public var title: String
+    public var updatedAt: Date
+    public var messages: [ChatEntry]
+
+    public init(
+        id: UUID = UUID(),
+        title: String,
+        updatedAt: Date = Date(),
+        messages: [ChatEntry]
+    ) {
+        self.id = id
+        self.title = title
+        self.updatedAt = updatedAt
+        self.messages = messages
+    }
+}
+
+private struct PersistedChatHistory: Codable {
+    var activeSessionID: UUID?
+    var sessions: [ChatSession]
+}
+
 /// Action-capable streaming Claude assistant with live cross-app access to
 /// Transactions, Monthly Budgets, and Savings Goals.
 @MainActor
 @Observable
 public final class AssistantService {
     public private(set) var messages: [ChatEntry] = []
+    public private(set) var sessions: [ChatSession] = []
+    public private(set) var activeSessionID: UUID?
     public private(set) var isStreaming = false
     public private(set) var statusLabel: String?
     public private(set) var errorMessage: String?
 
     @ObservationIgnored private var wireHistory: [ClaudeMessage] = []
     @ObservationIgnored private var activeTask: Task<Void, Never>?
+    @ObservationIgnored private var didUserCancel = false
+    @ObservationIgnored private let persistEnabled: Bool
 
-    public init() {}
+    public init(persist: Bool = true) {
+        self.persistEnabled = persist
+        if persist {
+            loadHistoryFromDisk()
+        }
+    }
 
     public func send(_ text: String, settings: AppSettings, store: BudgetStore) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isStreaming else { return }
-        guard let client = settings.makeAIClient() else {
-            errorMessage = ClaudeError.missingAPIKey.localizedMessage(in: settings.language)
+
+        let lang = settings.language
+        guard let backend = settings.resolvedBackend(for: .assistantChat) else {
+            errorMessage = settings.aiProvider == .appleIntelligence
+                ? settings.appleIntelligenceStatus.detail(in: lang)
+                : ClaudeError.missingAPIKey.localizedMessage(in: lang)
             return
         }
 
         errorMessage = nil
         statusLabel = nil
+        didUserCancel = false
+        let priorHistory = messages
+        if activeSessionID == nil {
+            activeSessionID = UUID()
+        }
         messages.append(ChatEntry(role: .user, text: trimmed))
         wireHistory.append(.user(trimmed))
+        persistCurrentSession()
 
         let assistantID = UUID()
-        messages.append(ChatEntry(role: .assistant, text: ""))
+        messages.append(ChatEntry(id: assistantID, role: .assistant, text: ""))
         isStreaming = true
-
-        let lang = settings.language
 
         activeTask?.cancel()
         activeTask = Task {
             defer {
                 self.isStreaming = false
                 self.statusLabel = nil
+                self.persistCurrentSession()
             }
             do {
-                let maxToolRounds = 4
-                for round in 0...maxToolRounds {
-                    let systemPrompt = BudgetAssistantPrompt.systemPrompt(
-                        snapshot: store.monthlySnapshot,
-                        goals: store.activeGoals,
-                        currency: settings.currency,
-                        language: lang,
-                        myName: settings.currentMember.name,
-                        partnerName: settings.partnerDisplayName
-                    )
+                var lastDiagnostic = "backend=\(backend.rawValue)"
 
-                    let request = ClaudeRequest(
-                        system: systemPrompt,
-                        messages: self.wireHistory,
-                        maxTokens: 2_048,
-                        effort: .low,
-                        tools: AssistantToolCatalog.allTools,
-                        cacheConversation: true
-                    )
-
-                    var completion: ClaudeCompletion?
-                    var streamedPrefix = false
-                    for try await event in client.stream(request) {
-                        switch event {
-                        case .text(let chunk):
+                switch backend {
+                case .appleIntelligence:
+                    #if canImport(FoundationModels)
+                    if #available(iOS 26.0, macOS 26.0, *) {
+                        let result = try await AppleAssistantRunner.run(
+                            message: trimmed,
+                            recentHistory: priorHistory,
+                            settings: settings,
+                            store: store
+                        ) { partialText in
                             if let idx = self.messages.firstIndex(where: { $0.id == assistantID }) {
-                                if round > 0 && !streamedPrefix && !self.messages[idx].text.isEmpty {
-                                    self.messages[idx].text += "\n\n"
-                                }
-                                streamedPrefix = true
-                                self.messages[idx].text += chunk
+                                self.messages[idx].text = partialText
                             }
-                        case .finished(let done):
-                            completion = done
                         }
+                        lastDiagnostic = "apple text=\(result.text.count) receipts=\(result.receipts.count)"
+                        if let idx = self.messages.firstIndex(where: { $0.id == assistantID }) {
+                            self.messages[idx].actions = result.receipts
+                            let replyText = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !replyText.isEmpty {
+                                self.messages[idx].text = replyText
+                            } else if !result.receipts.isEmpty {
+                                self.messages[idx].text = Self.spokenSummary(for: result.receipts, language: lang)
+                            }
+                            if !self.messages[idx].text.isEmpty {
+                                self.wireHistory.append(.assistant(self.messages[idx].text))
+                            }
+                        }
+                    } else {
+                        throw ClaudeError.malformedResponse(settings.appleIntelligenceStatus.detail(in: lang))
                     }
+                    #else
+                    throw ClaudeError.malformedResponse(settings.appleIntelligenceStatus.detail(in: lang))
+                    #endif
 
-                    guard let completion else { break }
+                case .claude:
+                    guard let client = settings.makeClaudeClient() else {
+                        throw ClaudeError.missingAPIKey
+                    }
+                    lastDiagnostic = try await self.runClaudeLoop(client: client, assistantID: assistantID, settings: settings, store: store)
+                }
 
-                    if completion.needsToolExecution && round < maxToolRounds {
-                        self.wireHistory.append(.assistant(blocks: completion.assistantBlocks))
-                        self.statusLabel = L10n.text(
+                // If Apple Intelligence returned empty with no actions, transparently fall back to Claude if available.
+                if backend == .appleIntelligence,
+                   let idx = self.messages.firstIndex(where: { $0.id == assistantID }),
+                   self.messages[idx].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   self.messages[idx].actions.isEmpty,
+                   let claude = settings.makeClaudeClient() {
+                    lastDiagnostic = try await self.runClaudeLoop(client: claude, assistantID: assistantID, settings: settings, store: store)
+                }
+
+                // Final safety net: NEVER leave a silent empty assistant bubble!
+                if let idx = self.messages.firstIndex(where: { $0.id == assistantID }),
+                   self.messages[idx].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    if !self.messages[idx].actions.isEmpty {
+                        let fallback = Self.spokenSummary(for: self.messages[idx].actions, language: lang)
+                        self.messages[idx].text = fallback
+                        self.wireHistory.append(.assistant(fallback))
+                    } else {
+                        self.errorMessage = L10n.text(
                             lang,
-                            en: "Updating your Tally data…",
-                            vi: "Đang cập nhật dữ liệu Tally…",
-                            zh: "正在更新您的 Tally 数据…"
+                            en: "No reply received (\(lastDiagnostic)). Tap Retry.",
+                            vi: "Không nhận được phản hồi (\(lastDiagnostic)). Hãy bấm Thử lại.",
+                            zh: "未收到回复（\(lastDiagnostic)），请点击重试。"
                         )
-
-                        var toolResults: [(id: String, content: String, isError: Bool)] = []
-                        var receipts: [AssistantActionReceipt] = []
-
-                        for toolUse in completion.toolUses {
-                            let outcome = self.execute(toolUse: toolUse, settings: settings, store: store)
-                            toolResults.append((id: toolUse.id, content: outcome.toolOutput, isError: outcome.isError))
-                            receipts.append(contentsOf: outcome.receipts)
-                        }
-
-                        if !receipts.isEmpty,
-                           let idx = self.messages.firstIndex(where: { $0.id == assistantID }) {
-                            self.messages[idx].actions.append(contentsOf: receipts)
-                        }
-
-                        self.wireHistory.append(.toolResults(toolResults))
-                        self.statusLabel = nil
-                        continue
+                        self.dropEmptyAssistant(id: assistantID)
+                        self.popDanglingUserWireMessage()
                     }
-
-                    if !completion.text.isEmpty {
-                        self.wireHistory.append(.assistant(completion.text))
-                    }
-                    break
                 }
             } catch is CancellationError {
+                self.dropEmptyAssistant(id: assistantID)
+                self.popDanglingUserWireMessage()
+                if !self.didUserCancel {
+                    self.errorMessage = L10n.text(
+                        lang,
+                        en: "Request was cancelled (\(backend.rawValue)). Tap Retry.",
+                        vi: "Yêu cầu bị huỷ (\(backend.rawValue)). Hãy bấm Thử lại.",
+                        zh: "请求被取消（\(backend.rawValue)），请点击重试。"
+                    )
+                }
                 return
             } catch let err as ClaudeError {
-                self.errorMessage = err.localizedMessage(in: lang)
-                self.dropEmptyAssistant(id: assistantID)
+                if let idx = self.messages.firstIndex(where: { $0.id == assistantID }),
+                   !self.messages[idx].actions.isEmpty {
+                    if self.messages[idx].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        self.messages[idx].text = Self.spokenSummary(for: self.messages[idx].actions, language: lang)
+                    }
+                } else {
+                    self.errorMessage = err.localizedMessage(in: lang)
+                    self.dropEmptyAssistant(id: assistantID)
+                    self.popDanglingUserWireMessage()
+                }
             } catch {
-                self.errorMessage = error.localizedDescription
-                self.dropEmptyAssistant(id: assistantID)
+                if let idx = self.messages.firstIndex(where: { $0.id == assistantID }),
+                   !self.messages[idx].actions.isEmpty {
+                    if self.messages[idx].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        self.messages[idx].text = Self.spokenSummary(for: self.messages[idx].actions, language: lang)
+                    }
+                } else {
+                    self.errorMessage = error.localizedDescription
+                    self.dropEmptyAssistant(id: assistantID)
+                    self.popDanglingUserWireMessage()
+                }
             }
         }
     }
 
-    public func clear() {
+    /// One-shot cross-app assistant execution for Apple Siri (`TellTallyIntent`).
+    /// Uses Apple Intelligence (on-device) or Claude based on `settings.aiProvider`,
+    /// and falls back to offline transaction parsing if no AI backend is available.
+    public static func runOneShot(
+        message: String,
+        settings: AppSettings,
+        store: BudgetStore
+    ) async -> (reply: String, receipts: [AssistantActionReceipt]) {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        let lang = settings.language
+        guard !trimmed.isEmpty else {
+            return (
+                L10n.text(lang, en: "Tell me what you'd like to log or update.", vi: "Hãy nói khoản chi, ngân sách hoặc mục tiêu bạn muốn lưu.", zh: "请告诉我您想记录或更新的内容。"),
+                []
+            )
+        }
+
+        if let backend = settings.resolvedBackend(for: .siri) {
+            switch backend {
+            case .appleIntelligence:
+                #if canImport(FoundationModels)
+                if #available(iOS 26.0, macOS 26.0, *) {
+                    if let result = try? await AppleAssistantRunner.run(
+                        message: trimmed,
+                        recentHistory: [],
+                        settings: settings,
+                        store: store,
+                        onTextUpdate: { _ in }
+                    ) {
+                        let spoken = result.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if !spoken.isEmpty {
+                            return (spoken, result.receipts)
+                        }
+                        if !result.receipts.isEmpty {
+                            return (Self.spokenSummary(for: result.receipts, language: lang), result.receipts)
+                        }
+                    }
+                }
+                #endif
+
+            case .claude:
+                if let client = settings.makeClaudeClient() {
+                    let tempService = AssistantService(persist: false)
+                    tempService.wireHistory = [.user(trimmed)]
+                    let tempID = UUID()
+                    tempService.messages = [ChatEntry(id: tempID, role: .assistant, text: "")]
+                    do {
+                        try await tempService.runClaudeLoop(client: client, assistantID: tempID, settings: settings, store: store)
+                        if let entry = tempService.messages.first(where: { $0.id == tempID }) {
+                            let spoken = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                            if !spoken.isEmpty {
+                                return (spoken, entry.actions)
+                            }
+                            if !entry.actions.isEmpty {
+                                return (Self.spokenSummary(for: entry.actions, language: lang), entry.actions)
+                            }
+                        }
+                    } catch {
+                        // Fall through to local parser fallback below.
+                    }
+                }
+            }
+        }
+
+        // Offline fallback: parse as a transaction with LocalTransactionParser so Siri still works!
+        if let parsed = LocalTransactionParser.parse(trimmed, defaultCurrency: settings.currency) {
+            let member = settings.currentMember
+            let resolved = AITransactionParser.resolvedAmountAndNote(
+                for: parsed,
+                targetCurrency: settings.currency,
+                language: lang
+            )
+            let record = TransactionRecord(
+                name: parsed.name,
+                amountMinor: max(1, resolved.amountMinor),
+                type: parsed.type,
+                category: parsed.category,
+                dayKey: parsed.dayKey,
+                note: resolved.note,
+                source: .shortcut,
+                rawSourceText: trimmed,
+                memberID: member.id,
+                memberName: member.name,
+                needsReview: false
+            )
+            store.saveTransaction(record)
+            let formatted = MoneyFormat.format(minor: record.amountMinor, currency: settings.currency, language: lang)
+            let reply = L10n.text(
+                lang,
+                en: "Logged \(record.name): \(formatted) in \(record.category.title(in: lang)).",
+                vi: "Đã lưu \(record.name): \(formatted) vào mục \(record.category.title(in: lang)).",
+                zh: "已记录 \(record.name)：\(formatted)（\(record.category.title(in: lang))）。"
+            )
+            return (reply, [])
+        }
+
+        return (
+            L10n.text(
+                lang,
+                en: "I couldn't understand that yet. Enable Apple Intelligence or add a Claude API key in Tally Settings.",
+                vi: "Mình chưa hiểu rõ yêu cầu này. Hãy bật Apple Intelligence hoặc thêm Claude API key trong Cài đặt Tally.",
+                zh: "暂时无法理解这条内容。请在 Tally 设置中开启 Apple 智能或添加 Claude API 密钥。"
+            ),
+            []
+        )
+    }
+
+    private static func spokenSummary(for receipts: [AssistantActionReceipt], language: AppLanguage) -> String {
+        let items = receipts.map { r in
+            if let amt = r.amountText { return "\(r.title) (\(amt))" }
+            return r.title
+        }.joined(separator: ", ")
+        return L10n.text(
+            language,
+            en: "Done! Updated Tally: \(items).",
+            vi: "Xong! Đã cập nhật Tally: \(items).",
+            zh: "已完成！已更新 Tally：\(items)。"
+        )
+    }
+
+    @discardableResult
+    private func runClaudeLoop(
+        client: any AIClient,
+        assistantID: UUID,
+        settings: AppSettings,
+        store: BudgetStore
+    ) async throws -> String {
+        let lang = settings.language
+        let maxToolRounds = 4
+        var diagnostic = "claude no-rounds"
+        for round in 0...maxToolRounds {
+            let systemPrompt = BudgetAssistantPrompt.systemPrompt(
+                snapshot: store.monthlySnapshot,
+                goals: store.activeGoals,
+                currency: settings.currency,
+                language: lang,
+                myName: settings.currentMember.name,
+                partnerName: settings.partnerDisplayName
+            )
+
+            let request = ClaudeRequest(
+                system: systemPrompt,
+                messages: self.wireHistory,
+                maxTokens: 2_048,
+                effort: .low,
+                tools: AssistantToolCatalog.allTools,
+                cacheConversation: true
+            )
+
+            var completion: ClaudeCompletion?
+            var streamedPrefix = false
+            for try await event in client.stream(request) {
+                switch event {
+                case .text(let chunk):
+                    if let idx = self.messages.firstIndex(where: { $0.id == assistantID }) {
+                        if round > 0 && !streamedPrefix && !self.messages[idx].text.isEmpty {
+                            self.messages[idx].text += "\n\n"
+                        }
+                        streamedPrefix = true
+                        self.messages[idx].text += chunk
+                    }
+                case .finished(let done):
+                    completion = done
+                }
+            }
+
+            guard let completion else {
+                diagnostic = "claude r\(round) nil-completion"
+                break
+            }
+            diagnostic = "claude r\(round) stop=\(completion.stopReason ?? "nil") text=\(completion.text.count) tools=\(completion.toolUses.count)"
+
+            if completion.needsToolExecution && round < maxToolRounds {
+                self.wireHistory.append(.assistant(blocks: completion.assistantBlocks))
+                self.statusLabel = L10n.text(
+                    lang,
+                    en: "Updating your Tally data…",
+                    vi: "Đang cập nhật dữ liệu Tally…",
+                    zh: "正在更新您的 Tally 数据…"
+                )
+
+                var toolResults: [(id: String, content: String, isError: Bool)] = []
+                var receipts: [AssistantActionReceipt] = []
+
+                for toolUse in completion.toolUses {
+                    let outcome = self.execute(toolUse: toolUse, settings: settings, store: store)
+                    toolResults.append((id: toolUse.id, content: outcome.toolOutput, isError: outcome.isError))
+                    receipts.append(contentsOf: outcome.receipts)
+                }
+
+                if !receipts.isEmpty,
+                   let idx = self.messages.firstIndex(where: { $0.id == assistantID }) {
+                    self.messages[idx].actions.append(contentsOf: receipts)
+                }
+
+                self.wireHistory.append(.toolResults(toolResults))
+                self.statusLabel = nil
+                continue
+            }
+
+            if !completion.text.isEmpty {
+                self.wireHistory.append(.assistant(completion.text))
+            } else if let idx = self.messages.firstIndex(where: { $0.id == assistantID }),
+                      self.messages[idx].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                      !self.messages[idx].actions.isEmpty {
+                let fallback = Self.spokenSummary(for: self.messages[idx].actions, language: lang)
+                self.messages[idx].text = fallback
+                self.wireHistory.append(.assistant(fallback))
+            }
+            break
+        }
+        return diagnostic
+    }
+
+    public func stop() {
+        didUserCancel = true
         activeTask?.cancel()
+        activeTask = nil
+        isStreaming = false
+        statusLabel = nil
+        if let last = messages.last, last.role == .assistant, last.text.isEmpty, last.actions.isEmpty {
+            messages.removeLast()
+        }
+        persistCurrentSession()
+    }
+
+    public func retryLast(settings: AppSettings, store: BudgetStore) {
+        guard !isStreaming else { return }
+        guard let lastUserIdx = messages.lastIndex(where: { $0.role == .user }) else { return }
+        let lastUserText = messages[lastUserIdx].text
+        messages.removeSubrange(lastUserIdx...)
+        if let wireIdx = wireHistory.lastIndex(where: { $0.role == .user && $0.blocks == nil }) {
+            wireHistory.removeSubrange(wireIdx...)
+        }
+        send(lastUserText, settings: settings, store: store)
+    }
+
+    /// Starts a fresh chat while preserving the current conversation in history.
+    public func startNewChat() {
+        persistCurrentSession()
+        didUserCancel = true
+        activeTask?.cancel()
+        activeTask = nil
         isStreaming = false
         statusLabel = nil
         errorMessage = nil
+        activeSessionID = nil
         messages.removeAll()
         wireHistory.removeAll()
+        saveHistoryToDisk()
+    }
+
+    public func clear() {
+        startNewChat()
+    }
+
+    public func selectSession(_ session: ChatSession) {
+        guard !isStreaming else { return }
+        persistCurrentSession()
+        errorMessage = nil
+        statusLabel = nil
+        activeSessionID = session.id
+        messages = session.messages
+        rebuildWireHistory(from: session.messages)
+        saveHistoryToDisk()
+    }
+
+    public func deleteSession(id: UUID) {
+        sessions.removeAll { $0.id == id }
+        if activeSessionID == id {
+            activeSessionID = nil
+            messages.removeAll()
+            wireHistory.removeAll()
+            errorMessage = nil
+        }
+        saveHistoryToDisk()
+    }
+
+    public func clearAllHistory() {
+        didUserCancel = true
+        activeTask?.cancel()
+        activeTask = nil
+        isStreaming = false
+        statusLabel = nil
+        errorMessage = nil
+        activeSessionID = nil
+        messages.removeAll()
+        wireHistory.removeAll()
+        sessions.removeAll()
+        saveHistoryToDisk()
+    }
+
+    // MARK: - Local History Persistence
+
+    private static var historyFileURL: URL? {
+        guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let dir = appSupport.appendingPathComponent("Tally", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("ask-tally-history.json")
+    }
+
+    private func loadHistoryFromDisk() {
+        guard let url = Self.historyFileURL,
+              let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode(PersistedChatHistory.self, from: data) else {
+            return
+        }
+        sessions = decoded.sessions.sorted { $0.updatedAt > $1.updatedAt }
+        if let activeID = decoded.activeSessionID,
+           let active = sessions.first(where: { $0.id == activeID }) {
+            activeSessionID = active.id
+            messages = active.messages
+            rebuildWireHistory(from: active.messages)
+        }
+    }
+
+    private func persistCurrentSession() {
+        guard persistEnabled else { return }
+        let cleaned = messages.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !$0.actions.isEmpty }
+        guard !cleaned.isEmpty else { return }
+
+        let sessionID = activeSessionID ?? UUID()
+        activeSessionID = sessionID
+
+        let firstUserText = cleaned.first(where: { $0.role == .user })?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Chat"
+        let title = String(firstUserText.prefix(56))
+        let updated = ChatSession(id: sessionID, title: title, updatedAt: Date(), messages: cleaned)
+
+        if let idx = sessions.firstIndex(where: { $0.id == sessionID }) {
+            sessions[idx] = updated
+        } else {
+            sessions.insert(updated, at: 0)
+        }
+        sessions.sort { $0.updatedAt > $1.updatedAt }
+        if sessions.count > 40 {
+            sessions = Array(sessions.prefix(40))
+        }
+        saveHistoryToDisk()
+    }
+
+    private func saveHistoryToDisk() {
+        guard persistEnabled, let url = Self.historyFileURL else { return }
+        let payload = PersistedChatHistory(activeSessionID: activeSessionID, sessions: sessions)
+        if let data = try? JSONEncoder().encode(payload) {
+            try? data.write(to: url, options: .atomic)
+        }
+    }
+
+    private func rebuildWireHistory(from entries: [ChatEntry]) {
+        wireHistory = entries.suffix(24).compactMap { entry in
+            let trimmed = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+            return entry.role == .user ? .user(trimmed) : .assistant(trimmed)
+        }
     }
 
     private func dropEmptyAssistant(id: UUID) {
@@ -165,6 +580,12 @@ public final class AssistantService {
            messages[idx].text.isEmpty,
            messages[idx].actions.isEmpty {
             messages.remove(at: idx)
+        }
+    }
+
+    private func popDanglingUserWireMessage() {
+        if let last = wireHistory.last, last.role == .user, last.blocks == nil {
+            wireHistory.removeLast()
         }
     }
 

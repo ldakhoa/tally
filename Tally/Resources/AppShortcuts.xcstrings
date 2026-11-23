@@ -1,0 +1,105 @@
+{
+  "sourceLanguage" : "en",
+  "strings" : {
+    "Tell ${applicationName}" : {
+      "localizations" : {
+        "en" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Tell ${applicationName}",
+              "Ask ${applicationName}",
+              "Log with ${applicationName}",
+              "Record in ${applicationName}"
+            ]
+          }
+        },
+        "vi" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Nói với ${applicationName}",
+              "Ghi vào ${applicationName}",
+              "Hỏi ${applicationName}",
+              "Nhắn ${applicationName}"
+            ]
+          }
+        },
+        "zh-Hans" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "告诉 ${applicationName}",
+              "用 ${applicationName} 记账",
+              "问问 ${applicationName}",
+              "记录到 ${applicationName}"
+            ]
+          }
+        }
+      }
+    },
+    "Log an expense in ${applicationName}" : {
+      "localizations" : {
+        "en" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Log an expense in ${applicationName}",
+              "Add spending to ${applicationName}"
+            ]
+          }
+        },
+        "vi" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Ghi chi tiêu vào ${applicationName}",
+              "Thêm khoản chi vào ${applicationName}"
+            ]
+          }
+        },
+        "zh-Hans" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "在 ${applicationName} 记一笔支出",
+              "添加支出到 ${applicationName}"
+            ]
+          }
+        }
+      }
+    },
+    "How much did I spend in ${applicationName}" : {
+      "localizations" : {
+        "en" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "How much did I spend in ${applicationName}",
+              "Check my budget in ${applicationName}"
+            ]
+          }
+        },
+        "vi" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "Hôm nay tôi tiêu bao nhiêu trong ${applicationName}",
+              "Kiểm tra ngân sách trong ${applicationName}"
+            ]
+          }
+        },
+        "zh-Hans" : {
+          "stringSet" : {
+            "state" : "translated",
+            "values" : [
+              "在 ${applicationName} 查今天花了多少",
+              "查看 ${applicationName} 的预算"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "version" : "1.0"
+}

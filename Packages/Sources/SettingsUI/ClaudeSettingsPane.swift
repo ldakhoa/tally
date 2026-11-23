@@ -19,6 +19,66 @@ struct ClaudeSettingsPane: View {
         let lang = settings.language
 
         Form {
+            // AI Provider selector (Auto / Apple Intelligence / Claude)
+            Section {
+                ForEach(AIProvider.allCases) { option in
+                    Button {
+                        settings.aiProvider = option
+                    } label: {
+                        HStack(alignment: .top, spacing: 12) {
+                            SettingsIconTile(
+                                symbol: providerSymbol(option),
+                                tint: settings.aiProvider == option ? .accent : nil,
+                                size: 32
+                            )
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(option.title(in: lang))
+                                    .font(.appBodyMedium)
+                                    .foregroundStyle(Color.textPrimary)
+                                Text(option.summary(in: lang))
+                                    .font(.appCaption)
+                                    .foregroundStyle(Color.textSecondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            Spacer(minLength: 8)
+                            if settings.aiProvider == option {
+                                CozyUIIcon(.checkmark, size: 16, color: Color.accent)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                    .buttonStyle(.themedPlain)
+                }
+            } header: {
+                formSectionHeader(L10n.text(lang, en: "AI Provider", vi: "Nhà cung cấp AI", zh: "AI 服务引擎"))
+            }
+
+            // Apple Intelligence (On-Device Foundation Models) status
+            if settings.aiProvider != .claude {
+                let appleStatus = settings.appleIntelligenceStatus
+                Section {
+                    HStack(alignment: .top, spacing: 12) {
+                        SettingsIconTile(
+                            symbol: appleStatus.isAvailable ? "apple.intelligence" : "exclamationmark.triangle.fill",
+                            tint: appleStatus.isAvailable ? .positive : .caution,
+                            size: 38
+                        )
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(appleStatus.headline(in: lang))
+                                .font(.appHeading)
+                            Text(appleStatus.detail(in: lang))
+                                .font(.appSecondary)
+                                .foregroundStyle(Color.textSecondary)
+                        }
+                    }
+                    .padding(.vertical, 4)
+                } header: {
+                    formSectionHeader(L10n.text(lang, en: "Apple Intelligence (On-Device)", vi: "Apple Intelligence (Trên máy)", zh: "Apple 智能（本地运行）"))
+                }
+            }
+
+            // Claude (Anthropic API) section
+            if settings.aiProvider != .appleIntelligence {
             // Connection status card (Onsite style)
             Section {
                 HStack(alignment: .top, spacing: 12) {
@@ -28,7 +88,7 @@ struct ClaudeSettingsPane: View {
                         Text(statusDetail(lang: lang))
                             .font(.appSecondary)
                             .foregroundStyle(isFailed ? Color.negative : Color.textSecondary)
-                        if settings.isAIReady {
+                        if settings.hasAPIKey {
                             Button {
                                 settings.checkConnection()
                             } label: {
@@ -48,6 +108,8 @@ struct ClaudeSettingsPane: View {
                     }
                 }
                 .padding(.vertical, 4)
+            } header: {
+                formSectionHeader("Claude (Anthropic API)")
             }
 
             // API key & Workspace ID
@@ -106,10 +168,10 @@ struct ClaudeSettingsPane: View {
 
                         if let url = URL(string: "https://platform.claude.com/settings/keys") {
                             Link(destination: url) {
-                                Label(
-                                    L10n.text(lang, en: "Create a key in Claude Console", vi: "Tạo API key trên Claude Console", zh: "在 Claude Console 创建密钥"),
-                                    systemImage: "arrow.up.right.square"
-                                )
+                                HStack(spacing: 6) {
+                                    CozyUIIcon(.trendUp, size: 14, color: Color.accent)
+                                    Text(L10n.text(lang, en: "Create a key in Claude Console", vi: "Tạo API key trên Claude Console", zh: "在 Claude Console 创建密钥"))
+                                }
                                 .font(.appSecondary)
                             }
                         }
@@ -181,28 +243,33 @@ struct ClaudeSettingsPane: View {
                             }
                             Spacer()
                             if settings.modelID == model.id {
-                                Image(systemName: "checkmark").foregroundStyle(Color.accent)
+                                CozyUIIcon(.checkmark, size: 16, color: Color.accent)
                             }
                         }
                     }
                     .buttonStyle(.themedPlain)
                 }
+            } header: {
+                formSectionHeader(L10n.text(lang, en: "Claude Model", vi: "Model Claude", zh: "Claude 模型"))
+            }
+            } // end if settings.aiProvider != .appleIntelligence
 
+            Section {
                 Toggle(isOn: $settings.autoParseWithAI) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.text(lang, en: "Use Claude for bank alert parsing", vi: "Dùng Claude đọc thông báo ngân hàng", zh: "使用 Claude 解析银行通知"))
-                        Text(L10n.text(lang, en: "Falls back to offline parser if unavailable.", vi: "Tự dùng bộ đọc nội bộ nếu không có mạng.", zh: "无网络时自动回退到本地解析。"))
+                        Text(L10n.text(lang, en: "Use AI for bank alert & Siri parsing", vi: "Dùng AI đọc thông báo ngân hàng & Siri", zh: "使用 AI 解析银行通知与 Siri"))
+                        Text(L10n.text(lang, en: "Falls back to offline parser if unavailable.", vi: "Tự dùng bộ đọc nội bộ nếu không khả dụng.", zh: "不可用时自动回退到本地解析。"))
                             .font(.appCaption)
                             .foregroundStyle(Color.textSecondary)
                     }
                 }
             } header: {
-                formSectionHeader(L10n.text(lang, en: "Model & Parsing", vi: "Model & Phân tích", zh: "模型与解析"))
+                formSectionHeader(L10n.text(lang, en: "Parsing & Siri", vi: "Phân tích & Siri", zh: "解析与 Siri"))
             }
         }
         .scrollContentBackground(.hidden)
         .pageBackground()
-        .navigationTitle("Claude AI")
+        .navigationTitle(L10n.text(lang, en: "AI Assistant", vi: "Trợ lý AI", zh: "AI 助手"))
         .onAppear {
             settings.refreshKeychain()
             workspaceDraft = settings.workspaceID
@@ -234,8 +301,16 @@ struct ClaudeSettingsPane: View {
         return false
     }
 
+    private func providerSymbol(_ provider: AIProvider) -> String {
+        switch provider {
+        case .auto: return "wand.and.stars"
+        case .appleIntelligence: return "apple.intelligence"
+        case .claude: return "sparkles"
+        }
+    }
+
     private var statusSymbol: String {
-        guard settings.isAIReady else { return "exclamationmark" }
+        guard settings.hasAPIKey else { return "exclamationmark" }
         switch settings.connectionStatus {
         case .connected: return "checkmark"
         case .failed: return "xmark"
@@ -244,7 +319,7 @@ struct ClaudeSettingsPane: View {
     }
 
     private var statusTint: Color? {
-        guard settings.isAIReady else { return .caution }
+        guard settings.hasAPIKey else { return .caution }
         switch settings.connectionStatus {
         case .connected: return .positive
         case .failed: return .negative
@@ -253,7 +328,7 @@ struct ClaudeSettingsPane: View {
     }
 
     private func statusHeadline(lang: AppLanguage) -> String {
-        guard settings.isAIReady else {
+        guard settings.hasAPIKey else {
             return L10n.text(lang, en: "Claude is not set up", vi: "Chưa kết nối Claude", zh: "尚未配置 Claude")
         }
         switch settings.connectionStatus {
@@ -265,7 +340,7 @@ struct ClaudeSettingsPane: View {
     }
 
     private func statusDetail(lang: AppLanguage) -> String {
-        guard settings.isAIReady else {
+        guard settings.hasAPIKey else {
             return L10n.text(lang, en: "Paste your Anthropic API key below to start.", vi: "Dán Anthropic API key bên dưới để bắt đầu.", zh: "在下方粘贴您的 Anthropic API 密钥即可开始。")
         }
         switch settings.connectionStatus {

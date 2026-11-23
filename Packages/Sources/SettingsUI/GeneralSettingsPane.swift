@@ -78,9 +78,7 @@ struct GeneralSettingsPane: View {
                             }
                             Spacer()
                             if isSelected {
-                                Image(systemName: "checkmark")
-                                    .font(.appControl)
-                                    .foregroundStyle(Color.accent)
+                                CozyUIIcon(.checkmark, size: 16, color: Color.accent)
                             }
                         }
                     }
@@ -88,6 +86,25 @@ struct GeneralSettingsPane: View {
                 }
             } header: {
                 formSectionHeader(L10n.text(lang, en: "Theme", vi: "Chủ đề giao diện", zh: "主题风格"))
+            }
+
+            Section {
+                Toggle(
+                    L10n.text(lang, en: "Sound effects", vi: "Âm thanh tương tác", zh: "交互音效"),
+                    isOn: $settings.soundEffectsEnabled
+                )
+                .onChange(of: settings.soundEffectsEnabled) { _, enabled in
+                    if enabled {
+                        CozySounds.play(.pop)
+                    }
+                }
+            } footer: {
+                formSectionFooter(L10n.text(
+                    lang,
+                    en: "Subtle pop & chime sounds when tapping tabs and buttons. Automatically muted when iPhone is on silent.",
+                    vi: "Âm thanh nhẹ kiểu pop khi chạm nút & chuyển tab. Tự động tắt khi iPhone bật chế độ im lặng.",
+                    zh: "点击按钮和切换标签时的轻柔提示音，iPhone 静音时自动关闭。"
+                ))
             }
         }
         .scrollContentBackground(.hidden)

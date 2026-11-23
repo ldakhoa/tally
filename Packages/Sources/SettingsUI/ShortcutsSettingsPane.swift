@@ -83,9 +83,7 @@ struct ShortcutsSettingsPane: View {
                                 .foregroundStyle(Color.textSecondary)
                         }
                         Spacer()
-                        Image(systemName: "chevron.right")
-                            .font(.caption)
-                            .foregroundStyle(Color.textSecondary)
+                        CozyUIIcon(.chevronRight, size: 14, color: Color.textSecondary)
                     }
                 }
                 .buttonStyle(.themedPlain)
@@ -194,10 +192,10 @@ struct ShortcutsSettingsPane: View {
                             Text(L10n.text(lang, en: "Testing…", vi: "Đang thử…", zh: "测试中…"))
                         }
                     } else {
-                        Label(
-                            L10n.text(lang, en: "Test parser on this text", vi: "Thử đọc đoạn tin nhắn này", zh: "测试解析此文本"),
-                            systemImage: "play.fill"
-                        )
+                        HStack(spacing: 6) {
+                            CozyUIIcon(.play, size: 14, color: Color.onInk)
+                            Text(L10n.text(lang, en: "Test parser on this text", vi: "Thử đọc đoạn tin nhắn này", zh: "测试解析此文本"))
+                        }
                     }
                 }
                 .pillButton(prominent: true)

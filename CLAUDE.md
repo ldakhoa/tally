@@ -1,15 +1,24 @@
 # Tally (iOS + Web)
 
-Personal & household budget tracker for iPhone and iPad (iOS 17+), styled with Onsite's design system and Avenir Next typography.
+Personal & household budget tracker for iPhone and iPad (iOS 17+), styled with the **Paws & Cream** cozy hand-drawn design system and **SF Pro Rounded** typography (see `docs/DESIGN_SYSTEM.md`).
 
 ## Where things are
 
 - `Tally/`: thin iOS app target (`App/` composition + `AppIntents/` for Apple Shortcuts + `Assets.xcassets`). File-system-synchronized (`PBXFileSystemSynchronizedRootGroup`): adding a file under `Tally/` adds it to the build automatically.
 - `Packages/`: local Swift package `Tally` holding all domain logic, design system, persistence, services, and feature screens in strict downward-only layers (see `docs/ARCHITECTURE.md`).
+- `Packages/Sources/DesignSystem/Resources/`: bundled hand-painted Japanese watercolor PNGs (`chibi_*`, `icon_*`, `cat_*`, `goal_*`, `settings_*`, `kpi_*`), loaded once via in-memory cache (`CozyWatercolorAsset`, with automatic SwiftUI vector fallback if a PNG asset is absent).
 - `tools/install-device`: Release build & install onto a paired iPhone/iPad (without uninstalling or losing data).
 - `dist/`: original Tally static web prototype (its JSON backups are 100% importable/exportable in the iOS app).
 
-## Rules
+## Design & Icon Rules (Hybrid Architecture)
+
+Read `docs/DESIGN_SYSTEM.md` before changing UI, colors, or icons:
+- **Hybrid Icon System (Performance + Craft):**
+  - **Hero sticker tiles (32–44pt):** Use cached `256×256` hand-painted Japanese watercolor PNGs in `Packages/Sources/DesignSystem/Resources/` (`cat_*.png` for all 11 categories, `goal_*.png` for all 6 goals, `settings_*.png` for main Settings rows, `icon_*.png` for Overview metric cards, `kpi_*.png` for Statistics KPI tiles like `kpi_leaf` & `kpi_flame`, `chibi_*.png` for couple avatars). Loaded once through an in-memory cache (`CozyWatercolorAsset`) so scrolling lists render a single GPU texture quad with zero disk I/O, and automatically falls back to the matching hand-drawn SwiftUI vector whenever a PNG asset is absent.
+  - **UI glyphs, dark-pill states & Tab Bar (12–28pt):** Use procedural SwiftUI vectors (`CozyUIIcon`, `CozyCategoryIcon(..., style: .tinted(...))`, `CozyGoalIcon(..., style: .tinted(...))`, `CozyTabIconView`) with warm cocoa ink (`#4E382F` / `#FAF0E6`) and round line caps/joins. Avoid raw system emojis or cold SF Symbols in primary UI.
+- **No pure black or cold shadows:** Use warm espresso/cocoa ink (`#3D2C26` / `#4E382F`) and warm brown-tinted shadows (`#6B4423`).
+
+## Engineering Rules
 
 - Keep domain logic in `TallyCore`, `ThemeTokens`, `ClaudeKit`, `BudgetKit`, or `SyncKit` with unit tests in `Packages/Tests/<Module>Tests/`.
 - Never import upward or sideways across feature module tiers.

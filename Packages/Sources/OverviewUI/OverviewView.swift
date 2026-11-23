@@ -40,7 +40,7 @@ public struct OverviewView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    // Header controls: Period switcher + Paste Alert + Add
+                    // Header controls: Period switcher + Paste Alert
                     PeriodHeaderBar {
                         PasteButton(payloadType: String.self) { items in
                             if let text = items.first, !text.isEmpty {
@@ -50,13 +50,6 @@ public struct OverviewView: View {
                         .labelStyle(.iconOnly)
                         .buttonBorderShape(.capsule)
                         .accessibilityLabel(L10n.text(lang, en: "Paste bank alert", vi: "Dán thông báo NH", zh: "粘贴银行通知"))
-
-                        Button {
-                            settings.isShowingQuickAdd = true
-                        } label: {
-                            Label(L10n.text(lang, en: "Add", vi: "Thêm", zh: "记一笔"), systemImage: "plus")
-                        }
-                        .pillButton(prominent: true)
                     }
 
                     MemberFilterBar()
@@ -207,9 +200,7 @@ public struct OverviewView: View {
                         Button {
                             withAnimation { store.confirmReviewed(id: tx.id) }
                         } label: {
-                            Image(systemName: "checkmark.circle.fill")
-                                .font(.title3)
-                                .foregroundStyle(Color.positive)
+                            CozyUIIcon(.checkmarkCircle, size: 22, color: Color.positive)
                         }
                         .buttonStyle(.themedPlain)
                         .accessibilityLabel(L10n.text(lang, en: "Confirm", vi: "Xác nhận", zh: "确认"))
@@ -237,13 +228,13 @@ public struct OverviewView: View {
     private func heroMoodNote(for mood: PetMood, lang: AppLanguage) -> String {
         switch mood {
         case .happy:
-            return L10n.text(lang, en: "Doing great together! Tap to pet us ✨", vi: "Hai vợ chồng tiết kiệm giỏi lắm! Chạm để cưng nè ✨", zh: "两人存钱超棒！点一点摸摸我们 ✨")
+            return L10n.text(lang, en: "Doing great together! Tap us for hearts ✨", vi: "Hai vợ chồng tiết kiệm giỏi lắm! Chạm thả tim nè ✨", zh: "两人存钱超棒！点一点比心 ✨")
         case .alert:
             return L10n.text(lang, en: "A little over budget, let's slow down 🥺", vi: "Hơi lố ngân sách xíu rồi nha 🥺", zh: "稍微超出预算啦，放慢脚步哦 🥺")
         case .sleepy:
             return L10n.text(lang, en: "Cozy & quiet... log your first treat 🐾", vi: "Êm ấm quá... ghi khoản đầu tiên đi nè 🐾", zh: "安安静静…来记下第一笔账吧 🐾")
         case .cozy:
-            return L10n.text(lang, en: "Tap puppy & kitty for good luck 🐾", vi: "Chạm cún & mèo lấy hên nhé 🐾", zh: "点点小狗和小猫沾沾好运 🐾")
+            return L10n.text(lang, en: "Tap us for good luck 💕", vi: "Chạm hai vợ chồng lấy hên nhé 💕", zh: "点点我们俩沾沾好运 💕")
         }
     }
 
@@ -264,8 +255,10 @@ public struct OverviewView: View {
             VStack(alignment: .leading, spacing: 14) {
                 HStack(alignment: .top, spacing: 12) {
                     VStack(alignment: .leading, spacing: 6) {
-                        HStack(spacing: 8) {
-                            CoupleAvatarsBadge(avatarSize: 26, showHeart: true)
+                        HStack(spacing: 6) {
+                            Image(systemName: "heart.fill")
+                                .font(.appCaption)
+                                .foregroundStyle(Color.accent)
                             Text(L10n.text(lang, en: "Net savings", vi: "Tiết kiệm ròng", zh: "净结余"))
                                 .font(.appControl)
                                 .foregroundStyle(Color.textSecondary)
@@ -291,8 +284,8 @@ public struct OverviewView: View {
 
                     Spacer(minLength: 4)
 
-                    CozyPetDuoView(mood: mood, petSize: 58)
-                        .padding(.top, -4)
+                    CozyCoupleDuoView(avatarSize: 56)
+                        .padding(.top, -2)
                 }
 
                 Text(heroMoodNote(for: mood, lang: lang))
@@ -408,7 +401,11 @@ public struct OverviewView: View {
     }
 
     private func metricTile(title: String, value: String, note: String, icon: CozyMetricIconKind, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button {
+            CozyHaptics.light()
+            CozySounds.play(.pop)
+            action()
+        } label: {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(spacing: 8) {
                     CozyMetricIcon(kind: icon, size: 36)
@@ -417,9 +414,7 @@ public struct OverviewView: View {
                         .foregroundStyle(Color.textSecondary)
                         .lineLimit(1)
                     Spacer(minLength: 2)
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(Color.textSecondary.opacity(0.55))
+                    CozyUIIcon(.chevronRight, size: 12, color: Color.textSecondary.opacity(0.55))
                 }
                 Text(value)
                     .font(.appMetric)
@@ -436,7 +431,7 @@ public struct OverviewView: View {
             .cardSurface(cornerRadius: 22)
             .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         }
-        .buttonStyle(.themedPlain)
+        .buttonStyle(.cozyCard)
     }
 
     // MARK: - Cash Flow Chart
@@ -527,7 +522,7 @@ public struct OverviewView: View {
                 }
                 Spacer()
                 Button(action: onSelectStatistics) {
-                    Image(systemName: "arrow.right")
+                    CozyUIIcon(.arrowRight, size: 15, color: Color.textPrimary)
                 }
                 .buttonStyle(IconButtonStyle(filled: true))
                 .accessibilityLabel(L10n.text(lang, en: "View statistics", vi: "Xem thống kê", zh: "查看统计"))
@@ -569,9 +564,8 @@ public struct OverviewView: View {
                                 store.activityCategoryFilter = item.category
                                 onSelectTransactions()
                             } label: {
-                                HStack(spacing: 6) {
-                                    Text(item.category.cuteEmoji)
-                                        .font(.system(size: 13))
+                                HStack(spacing: 7) {
+                                    CategoryBadge(category: item.category, size: 22)
                                     Text(item.category.title(in: lang))
                                         .font(.appCaption)
                                         .foregroundStyle(Color.textSecondary)
@@ -649,8 +643,7 @@ public struct OverviewView: View {
                             if idx > 0 { Divider().overlay(Color.hairline) }
                             VStack(alignment: .leading, spacing: 6) {
                                 HStack(spacing: 8) {
-                                    Text(goal.icon.cuteEmoji)
-                                        .font(.system(size: 16))
+                                    GoalBadge(icon: goal.icon, size: 26)
                                     Text(goal.name)
                                         .font(.appBodyMedium)
                                     Spacer()
