@@ -435,9 +435,10 @@ public struct CozyFloatingTabBar<ID: Hashable>: View {
             .background {
                 ZStack {
                     Capsule().fill(.ultraThinMaterial)
-                    Capsule().fill(barTint)
+                    Capsule()
+                        .fill(barTint)
+                        .shadow(color: Color(hex: 0x5A3F37, alpha: isDark ? 0.3 : 0.12), radius: 10, y: 4)
                 }
-                .shadow(color: Color(hex: 0x5A3F37, alpha: isDark ? 0.3 : 0.12), radius: 10, y: 4)
             }
             .overlay {
                 Capsule().strokeBorder(specularBorder, lineWidth: 1)
