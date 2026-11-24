@@ -19,6 +19,7 @@ public struct OverviewView: View {
 
     @State private var editingTransaction: TransactionRecord?
     @State private var viewportWidth: CGFloat = 0
+    @State private var hoveredWeekLabel: String?
 
     public init(
         onSelectTransactions: @escaping () -> Void = {},
@@ -481,11 +482,13 @@ public struct OverviewView: View {
 
             Chart {
                 ForEach(snapshot.weeklyCashFlow) { bin in
+                    let isDimmed = hoveredWeekLabel != nil && hoveredWeekLabel != bin.label
+
                     BarMark(
                         x: .value("Week", bin.label),
                         y: .value(incomeLabel, settings.currency.toMajor(bin.incomeMinor))
                     )
-                    .foregroundStyle(Color.positive.opacity(0.75))
+                    .foregroundStyle(Color.positive.opacity(isDimmed ? 0.28 : 0.75))
                     .cornerRadius(4)
                     .position(by: .value("Kind", incomeLabel))
 
@@ -493,11 +496,12 @@ public struct OverviewView: View {
                         x: .value("Week", bin.label),
                         y: .value(spendLabel, settings.currency.toMajor(bin.spendingMinor))
                     )
-                    .foregroundStyle(Color.ink)
+                    .foregroundStyle(Color.ink.opacity(isDimmed ? 0.36 : 1.0))
                     .cornerRadius(4)
                     .position(by: .value("Kind", spendLabel))
                 }
             }
+            .chartXSelection(value: $hoveredWeekLabel)
             .chartLegend(.hidden)
             .chartYAxis {
                 AxisMarks(position: .leading) { val in
@@ -518,8 +522,107 @@ public struct OverviewView: View {
                         .foregroundStyle(Color.textSecondary)
                 }
             }
-            .frame(height: 175)
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    if let selectedLabel = hoveredWeekLabel,
+                       let idx = snapshot.weeklyCashFlow.firstIndex(where: { $0.label == selectedLabel }),
+                       let plotAnchor = proxy.plotFrame {
+                        let bin = snapshot.weeklyCashFlow[idx]
+                        let plotRect = geo[plotAnchor]
+                        let fallbackX = (CGFloat(idx) + 0.5) / CGFloat(max(1, snapshot.weeklyCashFlow.count)) * plotRect.width
+                        let posX = proxy.position(forX: selectedLabel) ?? fallbackX
+                        let rawX = plotRect.minX + posX
+                        let halfW: CGFloat = 78
+                        let clampedX = min(max(rawX, min(plotRect.midX, plotRect.minX + halfW)), max(plotRect.midX, plotRect.maxX - halfW))
+
+                        ZStack(alignment: .topLeading) {
+                            Path { path in
+                                path.move(to: CGPoint(x: rawX, y: plotRect.minY))
+                                path.addLine(to: CGPoint(x: rawX, y: plotRect.maxY))
+                            }
+                            .stroke(Color.accent.opacity(0.45), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+
+                            cashFlowTooltipCard(
+                                title: bin.label,
+                                incomeLabel: incomeLabel,
+                                incomeText: MoneyFormat.format(
+                                    minor: bin.incomeMinor,
+                                    currency: settings.currency,
+                                    language: lang,
+                                    signed: bin.incomeMinor > 0
+                                ),
+                                spendLabel: spendLabel,
+                                spendText: MoneyFormat.format(
+                                    minor: bin.spendingMinor,
+                                    currency: settings.currency,
+                                    language: lang
+                                )
+                            )
+                            .position(x: clampedX, y: plotRect.minY + 26)
+                        }
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+            .padding(.top, 10)
+            .frame(height: 185)
+            .onChange(of: hoveredWeekLabel) { _, newValue in
+                if newValue != nil {
+                    CozyHaptics.selection()
+                    CozySounds.play(.tick)
+                }
+            }
         }
+    }
+
+    private func cashFlowTooltipCard(
+        title: String,
+        incomeLabel: String,
+        incomeText: String,
+        spendLabel: String,
+        spendText: String
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.textSecondary)
+                .lineLimit(1)
+
+            HStack(spacing: 6) {
+                Circle().fill(Color.positive).frame(width: 6, height: 6)
+                Text(incomeLabel)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.textSecondary)
+                Text(incomeText)
+                    .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.textPrimary)
+            }
+            .lineLimit(1)
+
+            HStack(spacing: 6) {
+                Circle().fill(Color.ink).frame(width: 6, height: 6)
+                Text(spendLabel)
+                    .font(.system(size: 11, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.textSecondary)
+                Text(spendText)
+                    .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(Color.textPrimary)
+            }
+            .lineLimit(1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            Color.cardBackground,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.hairlineStrong, lineWidth: 1)
+        )
+        .shadow(color: Color(hex: 0x6B4423, alpha: 0.12), radius: 6, y: 2)
     }
 
     private func legendDot(color: Color, label: String) -> some View {

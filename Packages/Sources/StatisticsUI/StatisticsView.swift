@@ -23,6 +23,8 @@ public struct StatisticsView: View {
     @State private var editingTransaction: TransactionRecord?
     @State private var activeKPISheet: KPIInspectSheet?
     @State private var viewportWidth: CGFloat = 0
+    @State private var hoveredTrendMonth: String?
+    @State private var hoveredDayIndex: Int?
 
     public init(onSelectTransactions: @escaping () -> Void = {}) {
         self.onSelectTransactions = onSelectTransactions
@@ -337,11 +339,13 @@ public struct StatisticsView: View {
             Chart {
                 ForEach(stats.monthlyTrend) { point in
                     let label = DateKey.formatShortMonth(point.monthKey, language: lang)
+                    let isDimmed = hoveredTrendMonth != nil && hoveredTrendMonth != label
+
                     BarMark(
                         x: .value("Month", label),
                         y: .value(incomeLabel, settings.currency.toMajor(point.incomeMinor))
                     )
-                    .foregroundStyle(Color.positive.opacity(0.75))
+                    .foregroundStyle(Color.positive.opacity(isDimmed ? 0.28 : 0.75))
                     .cornerRadius(4)
                     .position(by: .value("Kind", incomeLabel))
 
@@ -349,11 +353,12 @@ public struct StatisticsView: View {
                         x: .value("Month", label),
                         y: .value(spendLabel, settings.currency.toMajor(point.spendingMinor))
                     )
-                    .foregroundStyle(point.monthKey == stats.current.monthKey ? Color.accent : Color.ink)
+                    .foregroundStyle((point.monthKey == stats.current.monthKey ? Color.accent : Color.ink).opacity(isDimmed ? 0.36 : 1.0))
                     .cornerRadius(4)
                     .position(by: .value("Kind", spendLabel))
                 }
             }
+            .chartXSelection(value: $hoveredTrendMonth)
             .chartLegend(.hidden)
             .chartYAxis {
                 AxisMarks(position: .leading) { val in
@@ -379,7 +384,64 @@ public struct StatisticsView: View {
                         .foregroundStyle(Color.textSecondary)
                 }
             }
-            .frame(height: 180)
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    if let selectedLabel = hoveredTrendMonth,
+                       let idx = stats.monthlyTrend.firstIndex(where: { DateKey.formatShortMonth($0.monthKey, language: lang) == selectedLabel }),
+                       let plotAnchor = proxy.plotFrame {
+                        let point = stats.monthlyTrend[idx]
+                        let plotRect = geo[plotAnchor]
+                        let fallbackX = (CGFloat(idx) + 0.5) / CGFloat(max(1, stats.monthlyTrend.count)) * plotRect.width
+                        let posX = proxy.position(forX: selectedLabel) ?? fallbackX
+                        let rawX = plotRect.minX + posX
+                        let halfW: CGFloat = 78
+                        let clampedX = min(max(rawX, min(plotRect.midX, plotRect.minX + halfW)), max(plotRect.midX, plotRect.maxX - halfW))
+
+                        ZStack(alignment: .topLeading) {
+                            Path { path in
+                                path.move(to: CGPoint(x: rawX, y: plotRect.minY))
+                                path.addLine(to: CGPoint(x: rawX, y: plotRect.maxY))
+                            }
+                            .stroke(Color.accent.opacity(0.45), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+
+                            chartTooltipCard(
+                                title: DateKey.formatMonth(point.monthKey, language: lang),
+                                rows: [
+                                    (
+                                        label: incomeLabel,
+                                        value: MoneyFormat.format(
+                                            minor: point.incomeMinor,
+                                            currency: settings.currency,
+                                            language: lang,
+                                            signed: point.incomeMinor > 0
+                                        ),
+                                        color: .positive
+                                    ),
+                                    (
+                                        label: spendLabel,
+                                        value: MoneyFormat.format(
+                                            minor: point.spendingMinor,
+                                            currency: settings.currency,
+                                            language: lang
+                                        ),
+                                        color: .accent
+                                    )
+                                ]
+                            )
+                            .position(x: clampedX, y: plotRect.minY + 26)
+                        }
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+            .padding(.top, 10)
+            .frame(height: 190)
+            .onChange(of: hoveredTrendMonth) { _, newValue in
+                if newValue != nil {
+                    CozyHaptics.selection()
+                    CozySounds.play(.tick)
+                }
+            }
 
             // Quick month pills to jump into any month in the 6-month window
             ScrollView(.horizontal, showsIndicators: false) {
@@ -444,15 +506,17 @@ public struct StatisticsView: View {
 
             Chart {
                 ForEach(stats.dailySeries) { point in
+                    let isSelected = hoveredDayIndex == point.dayIndex
+                    let isDimmed = hoveredDayIndex != nil && !isSelected
+                    let baseColor = (isSelected || point.dayKey == stats.highestSpendDay?.dayKey)
+                        ? Color.accent
+                        : Color.ink.opacity(0.75)
+
                     BarMark(
                         x: .value("Day", point.dayIndex),
                         y: .value("Spend", settings.currency.toMajor(point.spendingMinor))
                     )
-                    .foregroundStyle(
-                        point.dayKey == stats.highestSpendDay?.dayKey
-                            ? Color.accent
-                            : Color.ink.opacity(0.75)
-                    )
+                    .foregroundStyle(baseColor.opacity(isDimmed ? 0.34 : 1.0))
                     .cornerRadius(3)
                 }
 
@@ -461,15 +525,18 @@ public struct StatisticsView: View {
                         .foregroundStyle(Color.accent.opacity(0.75))
                         .lineStyle(StrokeStyle(lineWidth: 1.25, dash: [4, 4]))
                         .annotation(position: .top, alignment: .trailing) {
-                            Text("\(avgLabel) \(MoneyFormat.format(minor: stats.averageDailySpendingMinor, currency: settings.currency, language: lang, compact: true))")
-                                .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(Color.accent)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Color.cardBackground.opacity(0.9), in: Capsule())
+                            if hoveredDayIndex == nil {
+                                Text("\(avgLabel) \(MoneyFormat.format(minor: stats.averageDailySpendingMinor, currency: settings.currency, language: lang, compact: true))")
+                                    .font(.system(size: 10, weight: .semibold))
+                                    .foregroundStyle(Color.accent)
+                                    .padding(.horizontal, 6)
+                                    .padding(.vertical, 2)
+                                    .background(Color.cardBackground.opacity(0.9), in: Capsule())
+                            }
                         }
                 }
             }
+            .chartXSelection(value: $hoveredDayIndex)
             .chartYAxis {
                 AxisMarks(position: .leading) { val in
                     AxisGridLine().foregroundStyle(Color.hairline)
@@ -499,8 +566,110 @@ public struct StatisticsView: View {
                     }
                 }
             }
-            .frame(height: 165)
+            .chartOverlay { proxy in
+                GeometryReader { geo in
+                    if let selectedIdx = hoveredDayIndex,
+                       let idx = stats.dailySeries.firstIndex(where: { $0.dayIndex == selectedIdx }),
+                       let plotAnchor = proxy.plotFrame {
+                        let selectedDay = stats.dailySeries[idx]
+                        let plotRect = geo[plotAnchor]
+                        let fallbackX = (CGFloat(idx) + 0.5) / CGFloat(max(1, stats.dailySeries.count)) * plotRect.width
+                        let posX = proxy.position(forX: selectedDay.dayIndex) ?? fallbackX
+                        let rawX = plotRect.minX + posX
+                        let halfW: CGFloat = 78
+                        let clampedX = min(max(rawX, min(plotRect.midX, plotRect.minX + halfW)), max(plotRect.midX, plotRect.maxX - halfW))
+                        let rows: [(label: String, value: String, color: Color)] = {
+                            var list: [(label: String, value: String, color: Color)] = [
+                                (
+                                    label: L10n.text(lang, en: "Spend", vi: "Chi", zh: "支出"),
+                                    value: MoneyFormat.format(
+                                        minor: selectedDay.spendingMinor,
+                                        currency: settings.currency,
+                                        language: lang
+                                    ),
+                                    color: .accent
+                                )
+                            ]
+                            if selectedDay.incomeMinor > 0 {
+                                list.append((
+                                    label: L10n.text(lang, en: "Income", vi: "Thu", zh: "收入"),
+                                    value: MoneyFormat.format(
+                                        minor: selectedDay.incomeMinor,
+                                        currency: settings.currency,
+                                        language: lang,
+                                        signed: true
+                                    ),
+                                    color: .positive
+                                ))
+                            }
+                            return list
+                        }()
+
+                        ZStack(alignment: .topLeading) {
+                            Path { path in
+                                path.move(to: CGPoint(x: rawX, y: plotRect.minY))
+                                path.addLine(to: CGPoint(x: rawX, y: plotRect.maxY))
+                            }
+                            .stroke(Color.accent.opacity(0.45), style: StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
+
+                            chartTooltipCard(
+                                title: DateKey.formatFullDay(selectedDay.dayKey, language: lang),
+                                rows: rows
+                            )
+                            .position(x: clampedX, y: plotRect.minY + 26)
+                        }
+                    }
+                }
+                .allowsHitTesting(false)
+            }
+            .padding(.top, 10)
+            .frame(height: 175)
+            .onChange(of: hoveredDayIndex) { _, newValue in
+                if newValue != nil {
+                    CozyHaptics.selection()
+                    CozySounds.play(.tick)
+                }
+            }
         }
+    }
+
+    private func chartTooltipCard(
+        title: String,
+        rows: [(label: String, value: String, color: Color)]
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.textSecondary)
+                .lineLimit(1)
+
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(row.color)
+                        .frame(width: 6, height: 6)
+                    Text(row.label)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.textSecondary)
+                    Text(row.value)
+                        .font(.system(size: 11.5, weight: .bold, design: .rounded))
+                        .monospacedDigit()
+                        .foregroundStyle(Color.textPrimary)
+                }
+                .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+        .background(
+            Color.cardBackground,
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.hairlineStrong, lineWidth: 1)
+        )
+        .shadow(color: Color(hex: 0x6B4423, alpha: 0.12), radius: 6, y: 2)
     }
 
     // MARK: - Category Breakdown
