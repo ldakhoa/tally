@@ -38,6 +38,11 @@ public final class BudgetStore {
     public private(set) var goals: [SavingsGoalRecord] = [] {
         didSet { _activeGoals = nil }
     }
+    /// Installment & loan plans (including tombstones). Plans never count as spending by
+    /// themselves; their due payments are materialized into `transactions`.
+    public private(set) var plans: [InstallmentPlanRecord] = [] {
+        didSet { _activePlans = nil }
+    }
 
     public var selectedPeriod: DatePeriod = .currentMonth() {
         didSet {
@@ -70,6 +75,8 @@ public final class BudgetStore {
     @ObservationIgnored private var _activeTransactions: [TransactionRecord]?
     @ObservationIgnored private var _activeBudgets: [BudgetLimitRecord]?
     @ObservationIgnored private var _activeGoals: [SavingsGoalRecord]?
+    @ObservationIgnored private var _activePlans: [InstallmentPlanRecord]?
+    @ObservationIgnored private var isMaterializingPlans = false
     @ObservationIgnored private var _pendingReviewTransactions: [TransactionRecord]?
     @ObservationIgnored private var _snapshot: MonthlySnapshot?
     @ObservationIgnored private var _monthlySnapshot: MonthlySnapshot?
@@ -105,14 +112,38 @@ public final class BudgetStore {
         reload()
     }
 
+    @ObservationIgnored private var lastReloadDayKey: String = ""
+
     public func reload() {
         let txDescriptor = FetchDescriptor<SDTransaction>(sortBy: [SortDescriptor(\.dayKey, order: .reverse)])
         let budgetDescriptor = FetchDescriptor<SDBudgetLimit>()
         let goalDescriptor = FetchDescriptor<SDSavingsGoal>(sortBy: [SortDescriptor(\.name)])
+        let planDescriptor = FetchDescriptor<SDInstallmentPlan>(sortBy: [SortDescriptor(\.firstPaymentDayKey)])
 
-        transactions = (try? context.fetch(txDescriptor).map(\.record)) ?? []
-        budgets = (try? context.fetch(budgetDescriptor).map(\.record)) ?? []
-        goals = (try? context.fetch(goalDescriptor).map(\.record)) ?? []
+        let newTransactions = (try? context.fetch(txDescriptor).map(\.record)) ?? []
+        let newBudgets = (try? context.fetch(budgetDescriptor).map(\.record)) ?? []
+        let newGoals = (try? context.fetch(goalDescriptor).map(\.record)) ?? []
+        let newPlans = (try? context.fetch(planDescriptor).map(\.record)) ?? []
+
+        // Only publish arrays that actually changed. Every assignment to an observed property
+        // invalidates all analytics caches and re-renders every live tab (Charts included), so
+        // no-op reloads (launch, scene activation, empty sync batches) used to cause a burst of
+        // main-thread work right while the user started scrolling. A day rollover still forces a
+        // refresh so "today" figures stay correct.
+        let todayKey = DateKey.dayKey(from: Date())
+        let dayChanged = todayKey != lastReloadDayKey
+        lastReloadDayKey = todayKey
+
+        if dayChanged || newTransactions != transactions { transactions = newTransactions }
+        if dayChanged || newBudgets != budgets { budgets = newBudgets }
+        if newGoals != goals { goals = newGoals }
+        if newPlans != plans { plans = newPlans }
+
+        // Launch, foreground (`TallyApp` reloads on scene activation) and day rollover: book any
+        // installment/loan payments that fell due since the last run.
+        if dayChanged && !isMaterializingPlans && !activePlans.isEmpty {
+            materializeDuePlanPayments(todayKey: todayKey)
+        }
     }
 
     public var activeTransactions: [TransactionRecord] {
@@ -136,6 +167,15 @@ public final class BudgetStore {
         if let cached = _activeGoals { return cached }
         let computed = goals.filter { !$0.isDeleted }
         _activeGoals = computed
+        return computed
+    }
+
+    /// Non-deleted plans (completed and settled ones included).
+    public var activePlans: [InstallmentPlanRecord] {
+        _ = plans
+        if let cached = _activePlans { return cached }
+        let computed = plans.filter { !$0.isDeleted }
+        _activePlans = computed
         return computed
     }
 
@@ -247,14 +287,27 @@ public final class BudgetStore {
     // MARK: - Transactions CRUD
 
     public func saveTransaction(_ record: TransactionRecord, notifyCloud: Bool = true) {
-        var stamped = record
-        stamped.updatedAt = Date()
+        // Explicit write (editor, assistant, capture): for a plan payment it becomes the latest
+        // user operation, which automatic schedule writes never override.
+        let stamped = Self.keepingPlanIdentity(record, stored: transactions.first { $0.id == record.id })
+            .recordingUserWrite(at: Date())
         upsertTransaction(stamped)
         try? context.save()
         reload()
         if notifyCloud {
             onLocalChanges?([ChangedSyncRecord(kind: .transaction, id: stamped.id)])
         }
+    }
+
+    /// Editors rebuild a transaction from its visible fields; a plan payment must keep its plan
+    /// identity and merge state, or it would stop being a payment and be booked again.
+    static func keepingPlanIdentity(_ record: TransactionRecord, stored: TransactionRecord?) -> TransactionRecord {
+        guard let stored, stored.isPlanPayment, record.planID == nil else { return record }
+        var kept = record
+        kept.planID = stored.planID
+        kept.planPaymentIndex = stored.planPaymentIndex
+        kept.paymentState = stored.paymentState
+        return kept
     }
 
     /// Saves an auto-captured transaction (Apple Pay, Bank Email, SMS, Paste) only if no
@@ -266,6 +319,9 @@ public final class BudgetStore {
         notifyCloud: Bool = true
     ) -> (saved: TransactionRecord, wasDuplicate: Bool) {
         if let match = TransactionDeduplicator.findDuplicate(for: record, in: transactions) {
+            // Same alert as a transaction the user deleted or converted into an installment
+            // plan: keep the tombstone, never resurrect the full amount.
+            if match.existing.isDeleted { return (match.existing, true) }
             let merged = TransactionDeduplicator.mergeMetadata(existing: match.existing, duplicate: record)
             if merged != match.existing {
                 saveTransaction(merged, notifyCloud: notifyCloud)
@@ -295,8 +351,7 @@ public final class BudgetStore {
             guard var dup = transactions.first(where: { $0.id == dupID && !$0.isDeleted }) else { continue }
             dup.isDeleted = true
             dup.needsReview = false
-            dup.updatedAt = now
-            upsertTransaction(dup)
+            upsertTransaction(dup.recordingUserWrite(at: now))
             changed.append(ChangedSyncRecord(kind: .transaction, id: dupID))
         }
 
@@ -358,8 +413,7 @@ public final class BudgetStore {
             if tx.memberID == me.id {
                 if tx.memberName != me.name {
                     tx.memberName = me.name
-                    tx.updatedAt = now
-                    upsertTransaction(tx)
+                    upsertTransaction(tx.recordingUserWrite(at: now))
                     changed.append(ChangedSyncRecord(kind: .transaction, id: tx.id))
                 }
             } else if tx.memberID == syntheticMeID
@@ -367,8 +421,7 @@ public final class BudgetStore {
                 mergedAwayIDs.insert(tx.memberID)
                 tx.memberID = me.id
                 tx.memberName = me.name
-                tx.updatedAt = now
-                upsertTransaction(tx)
+                upsertTransaction(tx.recordingUserWrite(at: now))
                 changed.append(ChangedSyncRecord(kind: .transaction, id: tx.id))
             }
         }
@@ -389,8 +442,8 @@ public final class BudgetStore {
         guard var existing = transactions.first(where: { $0.id == id }) else { return }
         existing.isDeleted = true
         existing.needsReview = false
-        existing.updatedAt = Date()
-        upsertTransaction(existing)
+        // An explicit deletion: for a plan payment it outranks automatic re-booking elsewhere.
+        upsertTransaction(existing.recordingUserWrite(at: Date()))
         try? context.save()
         reload()
         onLocalChanges?([ChangedSyncRecord(kind: .transaction, id: id)])
@@ -399,8 +452,7 @@ public final class BudgetStore {
     public func confirmReviewed(id: String) {
         guard var existing = transactions.first(where: { $0.id == id }) else { return }
         existing.needsReview = false
-        existing.updatedAt = Date()
-        upsertTransaction(existing)
+        upsertTransaction(existing.recordingUserWrite(at: Date()))
         try? context.save()
         reload()
         onLocalChanges?([ChangedSyncRecord(kind: .transaction, id: id)])
@@ -413,8 +465,7 @@ public final class BudgetStore {
         let now = Date()
         for var tx in pending {
             tx.needsReview = false
-            tx.updatedAt = now
-            upsertTransaction(tx)
+            upsertTransaction(tx.recordingUserWrite(at: now))
             changed.append(ChangedSyncRecord(kind: .transaction, id: tx.id))
         }
         try? context.save()
@@ -496,6 +547,216 @@ public final class BudgetStore {
         onLocalChanges?([ChangedSyncRecord(kind: .goal, id: id)])
     }
 
+    // MARK: - Installment & Loan Plans
+
+    /// Live (non-deleted) payment transactions of a plan, ordered by schedule index.
+    public func payments(forPlanID planID: String) -> [TransactionRecord] {
+        activeTransactions
+            .filter { $0.planID == planID && $0.planPaymentIndex != nil }
+            .sorted { ($0.planPaymentIndex ?? 0) < ($1.planPaymentIndex ?? 0) }
+    }
+
+    public func plan(id: String) -> InstallmentPlanRecord? {
+        plans.first { $0.id == id }
+    }
+
+    /// Creates or edits a plan. Editing rewrites the plan's already-materialized, non-deleted
+    /// payments to the new schedule (amount, day, name, category, member, note), withdraws
+    /// payments that no longer fall inside it (shortened schedule, early settlement) or are not
+    /// due yet as of `todayKey` (start moved later); then books any payments now due. Returns
+    /// `false` without saving when a live plan's terms are invalid (`hasValidTerms`).
+    @discardableResult
+    public func savePlan(
+        _ record: InstallmentPlanRecord,
+        todayKey: String = DateKey.dayKey(from: Date()),
+        notifyCloud: Bool = true
+    ) -> Bool {
+        guard record.isDeleted || record.hasValidTerms else { return false }
+        var stamped = record
+        stamped.updatedAt = Date()
+        upsertPlan(stamped)
+        var changed: [ChangedSyncRecord] = [ChangedSyncRecord(kind: .plan, id: stamped.id)]
+        changed += applyLedger(PlanPaymentLedger.reconcile(
+            plan: stamped,
+            payments: planPayments(planID: stamped.id),
+            todayKey: todayKey,
+            bookMissing: true
+        ))
+        try? context.save()
+        isMaterializingPlans = true
+        reload()
+        isMaterializingPlans = false
+        if notifyCloud {
+            onLocalChanges?(changed)
+        }
+        materializeDuePlanPayments(todayKey: todayKey, notifyCloud: notifyCloud)
+        return true
+    }
+
+    /// Settles a plan early on `dayKey`: payments due after it are tombstoned / never booked and
+    /// the plan reports as completed. Pass `nil` to undo a settlement.
+    public func settlePlan(id: String, on dayKey: String?, todayKey: String = DateKey.dayKey(from: Date())) {
+        guard var plan = plans.first(where: { $0.id == id && !$0.isDeleted }) else { return }
+        plan.settledDayKey = dayKey
+        savePlan(plan, todayKey: todayKey)
+    }
+
+    /// Deletes a plan. With `removePayments` its booked payments are deleted too (they stop
+    /// counting as spending); otherwise they stay as ordinary expenses. The choice and the
+    /// deletion day are stored on the plan so every device applies them to payments it booked
+    /// or receives later.
+    public func deletePlan(id: String, removePayments: Bool, todayKey: String = DateKey.dayKey(from: Date())) {
+        guard var existing = plans.first(where: { $0.id == id }) else { return }
+        let now = Date()
+        existing.isDeleted = true
+        existing.deletionRemovesPayments = removePayments
+        existing.deletedDayKey = todayKey
+        existing.updatedAt = now
+        upsertPlan(existing)
+        var changed: [ChangedSyncRecord] = [ChangedSyncRecord(kind: .plan, id: id)]
+        changed += applyLedger(PlanPaymentLedger.reconcile(
+            plan: existing,
+            payments: planPayments(planID: existing.id),
+            todayKey: todayKey,
+            bookMissing: false
+        ))
+        try? context.save()
+        reload()
+        onLocalChanges?(changed)
+    }
+
+    /// Turns an existing expense (e.g. a bank alert for the full instalment price) into a plan:
+    /// the plan takes its name, amount (as total), category and member, the original is
+    /// tombstoned (and marked with `planID`, so a re-delivered alert for it is recognized as a
+    /// duplicate), and payments due by today are booked.
+    ///
+    /// The plan id is derived from the transaction id (`convertedPlanID(sourceTransactionID:)`), so
+    /// converting the same expense on two devices yields one plan. When that plan already exists
+    /// and is live (e.g. another device's conversion arrived before the source's tombstone), no
+    /// second plan is created: the source is tombstoned into the existing plan, which is
+    /// returned. Only when it exists as deleted does a new conversion proceed, under the next
+    /// deterministic id (`conv-<id>-2`, `conv-<id>-3`, ...). Returns `nil` if the transaction is
+    /// missing, deleted, income, already a plan payment, or the inputs are invalid.
+    @discardableResult
+    public func convertTransactionToPlan(
+        transactionID: String,
+        months: Int,
+        firstPaymentDayKey: String,
+        kind: InstallmentKind = .installment,
+        currency: CurrencyCode,
+        todayKey: String = DateKey.dayKey(from: Date())
+    ) -> InstallmentPlanRecord? {
+        guard months >= 1,
+              DateKey.date(fromDayKey: firstPaymentDayKey) != nil,
+              var original = transactions.first(where: { $0.id == transactionID }),
+              !original.isDeleted,
+              original.type == .expense,
+              !original.isPlanPayment,
+              original.amountMinor > 0
+        else { return nil }
+
+        let now = Date()
+        let target = InstallmentPlanRecord.conversionTarget(
+            sourceTransactionID: original.id,
+            existingPlans: Dictionary(plans.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        )
+        original.isDeleted = true
+        original.needsReview = false
+        original.planPaymentIndex = nil
+
+        if case .existing(let live) = target {
+            // Another device already converted this expense: fold the source into that plan.
+            original.planID = live.id
+            upsertTransaction(original.recordingUserWrite(at: now))
+            try? context.save()
+            reload()
+            onLocalChanges?([ChangedSyncRecord(kind: .transaction, id: original.id)])
+            return live
+        }
+        guard case .new(let planID) = target else { return nil }
+        let plan = InstallmentPlanRecord(
+            id: planID,
+            name: original.name,
+            kind: kind,
+            totalMinor: original.amountMinor,
+            months: months,
+            firstPaymentDayKey: firstPaymentDayKey,
+            category: original.category,
+            memberID: original.memberID,
+            memberName: original.memberName,
+            note: original.note,
+            currency: currency,
+            sourceTransactionID: original.id,
+            createdAt: now,
+            updatedAt: now
+        )
+        guard plan.hasValidTerms else { return nil }
+        original.planID = plan.id
+
+        upsertPlan(plan)
+        upsertTransaction(original.recordingUserWrite(at: now))
+        try? context.save()
+        isMaterializingPlans = true
+        reload()
+        isMaterializingPlans = false
+        onLocalChanges?([
+            ChangedSyncRecord(kind: .plan, id: plan.id),
+            ChangedSyncRecord(kind: .transaction, id: original.id),
+        ])
+        materializeDuePlanPayments(todayKey: todayKey)
+        return plan
+    }
+
+    /// Aligns every active plan's payments with the plan (`PlanPaymentLedger.reconcile` with
+    /// `bookMissing`): books each owed payment due by `todayKey` that does not exist yet or was
+    /// withdrawn by the schedule, and rewrites payments derived from an older plan revision.
+    /// Payment ids are deterministic (`"<planID>#<index>"`), so devices converge on the same
+    /// records. A payment decided by a user operation (edited or deleted) is never touched. Idempotent; called on launch / foreground / day rollover
+    /// (`reload()`), after saving or converting a plan, after remote plans arrive and after a
+    /// backup import. Returns the number of payments booked.
+    @discardableResult
+    public func materializeDuePlanPayments(
+        todayKey: String = DateKey.dayKey(from: Date()),
+        notifyCloud: Bool = true
+    ) -> Int {
+        guard !isMaterializingPlans else { return 0 }
+        let candidates = activePlans
+        guard !candidates.isEmpty else { return 0 }
+        isMaterializingPlans = true
+        defer { isMaterializingPlans = false }
+
+        let paymentsByPlan = Dictionary(grouping: transactions.filter(\.isPlanPayment), by: { $0.planID ?? "" })
+        var changed: [ChangedSyncRecord] = []
+        for plan in candidates {
+            changed += applyLedger(PlanPaymentLedger.reconcile(
+                plan: plan,
+                payments: paymentsByPlan[plan.id] ?? [],
+                todayKey: todayKey,
+                bookMissing: true
+            ))
+        }
+        guard !changed.isEmpty else { return 0 }
+        try? context.save()
+        reload()
+        if notifyCloud {
+            onLocalChanges?(changed)
+        }
+        return changed.count
+    }
+
+    /// Payment transactions of `planID` in any state (live, withdrawn, deleted).
+    private func planPayments(planID: String) -> [TransactionRecord] {
+        transactions.filter { $0.planID == planID && $0.isPlanPayment }
+    }
+
+    /// Upserts ledger revisions (without saving) and returns them as sync changes.
+    private func applyLedger(_ revisions: [TransactionRecord]) -> [ChangedSyncRecord] {
+        revisions.map { tx in
+            upsertTransaction(tx)
+            return ChangedSyncRecord(kind: .transaction, id: tx.id)
+        }
+    }
+
     // MARK: - Sample Data & Backup
 
     public func loadSampleData(settings: AppSettings) {
@@ -530,7 +791,8 @@ public final class BudgetStore {
             currency: currency,
             transactions: transactions,
             budgets: budgets,
-            goals: goals
+            goals: goals,
+            plans: plans
         )
     }
 
@@ -550,19 +812,24 @@ public final class BudgetStore {
             upsertGoal(g)
             changed.append(ChangedSyncRecord(kind: .goal, id: g.id))
         }
+        for p in decoded.plans {
+            upsertPlan(p)
+            changed.append(ChangedSyncRecord(kind: .plan, id: p.id))
+        }
         try? context.save()
         reload()
         if let latest = decoded.transactions.map(\.monthKey).max() {
             selectedMonth = latest
         }
         onLocalChanges?(changed)
+        materializeDuePlanPayments()
     }
 
     public func resetAllLocalData() {
         let now = Date()
         var changed: [ChangedSyncRecord] = []
         for var tx in activeTransactions {
-            tx.isDeleted = true; tx.updatedAt = now; upsertTransaction(tx)
+            tx.isDeleted = true; upsertTransaction(tx.recordingUserWrite(at: now))
             changed.append(ChangedSyncRecord(kind: .transaction, id: tx.id))
         }
         for var b in activeBudgets {
@@ -573,6 +840,11 @@ public final class BudgetStore {
             g.isDeleted = true; g.updatedAt = now; upsertGoal(g)
             changed.append(ChangedSyncRecord(kind: .goal, id: g.id))
         }
+        // Plans too, otherwise their payments would be re-materialized right away.
+        for var p in activePlans {
+            p.isDeleted = true; p.updatedAt = now; upsertPlan(p)
+            changed.append(ChangedSyncRecord(kind: .plan, id: p.id))
+        }
         try? context.save()
         reload()
         onLocalChanges?(changed)
@@ -580,44 +852,128 @@ public final class BudgetStore {
 
     // MARK: - Cloud Merge (does not re-trigger outbound sync)
 
-    public func applyRemoteTransactions(_ incoming: [TransactionRecord]) {
+    /// Merges transactions from iCloud (`SyncMerge`). Plan payments that arrive for a plan this
+    /// device already knows are reconciled against the locally winning plan revision: one
+    /// derived from an older revision is rewritten or withdrawn and the revision is announced to
+    /// CloudSync. Payments for plans not seen yet are reconciled when the plan arrives
+    /// (`applyRemotePlans`).
+    public func applyRemoteTransactions(_ incoming: [TransactionRecord], todayKey: String = DateKey.dayKey(from: Date())) {
         guard !incoming.isEmpty else { return }
+        let localByID = Dictionary(transactions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var didChange = false
+        var touchedPayments: [String: [String: TransactionRecord]] = [:]
         for remote in incoming {
-            let local = transactions.first(where: { $0.id == remote.id })
+            let local = localByID[remote.id]
             let merged = SyncMerge.mergeTransaction(local: local, remote: remote)
+            guard merged != local else { continue }
             upsertTransaction(merged)
+            didChange = true
+            if merged.isPlanPayment, let planID = merged.planID {
+                touchedPayments[planID, default: [:]][merged.id] = merged
+            }
         }
+        guard didChange else { return }
         try? context.save()
+        isMaterializingPlans = true
         reload()
+        isMaterializingPlans = false
+
+        // Reconcile arriving payments against the locally winning plan revision: a payment
+        // derived from an older revision is rewritten or withdrawn (the result is a join, so a
+        // payment from the same or a newer revision is left alone and nothing ping-pongs).
+        var withdrawn: [ChangedSyncRecord] = []
+        for planID in touchedPayments.keys.sorted() {
+            guard let plan = plans.first(where: { $0.id == planID }) else { continue }
+            withdrawn += applyLedger(PlanPaymentLedger.reconcile(
+                plan: plan,
+                payments: touchedPayments[planID].map { Array($0.values) } ?? [],
+                todayKey: todayKey,
+                bookMissing: false
+            ))
+        }
+        if !withdrawn.isEmpty {
+            try? context.save()
+            reload()
+            onLocalChanges?(withdrawn)
+        }
         deduplicateExistingTransactions(notifyCloud: true)
     }
 
     public func applyRemoteBudgets(_ incoming: [BudgetLimitRecord]) {
         guard !incoming.isEmpty else { return }
+        let localByID = Dictionary(budgets.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var didChange = false
         for remote in incoming {
-            let local = budgets.first(where: { $0.id == remote.id })
+            let local = localByID[remote.id]
             let merged = SyncMerge.mergeBudget(local: local, remote: remote)
+            guard merged != local else { continue }
             upsertBudget(merged)
+            didChange = true
         }
+        guard didChange else { return }
         try? context.save()
         reload()
     }
 
     public func applyRemoteGoals(_ incoming: [SavingsGoalRecord]) {
         guard !incoming.isEmpty else { return }
+        let localByID = Dictionary(goals.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var didChange = false
         for remote in incoming {
-            let local = goals.first(where: { $0.id == remote.id })
+            let local = localByID[remote.id]
             let merged = SyncMerge.mergeGoal(local: local, remote: remote)
+            guard merged != local else { continue }
             upsertGoal(merged)
+            didChange = true
         }
+        guard didChange else { return }
         try? context.save()
         reload()
+    }
+
+    /// Merges plans from iCloud (LWW + tombstones), then books payments that are due. Plans
+    /// with invalid terms (e.g. corrupt or hostile payloads) are ignored. Payments this device
+    /// holds are aligned with the merged plan revision (`PlanPaymentLedger.reconcile`: rewritten,
+    /// withdrawn when outside the owed schedule or not yet due here, removed when the plan was
+    /// deleted with its payments; user-decided payments are left alone). Only those payment revisions and newly booked payments are announced to
+    /// CloudSync; the merged plans themselves are not echoed back, so there is no loop.
+    public func applyRemotePlans(_ incoming: [InstallmentPlanRecord], todayKey: String = DateKey.dayKey(from: Date())) {
+        let valid = incoming.filter { $0.isDeleted || $0.hasValidTerms }
+        guard !valid.isEmpty else { return }
+        let localByID = Dictionary(plans.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var changedPlans: [InstallmentPlanRecord] = []
+        for remote in valid {
+            let local = localByID[remote.id]
+            let merged = SyncMerge.mergePlan(local: local, remote: remote)
+            guard merged != local else { continue }
+            upsertPlan(merged)
+            changedPlans.append(merged)
+        }
+        guard !changedPlans.isEmpty else { return }
+        var changedPayments: [ChangedSyncRecord] = []
+        for plan in changedPlans {
+            changedPayments += applyLedger(PlanPaymentLedger.reconcile(
+                plan: plan,
+                payments: planPayments(planID: plan.id),
+                todayKey: todayKey,
+                bookMissing: false
+            ))
+        }
+        try? context.save()
+        isMaterializingPlans = true
+        reload()
+        isMaterializingPlans = false
+        if !changedPayments.isEmpty {
+            onLocalChanges?(changedPayments)
+        }
+        materializeDuePlanPayments(todayKey: todayKey, notifyCloud: true)
     }
 
     public var allChangedRecordsForFullUpload: [ChangedSyncRecord] {
         transactions.map { ChangedSyncRecord(kind: .transaction, id: $0.id) }
         + budgets.map { ChangedSyncRecord(kind: .budget, id: $0.id) }
         + goals.map { ChangedSyncRecord(kind: .goal, id: $0.id) }
+        + plans.map { ChangedSyncRecord(kind: .plan, id: $0.id) }
     }
 
     // MARK: - App Intents / Apple Shortcuts Ingestion
@@ -661,6 +1017,7 @@ public final class BudgetStore {
             let ctx = AppStore.container.mainContext
             let existing = (try? ctx.fetch(FetchDescriptor<SDTransaction>()).map(\.record)) ?? []
             if let match = TransactionDeduplicator.findDuplicate(for: record, in: existing) {
+                if match.existing.isDeleted { return match.existing }
                 let merged = TransactionDeduplicator.mergeMetadata(existing: match.existing, duplicate: record)
                 if merged != match.existing {
                     let targetID = merged.id
@@ -697,6 +1054,16 @@ public final class BudgetStore {
             existing.apply(record)
         } else {
             context.insert(SDBudgetLimit(from: record))
+        }
+    }
+
+    private func upsertPlan(_ record: InstallmentPlanRecord) {
+        let targetID = record.id
+        let predicate = #Predicate<SDInstallmentPlan> { $0.recordID == targetID }
+        if let existing = (try? context.fetch(FetchDescriptor(predicate: predicate)))?.first {
+            existing.apply(record)
+        } else {
+            context.insert(SDInstallmentPlan(from: record))
         }
     }
 

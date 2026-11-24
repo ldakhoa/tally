@@ -154,14 +154,17 @@ public struct StatisticsView: View {
             ? "\(L10n.text(lang, en: "Prev:", vi: "Kỳ trước:", zh: "上期：")) \(MoneyFormat.format(minor: stats.previousSpendingMinor, currency: currency, language: lang, compact: true))"
             : L10n.text(lang, en: "No prior data", vi: "Chưa có kỳ trước", zh: "暂无上期数据")
 
-        let savingsRateText = stats.current.savingsRatePercent.map { "\($0)%" } ?? "—"
-        let netNote = MoneyFormat.format(
+        let hidesNet = stats.isSalaryMasked(hidden: settings.hideSalary)
+        let savingsRateText = hidesNet
+            ? MoneyFormat.hiddenPlaceholder
+            : (stats.current.savingsRatePercent.map { "\($0)%" } ?? "—")
+        let netNote = MoneyFormat.masked(MoneyFormat.format(
             minor: stats.current.netSavingsMinor,
             currency: currency,
             language: lang,
             compact: compactVND,
             signed: true
-        )
+        ), hidden: hidesNet)
 
         return LazyVGrid(columns: columns, spacing: 12) {
             Button {
@@ -210,7 +213,7 @@ public struct StatisticsView: View {
                 statTileContent(
                     title: L10n.text(lang, en: "Savings rate", vi: "Tỷ lệ tiết kiệm", zh: "结余率"),
                     value: savingsRateText,
-                    valueColor: (stats.current.netSavingsMinor >= 0) ? .positive : .accent,
+                    valueColor: hidesNet ? .textPrimary : ((stats.current.netSavingsMinor >= 0) ? .positive : .accent),
                     note: netNote,
                     symbol: "leaf.fill",
                     tint: .positive,
@@ -292,11 +295,13 @@ public struct StatisticsView: View {
                 }
             }
             Text(value)
+                .salaryMaskAccessibility(value == MoneyFormat.hiddenPlaceholder, language: settings.language)
                 .font(.appMetric)
                 .foregroundStyle(valueColor)
                 .lineLimit(1)
                 .minimumScaleFactor(0.7)
             Text(note)
+                .salaryMaskAccessibility(note == MoneyFormat.hiddenPlaceholder, language: settings.language)
                 .font(.appCaption)
                 .foregroundStyle(Color.textSecondary)
                 .lineLimit(1)
@@ -331,31 +336,31 @@ public struct StatisticsView: View {
                 }
                 Spacer()
                 HStack(spacing: 10) {
-                    legendDot(color: Color.positive.opacity(0.75), label: incomeLabel)
+                    if stats.monthlyTrend.contains(where: { !$0.isSalaryMasked(hidden: settings.hideSalary) }) {
+                        legendDot(color: Color.positive.opacity(0.75), label: incomeLabel)
+                    }
                     legendDot(color: Color.ink, label: spendLabel)
                 }
             }
 
             Chart {
-                ForEach(stats.monthlyTrend) { point in
-                    let label = DateKey.formatShortMonth(point.monthKey, language: lang)
+                // While salary is hidden, the income bar of a month that includes salary is not part
+                // of the chart data at all (not just unlabeled), so the scale cannot reveal it.
+                ForEach(TrendChartBar.bars(for: stats.monthlyTrend, hideSalary: settings.hideSalary)) { bar in
+                    let label = DateKey.formatShortMonth(bar.monthKey, language: lang)
                     let isDimmed = hoveredTrendMonth != nil && hoveredTrendMonth != label
+                    let kindLabel = bar.kind == .income ? incomeLabel : spendLabel
+                    let color: Color = bar.kind == .income
+                        ? Color.positive.opacity(isDimmed ? 0.28 : 0.75)
+                        : (bar.monthKey == stats.current.monthKey ? Color.accent : Color.ink).opacity(isDimmed ? 0.36 : 1.0)
 
                     BarMark(
                         x: .value("Month", label),
-                        y: .value(incomeLabel, settings.currency.toMajor(point.incomeMinor))
+                        y: .value(kindLabel, settings.currency.toMajor(bar.amountMinor))
                     )
-                    .foregroundStyle(Color.positive.opacity(isDimmed ? 0.28 : 0.75))
+                    .foregroundStyle(color)
                     .cornerRadius(4)
-                    .position(by: .value("Kind", incomeLabel))
-
-                    BarMark(
-                        x: .value("Month", label),
-                        y: .value(spendLabel, settings.currency.toMajor(point.spendingMinor))
-                    )
-                    .foregroundStyle((point.monthKey == stats.current.monthKey ? Color.accent : Color.ink).opacity(isDimmed ? 0.36 : 1.0))
-                    .cornerRadius(4)
-                    .position(by: .value("Kind", spendLabel))
+                    .position(by: .value("Kind", kindLabel))
                 }
             }
             .chartXSelection(value: $hoveredTrendMonth)
@@ -406,7 +411,7 @@ public struct StatisticsView: View {
 
                             chartTooltipCard(
                                 title: DateKey.formatMonth(point.monthKey, language: lang),
-                                rows: [
+                                rows: (point.isSalaryMasked(hidden: settings.hideSalary) ? [] : [
                                     (
                                         label: incomeLabel,
                                         value: MoneyFormat.format(
@@ -415,8 +420,9 @@ public struct StatisticsView: View {
                                             language: lang,
                                             signed: point.incomeMinor > 0
                                         ),
-                                        color: .positive
-                                    ),
+                                        color: Color.positive
+                                    )
+                                ]) + [
                                     (
                                         label: spendLabel,
                                         value: MoneyFormat.format(
@@ -424,7 +430,7 @@ public struct StatisticsView: View {
                                             currency: settings.currency,
                                             language: lang
                                         ),
-                                        color: .accent
+                                        color: Color.accent
                                     )
                                 ]
                             )
@@ -590,7 +596,7 @@ public struct StatisticsView: View {
                                     color: .accent
                                 )
                             ]
-                            if selectedDay.incomeMinor > 0 {
+                            if selectedDay.incomeMinor > 0, !selectedDay.isSalaryMasked(hidden: settings.hideSalary) {
                                 list.append((
                                     label: L10n.text(lang, en: "Income", vi: "Thu", zh: "收入"),
                                     value: MoneyFormat.format(
@@ -652,6 +658,7 @@ public struct StatisticsView: View {
                         .font(.system(size: 11, weight: .medium, design: .rounded))
                         .foregroundStyle(Color.textSecondary)
                     Text(row.value)
+                        .salaryMaskAccessibility(row.value == MoneyFormat.hiddenPlaceholder, language: settings.language)
                         .font(.system(size: 11.5, weight: .bold, design: .rounded))
                         .monospacedDigit()
                         .foregroundStyle(Color.textPrimary)
@@ -677,6 +684,14 @@ public struct StatisticsView: View {
     private func categoryBreakdownCard(_ stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
         let items = breakdownKind == .expense ? stats.current.categoryBreakdown : stats.incomeBreakdown
         let totalMinor = breakdownKind == .expense ? stats.current.spendingMinor : stats.current.incomeMinor
+        // Income breakdown while salary is hidden: the salary row's amount is masked, and so is
+        // the total. Shares, the donut and the bars are all ratios of that total, so they would
+        // let salary be worked out from the visible non-salary rows; they are left out too.
+        let hidesTotal = breakdownKind == .income && stats.isSalaryMasked(hidden: settings.hideSalary)
+        let hidesShares = hidesTotal
+        func hidesAmount(_ item: CategorySpend) -> Bool {
+            breakdownKind == .income && item.isSalaryMasked(hidden: settings.hideSalary)
+        }
 
         return Card {
             HStack(alignment: .center) {
@@ -718,19 +733,26 @@ public struct StatisticsView: View {
             } else {
                 HStack(alignment: .center, spacing: 18) {
                     ZStack {
-                        Chart(items) { item in
-                            SectorMark(
-                                angle: .value("Amount", Double(item.spentMinor)),
-                                innerRadius: .ratio(0.64),
-                                angularInset: 1.5
-                            )
-                            .foregroundStyle(item.category.color)
-                            .cornerRadius(4)
+                        if hidesShares {
+                            Circle()
+                                .strokeBorder(Color.hairlineStrong, lineWidth: 14)
+                                .frame(width: 120, height: 120)
+                        } else {
+                            Chart(items) { item in
+                                SectorMark(
+                                    angle: .value("Amount", Double(item.spentMinor)),
+                                    innerRadius: .ratio(0.64),
+                                    angularInset: 1.5
+                                )
+                                .foregroundStyle(item.category.color)
+                                .cornerRadius(4)
+                            }
+                            .frame(width: 120, height: 120)
                         }
-                        .frame(width: 120, height: 120)
 
                         VStack(spacing: 1) {
-                            Text(MoneyFormat.format(minor: totalMinor, currency: settings.currency, language: lang, compact: true))
+                            Text(MoneyFormat.masked(MoneyFormat.format(minor: totalMinor, currency: settings.currency, language: lang, compact: true), hidden: hidesTotal))
+                                .salaryMaskAccessibility(hidesTotal, language: lang)
                                 .font(.appControl)
                                 .lineLimit(1)
                             Text(breakdownKind == .expense
@@ -750,9 +772,11 @@ public struct StatisticsView: View {
                                     .foregroundStyle(Color.textSecondary)
                                     .lineLimit(1)
                                 Spacer(minLength: 4)
-                                Text("\(Int((item.share * 100).rounded()))%")
-                                    .font(.appCaption.weight(.semibold))
-                                    .monospacedDigit()
+                                if !hidesShares {
+                                    Text("\(Int((item.share * 100).rounded()))%")
+                                        .font(.appCaption.weight(.semibold))
+                                        .monospacedDigit()
+                                }
                             }
                         }
                     }
@@ -775,19 +799,24 @@ public struct StatisticsView: View {
                                         Text(item.category.title(in: lang))
                                             .font(.appBodyMedium)
                                             .foregroundStyle(Color.textPrimary)
-                                        Text("\(Int((item.share * 100).rounded()))%")
-                                            .font(.appCaption)
-                                            .foregroundStyle(Color.textSecondary)
+                                        if !hidesShares {
+                                            Text("\(Int((item.share * 100).rounded()))%")
+                                                .font(.appCaption)
+                                                .foregroundStyle(Color.textSecondary)
+                                        }
                                     }
                                     Spacer()
-                                    Text(MoneyFormat.format(minor: item.spentMinor, currency: settings.currency, language: lang))
+                                    Text(MoneyFormat.masked(MoneyFormat.format(minor: item.spentMinor, currency: settings.currency, language: lang), hidden: hidesAmount(item)))
+                                        .salaryMaskAccessibility(hidesAmount(item), language: lang)
                                         .font(.appAmount)
                                         .foregroundStyle(breakdownKind == .income ? Color.positive : Color.textPrimary)
                                     Image(systemName: "chevron.right")
                                         .font(.system(size: 10, weight: .semibold))
                                         .foregroundStyle(Color.textSecondary.opacity(0.5))
                                 }
-                                TallyProgressBar(value: item.share, fill: item.category.color)
+                                if !hidesShares {
+                                    TallyProgressBar(value: item.share, fill: item.category.color)
+                                }
                             }
                             .contentShape(Rectangle())
                         }
@@ -1153,7 +1182,8 @@ public struct StatisticsView: View {
                                         .font(.appSecondary)
                                         .foregroundStyle(Color.textSecondary)
                                     Spacer()
-                                    Text(MoneyFormat.format(minor: stats.current.incomeMinor, currency: currency, language: lang, signed: true))
+                                    Text(MoneyFormat.masked(MoneyFormat.format(minor: stats.current.incomeMinor, currency: currency, language: lang, signed: true), hidden: stats.isSalaryMasked(hidden: settings.hideSalary)))
+                                        .salaryMaskAccessibility(stats.isSalaryMasked(hidden: settings.hideSalary), language: lang)
                                         .font(.appHeading)
                                         .foregroundStyle(Color.positive)
                                 }
@@ -1171,9 +1201,10 @@ public struct StatisticsView: View {
                                     Text(L10n.text(lang, en: "Net savings", vi: "Tiết kiệm ròng", zh: "净结余"))
                                         .font(.appBodyMedium)
                                     Spacer()
-                                    Text(MoneyFormat.format(minor: stats.current.netSavingsMinor, currency: currency, language: lang, signed: true))
+                                    Text(MoneyFormat.masked(MoneyFormat.format(minor: stats.current.netSavingsMinor, currency: currency, language: lang, signed: true), hidden: stats.isSalaryMasked(hidden: settings.hideSalary)))
+                                        .salaryMaskAccessibility(stats.isSalaryMasked(hidden: settings.hideSalary), language: lang)
                                         .font(.appMetric)
-                                        .foregroundStyle(stats.current.netSavingsMinor >= 0 ? Color.positive : Color.accent)
+                                        .foregroundStyle(stats.isSalaryMasked(hidden: settings.hideSalary) ? Color.textPrimary : (stats.current.netSavingsMinor >= 0 ? Color.positive : Color.accent))
                                 }
                             }
                         }

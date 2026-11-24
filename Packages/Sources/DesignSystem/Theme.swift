@@ -1,6 +1,7 @@
 import BudgetKit
 import Observation
 import SwiftUI
+import TallyCore
 import ThemeTokens
 
 private var current: ResolvedThemeTokens { ThemeRuntime.shared.tokens }
@@ -259,7 +260,18 @@ private struct TabBarVisibilityKey: EnvironmentKey {
     static let defaultValue: TabBarVisibility? = nil
 }
 
+private struct HideSalaryKey: EnvironmentKey {
+    static let defaultValue = false
+}
+
 extension EnvironmentValues {
+    /// When true, salary and aggregates that include salary are replaced by
+    /// `MoneyFormat.hiddenPlaceholder` (decide per value with `SalaryBearing.isSalaryMasked`).
+    public var hideSalary: Bool {
+        get { self[HideSalaryKey.self] }
+        set { self[HideSalaryKey.self] = newValue }
+    }
+
     public var tabBarBottomInset: CGFloat {
         get { self[TabBarBottomInsetKey.self] }
         set { self[TabBarBottomInsetKey.self] = newValue }
@@ -289,5 +301,17 @@ private struct DocumentColumnPadding: ViewModifier {
             .padding(.top, 16)
             .padding(.bottom, 16 + tabBarBottomInset)
         #endif
+    }
+}
+
+extension View {
+    /// Keeps VoiceOver from reading the "•••" mask as punctuation when salary is hidden.
+    @ViewBuilder
+    public func salaryMaskAccessibility(_ hidden: Bool, language: AppLanguage) -> some View {
+        if hidden {
+            accessibilityLabel(L10n.text(language, en: "Hidden", vi: "Đã ẩn", zh: "已隐藏"))
+        } else {
+            self
+        }
     }
 }

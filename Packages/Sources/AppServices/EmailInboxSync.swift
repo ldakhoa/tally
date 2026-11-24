@@ -74,7 +74,9 @@ public final class EmailInboxSync {
                 guard !alerts.isEmpty else { break }
 
                 lastPulledCount += alerts.count
-                let existingActiveIDs = Set(store.activeTransactions.map(\.id))
+                // Includes tombstones: an alert the user deleted (or converted into an
+                // installment plan) is skipped instead of being re-parsed and resurrected.
+                let knownRecordIDs = Set(store.transactions.map(\.id))
 
                 // Process in chunks of 4 concurrently for fast backfill parsing.
                 var ackIDs: [String] = []
@@ -87,7 +89,7 @@ public final class EmailInboxSync {
                         for alert in chunk {
                             let recordID = "email-\(alert.id)"
                             let emailDate = Self.parseISO8601(alert.receivedAt) ?? Date()
-                            if existingActiveIDs.contains(recordID) {
+                            if knownRecordIDs.contains(recordID) {
                                 group.addTask { (alert, emailDate, nil) }
                                 continue
                             }

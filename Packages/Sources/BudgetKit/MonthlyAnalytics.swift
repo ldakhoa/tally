@@ -1,17 +1,21 @@
 import Foundation
 import TallyCore
 
-public struct WeeklyCashFlowBin: Identifiable, Hashable, Sendable {
+public struct WeeklyCashFlowBin: Identifiable, Hashable, Sendable, SalaryBearing {
     public var id: Int
     public var label: String
     public var incomeMinor: Int64
     public var spendingMinor: Int64
+    /// `true` when this bin's income includes a salary transaction (its income figure is then
+    /// masked while salary is hidden).
+    public var includesSalary: Bool
 
-    public init(id: Int, label: String, incomeMinor: Int64, spendingMinor: Int64) {
+    public init(id: Int, label: String, incomeMinor: Int64, spendingMinor: Int64, includesSalary: Bool = false) {
         self.id = id
         self.label = label
         self.incomeMinor = incomeMinor
         self.spendingMinor = spendingMinor
+        self.includesSalary = includesSalary
     }
 }
 
@@ -28,24 +32,28 @@ public struct CategorySpend: Identifiable, Hashable, Sendable {
     }
 }
 
-public struct MemberSpend: Identifiable, Hashable, Sendable {
+public struct MemberSpend: Identifiable, Hashable, Sendable, SalaryBearing {
     public var id: String { memberID }
     public var memberID: String
     public var memberName: String
     public var spendingMinor: Int64
     public var incomeMinor: Int64
     public var count: Int
+    /// `true` when this member's income includes a salary transaction.
+    public var includesSalary: Bool = false
 }
 
-public struct DailyTransactionGroup: Identifiable, Hashable, Sendable {
+public struct DailyTransactionGroup: Identifiable, Hashable, Sendable, SalaryBearing {
     public var id: String { dayKey }
     public var dayKey: String
     public var transactions: [TransactionRecord]
     public var totalSpendingMinor: Int64
     public var totalIncomeMinor: Int64
+    /// `true` when this day's income total includes a salary transaction.
+    public var includesSalary: Bool = false
 }
 
-public struct MonthlySnapshot: Hashable, Sendable {
+public struct MonthlySnapshot: Hashable, Sendable, SalaryBearing {
     public var period: DatePeriod
     public var monthKey: String
     public var transactions: [TransactionRecord]
@@ -62,6 +70,9 @@ public struct MonthlySnapshot: Hashable, Sendable {
     public var categoryBreakdown: [CategorySpend]
     public var weeklyCashFlow: [WeeklyCashFlowBin]
     public var memberBreakdown: [MemberSpend]
+    /// `true` when the viewed period/scope contains at least one salary transaction. Income, net
+    /// savings and the savings rate are then masked while salary is hidden (see `SalaryPrivacy`).
+    public var includesSalary: Bool = false
 
     public var savingsRatePercent: Int? {
         guard incomeMinor > 0 else { return nil }
@@ -108,6 +119,7 @@ public struct MonthlySnapshot: Hashable, Sendable {
         var todaySpending: Int64 = 0
         var expenses: [CategoryID: Int64] = [:]
         var members: [String: MemberSpend] = [:]
+        var includesSalary = false
 
         var bins = makeCashFlowBins(for: period)
 
@@ -127,6 +139,11 @@ public struct MonthlySnapshot: Hashable, Sendable {
                 income += tx.amountMinor
                 bins[binIndex].incomeMinor += tx.amountMinor
                 m.incomeMinor += tx.amountMinor
+                if tx.includesSalary {
+                    includesSalary = true
+                    bins[binIndex].includesSalary = true
+                    m.includesSalary = true
+                }
             } else {
                 spending += tx.amountMinor
                 bins[binIndex].spendingMinor += tx.amountMinor
@@ -166,7 +183,8 @@ public struct MonthlySnapshot: Hashable, Sendable {
             expensesByCategory: expenses,
             categoryBreakdown: breakdown,
             weeklyCashFlow: bins,
-            memberBreakdown: members.values.sorted { $0.spendingMinor > $1.spendingMinor }
+            memberBreakdown: members.values.sorted { $0.spendingMinor > $1.spendingMinor },
+            includesSalary: includesSalary
         )
     }
 
@@ -237,7 +255,13 @@ public struct MonthlySnapshot: Hashable, Sendable {
             let items = (buckets[day] ?? []).sorted { $0.createdAt > $1.createdAt }
             let spent = items.filter { $0.type == .expense }.reduce(Int64(0)) { $0 + $1.amountMinor }
             let inc = items.filter { $0.type == .income }.reduce(Int64(0)) { $0 + $1.amountMinor }
-            return DailyTransactionGroup(dayKey: day, transactions: items, totalSpendingMinor: spent, totalIncomeMinor: inc)
+            return DailyTransactionGroup(
+                dayKey: day,
+                transactions: items,
+                totalSpendingMinor: spent,
+                totalIncomeMinor: inc,
+                includesSalary: SalaryPrivacy.containsSalary(items)
+            )
         }
     }
 }

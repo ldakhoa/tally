@@ -51,11 +51,20 @@ public enum TransactionDeduplicator {
         for incoming: TransactionRecord,
         in existing: [TransactionRecord]
     ) -> MatchResult? {
-        let active = existing.filter { !$0.isDeleted }
-
-        // 1. Exact ID match (e.g., same Gmail message ID or synced record).
-        if let exact = active.first(where: { $0.id == incoming.id }) {
+        // 1. Exact ID match (e.g., same Gmail message ID or synced record). Tombstones count too:
+        //    an alert the user deleted (or converted into an installment plan) must not come back
+        //    when the same email is delivered again. Callers check `existing.isDeleted`.
+        if let exact = existing.first(where: { $0.id == incoming.id && !$0.isDeleted })
+            ?? existing.first(where: { $0.id == incoming.id }) {
             return MatchResult(existing: exact, reason: .exactID)
+        }
+
+        // Candidates: live transactions except scheduled plan payments (those are generated
+        // from a plan, never captured), plus tombstoned expenses that were converted into a plan
+        // so a re-sent alert for the original purchase is recognized as already captured.
+        let active = existing.filter { tx in
+            if tx.isDeleted { return tx.isConvertedPlanSource }
+            return !tx.isPlanPayment
         }
 
         let incomingTokens = normalizedMerchantTokens(incoming.name)
@@ -133,6 +142,8 @@ public enum TransactionDeduplicator {
         var duplicateIDs: [String] = []
 
         for tx in sorted {
+            // Plan payments are generated, not captured: never sweep them or match against them.
+            if tx.isPlanPayment { continue }
             guard tx.source.isAutomatic else {
                 kept.append(tx)
                 continue

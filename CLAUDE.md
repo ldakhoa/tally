@@ -24,6 +24,7 @@ Read `docs/DESIGN_SYSTEM.md` before changing UI, colors, or icons:
 
 - Keep domain logic in `TallyCore`, `ThemeTokens`, `ClaudeKit`, `BudgetKit`, or `SyncKit` with unit tests in `Packages/Tests/<Module>Tests/`.
 - Never import upward or sideways across feature module tiers.
+- Do deterministically whatever can be deterministic, and use the LLM only where it is needed (and vice versa). In Ask Tally, calculations, totals, date maths, validation, fixed-rule ranking and permission/state flows live in code with unit tests and reach the model as context or tool results; the model handles understanding the request, reading images, judgement and wording. The same applies to how work is done here: prefer a script, test or build over asking a model to judge something that can be checked mechanically.
 - Keep the Anthropic API key only in Keychain (`KeychainStore`); never log it or sync it through CloudKit records.
 - Never call `CKSyncEngine.sendChanges` or `fetchChanges` directly inside engine delegate callbacks — always dispatch from a detached task.
 - Never uninstall from a physical device to reinstall: install over the existing app with `tools/install-device`.

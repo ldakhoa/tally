@@ -113,6 +113,14 @@ public enum CurrencyConverter {
 
 /// Formats integer-stored money values cleanly in English, Vietnamese, or Chinese.
 public enum MoneyFormat {
+    /// Shared mask shown in place of income-revealing amounts when "Hide income" is on.
+    public static let hiddenPlaceholder = "•••"
+
+    /// Returns the shared mask when `hidden` is true, otherwise `value`.
+    public static func masked(_ value: @autoclosure () -> String, hidden: Bool) -> String {
+        hidden ? hiddenPlaceholder : value()
+    }
+
     private static let formatterLock = NSLock()
     private nonisolated(unsafe) static var cachedFormatters: [CurrencyCode: NumberFormatter] = [:]
 

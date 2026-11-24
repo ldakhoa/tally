@@ -14,6 +14,34 @@ public struct TallyBackupDocument: Codable, Hashable, Sendable {
         public var source: String?
         public var memberID: String?
         public var memberName: String?
+        /// Native-app extensions (absent in Tally Web backups).
+        public var planID: String?
+        public var planPaymentIndex: Int?
+    }
+
+    /// Installment/loan plan (native-app extension; Tally Web backups have no `plans` key).
+    public struct BackupPlan: Codable, Hashable, Sendable {
+        public var id: String
+        public var name: String
+        public var kind: String
+        public var total: Int64
+        public var months: Int
+        public var firstPaymentDate: String
+        public var category: String
+        public var currency: String?
+        public var memberID: String?
+        public var memberName: String?
+        public var note: String?
+        public var monthlyPayment: Int64?
+        public var principal: Int64?
+        public var sourceTransactionID: String?
+        public var lender: String?
+        public var linkURL: String?
+        public var settledDate: String?
+        /// Leading payments already paid outside the plan (`InstallmentPlanRecord.alreadyPaidPaymentCount`).
+        public var alreadyPaidPayments: Int?
+        /// Payments the user deleted, so a restore does not book them again.
+        public var deletedPaymentIndexes: [Int]?
     }
 
     public struct BackupGoal: Codable, Hashable, Sendable {
@@ -29,19 +57,22 @@ public struct TallyBackupDocument: Codable, Hashable, Sendable {
     public var transactions: [BackupTransaction]
     public var budgets: [String: Int64]
     public var goals: [BackupGoal]
+    public var plans: [BackupPlan]?
 
     public init(
         version: Int = 1,
         currency: String,
         transactions: [BackupTransaction],
         budgets: [String: Int64],
-        goals: [BackupGoal]
+        goals: [BackupGoal],
+        plans: [BackupPlan]? = nil
     ) {
         self.version = version
         self.currency = currency
         self.transactions = transactions
         self.budgets = budgets
         self.goals = goals
+        self.plans = plans
     }
 }
 
@@ -62,7 +93,8 @@ public enum WebBackupCodec {
         currency: CurrencyCode,
         transactions: [TransactionRecord],
         budgets: [BudgetLimitRecord],
-        goals: [SavingsGoalRecord]
+        goals: [SavingsGoalRecord],
+        plans: [InstallmentPlanRecord] = []
     ) throws -> Data {
         let activeTx = transactions.filter { !$0.isDeleted }.map { tx in
             TallyBackupDocument.BackupTransaction(
@@ -75,7 +107,9 @@ public enum WebBackupCodec {
                 note: tx.note.isEmpty ? nil : tx.note,
                 source: tx.source == .manual ? nil : tx.source.rawValue,
                 memberID: tx.memberID,
-                memberName: tx.memberName.isEmpty ? nil : tx.memberName
+                memberName: tx.memberName.isEmpty ? nil : tx.memberName,
+                planID: tx.planID,
+                planPaymentIndex: tx.planPaymentIndex
             )
         }
         var budgetMap: [String: Int64] = [:]
@@ -91,12 +125,43 @@ public enum WebBackupCodec {
                 saved: g.savedMinor
             )
         }
+        // Indexes are kept regardless of the current schedule length, so a deletion survives
+        // shortening and later re-extending the term.
+        var userDeletedPayments: [String: Set<Int>] = [:]
+        for tx in transactions where tx.isUserDeletedPlanPayment {
+            guard let planID = tx.planID, let index = tx.planPaymentIndex else { continue }
+            userDeletedPayments[planID, default: []].insert(index)
+        }
+        let activePlans = plans.filter { !$0.isDeleted }.map { p in
+            TallyBackupDocument.BackupPlan(
+                id: p.id,
+                name: p.name,
+                kind: p.kind.rawValue,
+                total: p.totalMinor,
+                months: p.months,
+                firstPaymentDate: p.firstPaymentDayKey,
+                category: p.category.rawValue,
+                currency: p.currency.rawValue,
+                memberID: p.memberID,
+                memberName: p.memberName.isEmpty ? nil : p.memberName,
+                note: p.note.isEmpty ? nil : p.note,
+                monthlyPayment: p.monthlyPaymentMinor,
+                principal: p.principalMinor,
+                sourceTransactionID: p.sourceTransactionID,
+                lender: p.lender,
+                linkURL: p.linkURL,
+                settledDate: p.settledDayKey,
+                alreadyPaidPayments: p.alreadyPaidPaymentCount,
+                deletedPaymentIndexes: userDeletedPayments[p.id].map { $0.sorted() }
+            )
+        }
         let doc = TallyBackupDocument(
             version: 1,
             currency: currency.rawValue,
             transactions: activeTx,
             budgets: budgetMap,
-            goals: activeGoals
+            goals: activeGoals,
+            plans: activePlans.isEmpty ? nil : activePlans
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -107,7 +172,8 @@ public enum WebBackupCodec {
         currency: CurrencyCode,
         transactions: [TransactionRecord],
         budgets: [BudgetLimitRecord],
-        goals: [SavingsGoalRecord]
+        goals: [SavingsGoalRecord],
+        plans: [InstallmentPlanRecord]
     ) {
         let doc: TallyBackupDocument
         do {
@@ -119,7 +185,7 @@ public enum WebBackupCodec {
         guard let currency = CurrencyCode(rawValue: doc.currency) else { throw BackupError.unsupportedCurrency }
 
         let now = Date()
-        let transactions: [TransactionRecord] = doc.transactions.compactMap { item in
+        var transactions: [TransactionRecord] = doc.transactions.compactMap { item in
             guard let type = TransactionType(rawValue: item.type),
                   let category = CategoryID(rawValue: item.category),
                   DateKey.date(fromDayKey: item.date) != nil,
@@ -139,7 +205,9 @@ public enum WebBackupCodec {
                 memberID: item.memberID ?? HouseholdMember.defaultMeID,
                 memberName: item.memberName ?? "",
                 needsReview: false,
-                updatedAt: now
+                updatedAt: now,
+                planID: item.planID,
+                planPaymentIndex: item.planPaymentIndex
             )
         }
 
@@ -165,7 +233,62 @@ public enum WebBackupCodec {
             )
         }
 
-        return (currency, transactions, budgets, goals)
+        var plans: [InstallmentPlanRecord] = []
+        let liveIDs = Set(transactions.map(\.id))
+        for item in doc.plans ?? [] {
+            // Cheap bounds first so absurd values never reach schedule building.
+            guard let kind = InstallmentKind(rawValue: item.kind),
+                  let category = CategoryID(rawValue: item.category),
+                  DateKey.date(fromDayKey: item.firstPaymentDate) != nil,
+                  (1...InstallmentPlanRecord.maxMonths).contains(item.months),
+                  item.total > 0
+            else { continue }
+            let plan = InstallmentPlanRecord(
+                id: item.id,
+                name: item.name,
+                kind: kind,
+                totalMinor: item.total,
+                months: item.months,
+                firstPaymentDayKey: item.firstPaymentDate,
+                category: category,
+                memberID: item.memberID ?? HouseholdMember.defaultMeID,
+                memberName: item.memberName ?? "",
+                note: item.note ?? "",
+                currency: item.currency.flatMap(CurrencyCode.init(rawValue:)) ?? currency,
+                monthlyPaymentMinor: item.monthlyPayment,
+                principalMinor: item.principal,
+                sourceTransactionID: item.sourceTransactionID,
+                lender: item.lender,
+                linkURL: item.linkURL,
+                settledDayKey: item.settledDate.flatMap { DateKey.date(fromDayKey: $0) != nil ? $0 : nil },
+                alreadyPaidPaymentCount: item.alreadyPaidPayments.map { min(max(0, $0), item.months) },
+                createdAt: now,
+                updatedAt: now
+            )
+            guard plan.hasValidTerms else { continue }
+            plans.append(plan)
+            // Restore user-deleted payments as tombstones so they are not booked again, including
+            // indexes beyond the current (shortened) term.
+            let scheduleByIndex = Dictionary(plan.fullSchedule.map { ($0.index, $0) }, uniquingKeysWith: { first, _ in first })
+            for index in Set(item.deletedPaymentIndexes ?? []).sorted() {
+                guard let dayKey = plan.paymentDayKey(index: index) else { continue }
+                let payment = scheduleByIndex[index]
+                    ?? InstallmentPayment(planID: plan.id, index: index, dayKey: dayKey, amountMinor: 0)
+                guard !liveIDs.contains(payment.transactionID) else { continue }
+                var tomb = plan.paymentTransaction(for: payment)
+                tomb.isDeleted = true
+                transactions.append(tomb.recordingUserWrite(at: now))
+            }
+        }
+        // Live plan payments: booked by their plan's schedule when they match it, otherwise
+        // explicit user writes (see `PlanPaymentLedger.importedPayment`).
+        let plansByID = Dictionary(plans.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        transactions = transactions.map { tx in
+            guard tx.isPlanPayment, tx.paymentState == nil, let planID = tx.planID else { return tx }
+            return PlanPaymentLedger.importedPayment(tx, plan: plansByID[planID])
+        }
+
+        return (currency, transactions, budgets, goals, plans)
     }
 }
 

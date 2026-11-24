@@ -67,6 +67,11 @@ struct TallyCommands: Commands {
             }
             .keyboardShortcut("5", modifiers: .command)
 
+            Button(L10n.text(lang, en: "Commitments", vi: "Khoản cam kết", zh: "分期与贷款")) {
+                router.goToCommitments()
+            }
+            .keyboardShortcut("6", modifiers: .command)
+
             Divider()
 
             Button(L10n.text(lang, en: "Previous Period", vi: "Kỳ trước", zh: "上一周期")) {

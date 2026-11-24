@@ -40,6 +40,15 @@ public final class CloudSync: CKSyncEngineDelegate {
     @ObservationIgnored private var sendKick: Task<Void, Never>?
     @ObservationIgnored private var accountObserver: NSObjectProtocol?
     @ObservationIgnored private var hasStarted = false
+    @ObservationIgnored private lazy var systemFields = CloudSystemFieldsStore(fileURL: systemFieldsURL)
+    @ObservationIgnored private var conflictGuard = ConflictRetryGuard()
+    @ObservationIgnored private var batchSizer = BatchSizer()
+    /// Records whose save conflicted without a usable server record: their cached fields were
+    /// dropped and they are queued again after the next fetch brings the server's version.
+    @ObservationIgnored private var repairAfterFetch: Set<CKRecord.ID> = []
+    /// `true` while `problem` holds a notice that a successful save must not clear (the zone was
+    /// recreated and the partner must be invited again). Cleared by Sync Now or a restart.
+    @ObservationIgnored private var keepsProblem = false
     private static var pendingShareMetadata: CKShare.Metadata?
 
     public init() {}
@@ -128,6 +137,7 @@ public final class CloudSync: CKSyncEngineDelegate {
                 }
                 try await engine.sendChanges()
                 lastSynced = Date()
+                keepsProblem = false
                 problem = nil
                 await refreshShareSummary()
             } catch {
@@ -306,14 +316,45 @@ public final class CloudSync: CKSyncEngineDelegate {
     }
 
     private func stopEngine(clearState: Bool) async {
+        let old = detachEngine(clearState: clearState)
+        await old?.cancelOperations()
+    }
+
+    /// Synchronously drops the current engine, so every later callback from it is ignored as
+    /// stale (see `handleEvent`). With `clearState`, its serialized state (including pending
+    /// changes) and the cached system fields are deleted too.
+    @discardableResult
+    private func detachEngine(clearState: Bool) -> CKSyncEngine? {
         sendKick?.cancel()
         sendKick = nil
         let old = engine
         engine = nil
-        await old?.cancelOperations()
+        repairAfterFetch = []
+        keepsProblem = false
+        conflictGuard.reset()
+        batchSizer = BatchSizer()
         if clearState {
+            activeZoneID = nil
             try? FileManager.default.removeItem(at: engineStateURL)
+            // Change tags belong to the old zone / account; never reuse them.
+            systemFields.removeAll()
         }
+        return old
+    }
+
+    /// Stops syncing after the zone was lost for a reason the user must decide on (purge,
+    /// encrypted-data reset, deletion by another device or the share's owner). Pending changes
+    /// and system fields are dropped, local data is kept, the iCloud toggle is turned off and
+    /// `problem` explains how to resume (turning sync back on re-uploads everything).
+    private func pauseSync(_ reason: CloudSyncPolicy.PauseReason) {
+        let old = detachEngine(clearState: true)
+        old?.state.remove(pendingRecordZoneChanges: old?.state.pendingRecordZoneChanges ?? [])
+        old?.state.remove(pendingDatabaseChanges: old?.state.pendingDatabaseChanges ?? [])
+        settings?.syncsWithICloud = false
+        phase = .off
+        isSyncing = false
+        problem = CloudSyncPolicy.message(for: reason, language: settings?.language ?? .english)
+        Task { await old?.cancelOperations() }
     }
 
     private func enqueueLocalChanges(_ changes: [ChangedSyncRecord], scheduleSend: Bool = true) {
@@ -340,9 +381,17 @@ public final class CloudSync: CKSyncEngineDelegate {
     // MARK: - CKSyncEngineDelegate
 
     nonisolated public func handleEvent(_ event: CKSyncEngine.Event, syncEngine: CKSyncEngine) async {
+        let engineID = ObjectIdentifier(syncEngine)
         await MainActor.run {
+            // Events from an engine that was replaced or stopped (zone switch, account change,
+            // paused sync) must not touch the current state, files or store.
+            guard self.isCurrentEngine(engineID) else { return }
             self.processEvent(event)
         }
+    }
+
+    private func isCurrentEngine(_ id: ObjectIdentifier) -> Bool {
+        engine.map(ObjectIdentifier.init) == id
     }
 
     private func processEvent(_ event: CKSyncEngine.Event) {
@@ -358,8 +407,15 @@ public final class CloudSync: CKSyncEngineDelegate {
             var txs: [TransactionRecord] = []
             var budgets: [BudgetLimitRecord] = []
             var goals: [SavingsGoalRecord] = []
+            var plans: [InstallmentPlanRecord] = []
+            let zone = activeZoneID
             for mod in changes.modifications {
                 let record = mod.record
+                // Only the zone this device currently syncs (never a previous household's).
+                guard CloudSyncPolicy.isInActiveZone(record.recordID, activeZoneID: zone) else { continue }
+                if SyncRecordKind(rawValue: record.recordType) != nil {
+                    systemFields.remember(record)
+                }
                 switch record.recordType {
                 case SyncRecordKind.transaction.rawValue:
                     if let tx = decodeTransaction(from: record) { txs.append(tx) }
@@ -367,6 +423,8 @@ public final class CloudSync: CKSyncEngineDelegate {
                     if let b = decodeBudget(from: record) { budgets.append(b) }
                 case SyncRecordKind.goal.rawValue:
                     if let g = decodeGoal(from: record) { goals.append(g) }
+                case SyncRecordKind.plan.rawValue:
+                    if let p = decodePlan(from: record) { plans.append(p) }
                 default:
                     break
                 }
@@ -374,45 +432,280 @@ public final class CloudSync: CKSyncEngineDelegate {
             store?.applyRemoteTransactions(txs)
             store?.applyRemoteBudgets(budgets)
             store?.applyRemoteGoals(goals)
-            lastSynced = Date()
-        case .sentRecordZoneChanges(let sent):
-            if !sent.savedRecords.isEmpty {
-                lastSynced = Date()
-                problem = nil
+            // Plans last: applying them materializes due payments, which needs the latest
+            // transaction tombstones from this batch so user-deleted payments stay deleted.
+            // Newly created payments are queued through `onLocalChanges` -> `sendSoon()`
+            // (detached task); the engine is never driven from inside this callback.
+            store?.applyRemotePlans(plans)
+            for deletion in changes.deletions where CloudSyncPolicy.isInActiveZone(deletion.recordID, activeZoneID: zone) {
+                systemFields.forget(deletion.recordID)
             }
-            for failed in sent.failedRecordSaves {
-                if failed.error.code == .serverRecordChanged, let serverRecord = failed.error.serverRecord {
-                    // Merge server version locally, then re-send if needed.
-                    if let tx = decodeTransaction(from: serverRecord) {
-                        store?.applyRemoteTransactions([tx])
-                    } else if let b = decodeBudget(from: serverRecord) {
-                        store?.applyRemoteBudgets([b])
-                    } else if let g = decodeGoal(from: serverRecord) {
-                        store?.applyRemoteGoals([g])
-                    }
-                    sendSoon()
+            systemFields.saveIfNeeded()
+            lastSynced = Date()
+        case .fetchedDatabaseChanges(let changes):
+            // Zone deletions follow Apple's per-reason contract (see `CloudSyncPolicy`), except
+            // that local budget data is never deleted: sync pauses and the user decides.
+            let isOwner = settings?.cloudZoneRole.isSharedParticipant != true
+            for deletion in changes.deletions {
+                let action = CloudSyncPolicy.actionForZoneDeletion(
+                    zoneID: deletion.zoneID,
+                    reason: deletion.reason,
+                    activeZoneID: activeZoneID,
+                    isOwner: isOwner
+                )
+                if case .pauseSync(let reason) = action {
+                    pauseSync(reason)
+                    return
                 }
             }
+        case .sentRecordZoneChanges(let sent):
+            let saved = sent.savedRecords.filter { CloudSyncPolicy.isInActiveZone($0.recordID, activeZoneID: activeZoneID) }
+            if !saved.isEmpty {
+                lastSynced = Date()
+                if !keepsProblem && !conflictGuard.isBackingOff { problem = nil }
+            }
+            for record in saved {
+                systemFields.remember(record)
+                conflictGuard.noteSaved(CloudRecordKey(record.recordID))
+            }
+            if !saved.isEmpty, !sent.failedRecordSaves.contains(where: { $0.error.code == .limitExceeded }) {
+                batchSizer.noteSuccess()
+            }
+            handleFailedSaves(sent.failedRecordSaves.filter { CloudSyncPolicy.isInActiveZone($0.record.recordID, activeZoneID: activeZoneID) })
+            systemFields.saveIfNeeded()
         case .willFetchChanges, .willSendChanges:
             isSyncing = true
-        case .didFetchChanges, .didSendChanges:
+        case .didFetchChanges:
+            isSyncing = false
+            requeueRepairedRecords()
+        case .didSendChanges:
             isSyncing = false
         default:
             break
         }
     }
 
+    /// Mirrors Apple's CKSyncEngine sample. The engine drops failed saves from its pending
+    /// changes, so anything that must still reach the server is re-added here (state edits only;
+    /// sending happens via `sendSoon()`'s detached task, never from inside this callback).
+    private func handleFailedSaves(_ failures: [CKSyncEngine.Event.SentRecordZoneChanges.FailedRecordSave]) {
+        guard !failures.isEmpty else { return }
+        var resave: [CKSyncEngine.PendingRecordZoneChange] = []
+        var databaseChanges: [CKSyncEngine.PendingDatabaseChange] = []
+        var conflicts: [CKRecord] = []
+        var needsFetch = false
+        let isOwner = settings?.cloudZoneRole.isSharedParticipant != true
+        for failed in failures {
+            let recordID = failed.record.recordID
+            switch failed.error.code {
+            case .serverRecordChanged:
+                guard let serverRecord = failed.error.serverRecord,
+                      serverRecord.recordID == recordID,
+                      serverRecord.recordType == failed.record.recordType
+                else {
+                    // No usable server record: drop our cached fields and let the next fetch
+                    // bring the server's version before saving again.
+                    systemFields.forget(recordID)
+                    if case .retryNow = conflictGuard.noteConflict(CloudRecordKey(recordID)) {
+                        repairAfterFetch.insert(recordID)
+                        needsFetch = true
+                    } else {
+                        problem = CloudSyncPolicy.conflictLoopMessage(language: settings?.language ?? .english)
+                    }
+                    continue
+                }
+                // The server's change tag is the one the next save must carry: store it
+                // unconditionally, merge its content with the usual rules, and send ours again
+                // only if the local revision won.
+                systemFields.replace(with: serverRecord)
+                conflicts.append(serverRecord)
+            case .unknownItem:
+                // The server no longer has the record: drop the stale tag and recreate it.
+                systemFields.forget(recordID)
+                resave.append(.saveRecord(recordID))
+            case .zoneNotFound, .userDeletedZone:
+                systemFields.forget(recordID)
+                let resetFlag = (failed.error.userInfo[CKErrorUserDidResetEncryptedDataKey] as? NSNumber)?.boolValue ?? false
+                let action = CloudSyncPolicy.actionForMissingZone(
+                    isOwner: isOwner,
+                    errorCode: failed.error.code,
+                    userDidResetEncryptedData: resetFlag,
+                    recordHadServerChangeTag: failed.record.recordChangeTag != nil
+                )
+                switch action {
+                case .pauseSync(let reason):
+                    pauseSync(reason)
+                    return
+                case .recreateZone:
+                    if databaseChanges.isEmpty {
+                        databaseChanges.append(.saveZone(CKRecordZone(zoneID: recordID.zoneID)))
+                        // A new zone has no share: a partner who had joined must be invited again.
+                        if activeShare != nil {
+                            activeShare = nil
+                            participantNames = []
+                            problem = CloudSyncPolicy.recreatedZoneMessage(language: settings?.language ?? .english)
+                            keepsProblem = true
+                        }
+                    }
+                    resave.append(.saveRecord(recordID))
+                case .ignore:
+                    break
+                }
+            case .limitExceeded:
+                // Too large a request: send smaller batches and retry this record.
+                batchSizer.noteLimitExceeded()
+                resave.append(.saveRecord(recordID))
+            case .batchRequestFailed:
+                // Failed only because another record in the batch did; retry as is.
+                resave.append(.saveRecord(recordID))
+            default:
+                // Network / throttling / auth errors are retried by CKSyncEngine itself.
+                break
+            }
+        }
+        var backOff: [(CKRecord.ID, TimeInterval)] = []
+        for recordID in mergeConflicts(conflicts) {
+            switch conflictGuard.noteConflict(CloudRecordKey(recordID)) {
+            case .retryNow:
+                resave.append(.saveRecord(recordID))
+            case .backOff(let delay):
+                backOff.append((recordID, delay))
+            }
+        }
+        if !backOff.isEmpty {
+            problem = CloudSyncPolicy.conflictLoopMessage(language: settings?.language ?? .english)
+            for (recordID, delay) in backOff { requeueLater(recordID, after: delay) }
+        }
+        if needsFetch { fetchSoon() }
+        guard let engine, !(resave.isEmpty && databaseChanges.isEmpty) else { return }
+        if !databaseChanges.isEmpty {
+            engine.state.add(pendingDatabaseChanges: databaseChanges)
+        }
+        if !resave.isEmpty {
+            engine.state.add(pendingRecordZoneChanges: resave)
+        }
+        sendSoon()
+    }
+
+    /// Re-queues `recordID` after `delay` from a detached task (never from inside a delegate
+    /// callback), unless the engine was replaced meanwhile.
+    private func requeueLater(_ recordID: CKRecord.ID, after delay: TimeInterval) {
+        guard let engine else { return }
+        let engineID = ObjectIdentifier(engine)
+        Task.detached { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self, self.isCurrentEngine(engineID), let engine = self.engine else { return }
+            engine.state.add(pendingRecordZoneChanges: [.saveRecord(recordID)])
+            self.sendSoon()
+        }
+    }
+
+    /// Fetches from a detached task (never from inside a delegate callback). Records waiting in
+    /// `repairAfterFetch` are queued again on `.didFetchChanges`.
+    private func fetchSoon() {
+        guard let engine else { return }
+        let engineID = ObjectIdentifier(engine)
+        Task.detached { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self, self.isCurrentEngine(engineID), let engine = self.engine else { return }
+            try? await engine.fetchChanges()
+        }
+    }
+
+    private func requeueRepairedRecords() {
+        guard let engine, !repairAfterFetch.isEmpty else { return }
+        let ids = repairAfterFetch.filter { CloudSyncPolicy.isInActiveZone($0, activeZoneID: activeZoneID) }
+        repairAfterFetch = []
+        guard !ids.isEmpty else { return }
+        engine.state.add(pendingRecordZoneChanges: ids.map { .saveRecord($0) })
+        sendSoon()
+    }
+
+    /// Applies conflicting server records locally (one store merge per record type, so the
+    /// one-off conflict wave after upgrading does not reload the store per record). Returns the
+    /// IDs whose local revision won the merge and must be saved again.
+    private func mergeConflicts(_ serverRecords: [CKRecord]) -> [CKRecord.ID] {
+        guard let store, !serverRecords.isEmpty else { return [] }
+        var resend: [CKRecord.ID] = []
+        var txs: [TransactionRecord] = []
+        var budgets: [BudgetLimitRecord] = []
+        var goals: [SavingsGoalRecord] = []
+        var plans: [InstallmentPlanRecord] = []
+
+        let localTx = Dictionary(store.transactions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let localBudgets = Dictionary(store.budgets.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let localGoals = Dictionary(store.goals.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let localPlans = Dictionary(store.plans.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+
+        for record in serverRecords {
+            switch record.recordType {
+            case SyncRecordKind.transaction.rawValue:
+                guard let server = decodeTransaction(from: record) else { continue }
+                if SyncMerge.resolveConflict(local: localTx[server.id], server: server, merge: SyncMerge.mergeTransaction).resendLocal {
+                    resend.append(record.recordID)
+                }
+                txs.append(server)
+            case SyncRecordKind.budget.rawValue:
+                guard let server = decodeBudget(from: record) else { continue }
+                if SyncMerge.resolveConflict(local: localBudgets[server.id], server: server, merge: SyncMerge.mergeBudget).resendLocal {
+                    resend.append(record.recordID)
+                }
+                budgets.append(server)
+            case SyncRecordKind.goal.rawValue:
+                guard let server = decodeGoal(from: record) else { continue }
+                if SyncMerge.resolveConflict(local: localGoals[server.id], server: server, merge: SyncMerge.mergeGoal).resendLocal {
+                    resend.append(record.recordID)
+                }
+                goals.append(server)
+            case SyncRecordKind.plan.rawValue:
+                guard let server = decodePlan(from: record) else { continue }
+                let local = localPlans[server.id]
+                // An invalid server plan is ignored by the store; keep our revision on the server.
+                guard server.isDeleted || server.hasValidTerms else {
+                    if local != nil { resend.append(record.recordID) }
+                    continue
+                }
+                if SyncMerge.resolveConflict(local: local, server: server, merge: SyncMerge.mergePlan).resendLocal {
+                    resend.append(record.recordID)
+                }
+                plans.append(server)
+            default:
+                continue
+            }
+        }
+        // Same order as fetched changes: plans last so their reconciliation sees the payments.
+        store.applyRemoteTransactions(txs)
+        store.applyRemoteBudgets(budgets)
+        store.applyRemoteGoals(goals)
+        store.applyRemotePlans(plans)
+        return resend
+    }
+
     nonisolated public func nextRecordZoneChangeBatch(
         _ context: CKSyncEngine.SendChangesContext,
         syncEngine: CKSyncEngine
     ) async -> CKSyncEngine.RecordZoneChangeBatch? {
-        let pending = syncEngine.state.pendingRecordZoneChanges
-        guard !pending.isEmpty else { return nil }
-        let batchChanges = Array(pending.prefix(100))
+        let engineID = ObjectIdentifier(syncEngine)
+        let (isCurrent, zoneID, limit) = await MainActor.run {
+            (self.isCurrentEngine(engineID), self.activeZoneID, self.batchSizer.limit)
+        }
+        guard isCurrent else { return nil }
+        // Only what this send was asked for (`context.options.scope`, as Apple's sample does),
+        // in the active zone, at most `limit` records (halved after `.limitExceeded`).
+        let batchChanges = CloudSyncPolicy.batch(
+            syncEngine.state.pendingRecordZoneChanges,
+            scope: context.options.scope,
+            activeZoneID: zoneID,
+            limit: limit
+        )
+        guard !batchChanges.isEmpty else { return nil }
         return await CKSyncEngine.RecordZoneChangeBatch(pendingChanges: batchChanges) { recordID in
-            await MainActor.run {
-                self.encodeRecord(for: recordID)
+            let record = await MainActor.run { self.encodeRecord(for: recordID) }
+            if record == nil {
+                // The local record no longer exists: drop the pending save (Apple's sample).
+                syncEngine.state.remove(pendingRecordZoneChanges: [.saveRecord(recordID)])
             }
+            return record
         }
     }
 
@@ -424,7 +717,7 @@ public final class CloudSync: CKSyncEngineDelegate {
         if name.hasPrefix("tx_") {
             let id = String(name.dropFirst(3))
             guard let tx = store.transactions.first(where: { $0.id == id }) else { return nil }
-            let record = CKRecord(recordType: SyncRecordKind.transaction.rawValue, recordID: recordID)
+            let record = systemFields.record(for: recordID, recordType: SyncRecordKind.transaction.rawValue)
             record["payload"] = (try? JSONEncoder().encode(tx)) as CKRecordValue?
             record["updatedAt"] = tx.updatedAt as CKRecordValue
             return record
@@ -432,7 +725,7 @@ public final class CloudSync: CKSyncEngineDelegate {
         if name.hasPrefix("bd_") {
             let suffix = String(name.dropFirst(3))
             guard let b = store.budgets.first(where: { SyncMerge.cloudRecordName(kind: .budget, id: $0.id) == name || $0.id == suffix }) else { return nil }
-            let record = CKRecord(recordType: SyncRecordKind.budget.rawValue, recordID: recordID)
+            let record = systemFields.record(for: recordID, recordType: SyncRecordKind.budget.rawValue)
             record["payload"] = (try? JSONEncoder().encode(b)) as CKRecordValue?
             record["updatedAt"] = b.updatedAt as CKRecordValue
             return record
@@ -440,12 +733,25 @@ public final class CloudSync: CKSyncEngineDelegate {
         if name.hasPrefix("gl_") {
             let id = String(name.dropFirst(3))
             guard let g = store.goals.first(where: { $0.id == id }) else { return nil }
-            let record = CKRecord(recordType: SyncRecordKind.goal.rawValue, recordID: recordID)
+            let record = systemFields.record(for: recordID, recordType: SyncRecordKind.goal.rawValue)
             record["payload"] = (try? JSONEncoder().encode(g)) as CKRecordValue?
             record["updatedAt"] = g.updatedAt as CKRecordValue
             return record
         }
+        if name.hasPrefix("pl_") {
+            let id = String(name.dropFirst(3))
+            guard let p = store.plans.first(where: { $0.id == id }) else { return nil }
+            let record = systemFields.record(for: recordID, recordType: SyncRecordKind.plan.rawValue)
+            record["payload"] = (try? JSONEncoder().encode(p)) as CKRecordValue?
+            record["updatedAt"] = p.updatedAt as CKRecordValue
+            return record
+        }
         return nil
+    }
+
+    private func decodePlan(from record: CKRecord) -> InstallmentPlanRecord? {
+        guard let data = record["payload"] as? Data else { return nil }
+        return try? JSONDecoder().decode(InstallmentPlanRecord.self, from: data)
     }
 
     private func decodeTransaction(from record: CKRecord) -> TransactionRecord? {
@@ -470,6 +776,10 @@ public final class CloudSync: CKSyncEngineDelegate {
             .appendingPathComponent("TallyCloud", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("EngineState.json")
+    }
+
+    private var systemFieldsURL: URL {
+        engineStateURL.deletingLastPathComponent().appendingPathComponent("SystemFields.plist")
     }
 
     private func loadEngineState() -> CKSyncEngine.State.Serialization? {

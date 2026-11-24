@@ -159,7 +159,10 @@ struct AutoLogTransactionIntent: AppIntent {
             source: detectedSource,
             rawSourceText: input
         )
-        let formatted = MoneyFormat.format(minor: saved.amountMinor, currency: settings.currency, language: settings.language)
+        let formatted = MoneyFormat.masked(
+            MoneyFormat.format(minor: saved.amountMinor, currency: settings.currency, language: settings.language),
+            hidden: saved.isSalaryMasked(hidden: settings.hideSalary)
+        )
         let msg = L10n.text(
             settings.language,
             en: "Logged \(saved.name): \(formatted) (\(saved.category.title(in: settings.language))).",
@@ -221,7 +224,10 @@ struct LogApplePayTransactionIntent: AppIntent {
             rawSourceText: rawLine
         )
 
-        let formatted = MoneyFormat.format(minor: saved.amountMinor, currency: settings.currency, language: settings.language)
+        let formatted = MoneyFormat.masked(
+            MoneyFormat.format(minor: saved.amountMinor, currency: settings.currency, language: settings.language),
+            hidden: saved.isSalaryMasked(hidden: settings.hideSalary)
+        )
         let msg = L10n.text(
             settings.language,
             en: "Logged \(formatted) at \(saved.name) (\(saved.category.title(in: settings.language))).",
@@ -287,7 +293,10 @@ struct LogTransactionFromTextIntent: AppIntent {
             rawSourceText: text
         )
 
-        let formatted = MoneyFormat.format(minor: saved.amountMinor, currency: settings.currency, language: settings.language)
+        let formatted = MoneyFormat.masked(
+            MoneyFormat.format(minor: saved.amountMinor, currency: settings.currency, language: settings.language),
+            hidden: saved.isSalaryMasked(hidden: settings.hideSalary)
+        )
         let msg = L10n.text(
             settings.language,
             en: "Saved \(saved.name): \(formatted) in \(saved.category.title(in: settings.language)).",
@@ -329,7 +338,10 @@ struct QuickLogExpenseIntent: AppIntent {
             note: note ?? "",
             source: .shortcut
         )
-        let formatted = MoneyFormat.format(minor: saved.amountMinor, currency: settings.currency, language: settings.language)
+        let formatted = MoneyFormat.masked(
+            MoneyFormat.format(minor: saved.amountMinor, currency: settings.currency, language: settings.language),
+            hidden: saved.isSalaryMasked(hidden: settings.hideSalary)
+        )
         let msg = L10n.text(
             settings.language,
             en: "Logged \(formatted) for \(saved.name).",

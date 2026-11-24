@@ -8,6 +8,8 @@ import TallyCore
 /// Displays daily spending & income directly inside each day cell by default (e.g. `-$20`, `+$100`)
 /// and supports selecting a single day, an inclusive date range, or a full calendar month.
 public struct HorizonPeriodCalendarView: View {
+    @Environment(\.hideSalary) private var hideSalary
+
     @Binding public var selection: DatePeriod
     public let language: AppLanguage
     public var currency: CurrencyCode
@@ -151,13 +153,14 @@ public struct HorizonPeriodCalendarView: View {
                     if let monthTotal, (monthTotal.spendingMinor > 0 || monthTotal.incomeMinor > 0) {
                         HStack(spacing: 8) {
                             if monthTotal.incomeMinor > 0 {
-                                Text(MoneyFormat.format(
+                                Text(MoneyFormat.masked(MoneyFormat.format(
                                     minor: monthTotal.incomeMinor,
                                     currency: currency,
                                     language: language,
                                     compact: true,
                                     signed: true
-                                ))
+                                ), hidden: monthTotal.isSalaryMasked(hidden: hideSalary)))
+                                .salaryMaskAccessibility(monthTotal.isSalaryMasked(hidden: hideSalary), language: language)
                                 .foregroundStyle(Color.positive)
                             }
                             if monthTotal.spendingMinor > 0 {
@@ -316,7 +319,7 @@ public struct HorizonPeriodCalendarView: View {
         guard let summary, summary.hasActivity else { return base }
         var parts = [base]
         if summary.incomeMinor > 0 {
-            parts.append(MoneyFormat.format(minor: summary.incomeMinor, currency: currency, language: language, signed: true))
+            parts.append(MoneyFormat.masked(MoneyFormat.format(minor: summary.incomeMinor, currency: currency, language: language, signed: true), hidden: summary.isSalaryMasked(hidden: hideSalary)))
         }
         if summary.spendingMinor > 0 {
             parts.append(MoneyFormat.format(minor: -summary.spendingMinor, currency: currency, language: language))
@@ -344,6 +347,8 @@ public struct HorizonPeriodCalendarView: View {
 
 /// Single-date vertical scrolling calendar for forms (e.g., Transaction Editor).
 public struct HorizonSingleDateCalendarView: View {
+    @Environment(\.hideSalary) private var hideSalary
+
     @Binding public var selectedDayKey: String
     public let language: AppLanguage
     public var currency: CurrencyCode
@@ -531,6 +536,8 @@ public struct HorizonSingleDateCalendarView: View {
 
 /// Compact inline month calendar card showing daily spending/income totals directly in every cell.
 public struct InlineMonthCalendarCard: View {
+    @Environment(\.hideSalary) private var hideSalary
+
     public let monthKey: String
     public let selectedDayKey: String?
     public let language: AppLanguage
@@ -572,13 +579,14 @@ public struct InlineMonthCalendarCard: View {
                         .font(.appHeading)
                     HStack(spacing: 8) {
                         if monthSummary.incomeMinor > 0 {
-                            Text(MoneyFormat.format(
+                            Text(MoneyFormat.masked(MoneyFormat.format(
                                 minor: monthSummary.incomeMinor,
                                 currency: currency,
                                 language: language,
                                 compact: true,
                                 signed: true
-                            ))
+                            ), hidden: monthSummary.isSalaryMasked(hidden: hideSalary)))
+                            .salaryMaskAccessibility(monthSummary.isSalaryMasked(hidden: hideSalary), language: language)
                             .foregroundStyle(Color.positive)
                         }
                         if monthSummary.spendingMinor > 0 {
@@ -682,6 +690,8 @@ public struct InlineMonthCalendarCard: View {
 // MARK: - Day Cell Money Badge
 
 private struct CalendarDayMoneyLabel: View {
+    @Environment(\.hideSalary) private var hideSalary
+
     let summary: DailyCalendarTotal?
     let hasFallbackActivity: Bool
     let currency: CurrencyCode
@@ -690,6 +700,7 @@ private struct CalendarDayMoneyLabel: View {
     var body: some View {
         let income = summary?.incomeMinor ?? 0
         let spending = summary?.spendingMinor ?? 0
+        let hidesIncome = summary?.isSalaryMasked(hidden: hideSalary) ?? false
 
         if income > 0 || spending > 0 {
             let hasBoth = income > 0 && spending > 0
@@ -697,12 +708,13 @@ private struct CalendarDayMoneyLabel: View {
 
             VStack(spacing: 0) {
                 if income > 0 {
-                    Text(MoneyFormat.formatCalendarAmount(
+                    Text(MoneyFormat.masked(MoneyFormat.formatCalendarAmount(
                         minor: income,
                         currency: currency,
                         language: language,
                         isIncome: true
-                    ))
+                    ), hidden: hidesIncome))
+                    .salaryMaskAccessibility(hidesIncome, language: language)
                     .font(.system(size: fontSize, weight: .semibold).monospacedDigit())
                     .foregroundStyle(Color.positive)
                     .lineLimit(1)

@@ -51,7 +51,18 @@ public enum CozyWatercolorAsset {
             lock.unlock()
             return nil
         }
-        let decoded = rawImage.preparingForDisplay() ?? rawImage
+        // Stickers/avatars render at <= 56pt (168px @3x). Downsample oversized sources (the chibi
+        // avatars are 512px) so the one-time decode is ~4x cheaper and the GPU samples a small texture.
+        let maxPixel: CGFloat = 192
+        let pixelSize = CGSize(width: rawImage.size.width * rawImage.scale, height: rawImage.size.height * rawImage.scale)
+        let decoded: UIImage
+        if max(pixelSize.width, pixelSize.height) > maxPixel {
+            let ratio = maxPixel / max(pixelSize.width, pixelSize.height)
+            let target = CGSize(width: (pixelSize.width * ratio).rounded(), height: (pixelSize.height * ratio).rounded())
+            decoded = rawImage.preparingThumbnail(of: target) ?? rawImage.preparingForDisplay() ?? rawImage
+        } else {
+            decoded = rawImage.preparingForDisplay() ?? rawImage
+        }
         cache.setObject(decoded, forKey: key)
         return Image(uiImage: decoded)
         #else
@@ -128,7 +139,13 @@ public struct ChibiAvatarView: View {
         .frame(width: size, height: size)
         .clipShape(Circle())
         .overlay(Circle().strokeBorder(borderColor, lineWidth: max(1.5, size * 0.06)))
-        .shadow(color: Color(hex: 0x6B4423, alpha: 0.14), radius: 3, y: 1.5)
+        // Shadow cast by a plain circle behind the avatar instead of by the clipped image itself:
+        // same look, but avoids an offscreen pass that rasterizes the image to build the shadow mask.
+        .background(
+            Circle()
+                .fill(borderColor)
+                .shadow(color: Color(hex: 0x6B4423, alpha: 0.14), radius: 3, y: 1.5)
+        )
         .accessibilityHidden(true)
     }
 }

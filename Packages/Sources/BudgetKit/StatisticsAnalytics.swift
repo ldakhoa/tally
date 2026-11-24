@@ -2,38 +2,66 @@ import Foundation
 import TallyCore
 
 /// Per-day spending and income summary used to render daily money amounts directly in calendar cells.
-public struct DailyCalendarTotal: Identifiable, Hashable, Sendable {
+public struct DailyCalendarTotal: Identifiable, Hashable, Sendable, SalaryBearing {
     public var id: String { dayKey }
     public var dayKey: String
     public var spendingMinor: Int64
     public var incomeMinor: Int64
     public var count: Int
+    /// `true` when `incomeMinor` includes a salary transaction (so it, and `netMinor`, are masked
+    /// while salary is hidden).
+    public var includesSalary: Bool
 
     public var netMinor: Int64 { incomeMinor - spendingMinor }
     public var hasActivity: Bool { count > 0 }
 
-    public init(dayKey: String, spendingMinor: Int64 = 0, incomeMinor: Int64 = 0, count: Int = 0) {
+    public init(dayKey: String, spendingMinor: Int64 = 0, incomeMinor: Int64 = 0, count: Int = 0, includesSalary: Bool = false) {
         self.dayKey = dayKey
         self.spendingMinor = spendingMinor
         self.incomeMinor = incomeMinor
         self.count = count
+        self.includesSalary = includesSalary
     }
 }
 
-public struct MonthlyTrendPoint: Identifiable, Hashable, Sendable {
+public struct MonthlyTrendPoint: Identifiable, Hashable, Sendable, SalaryBearing {
     public var id: String { monthKey }
     public var monthKey: String
     public var incomeMinor: Int64
     public var spendingMinor: Int64
     public var transactionCount: Int
+    /// `true` when this month's income includes a salary transaction (its income bar, and the
+    /// net derived from it, are then not plotted while salary is hidden).
+    public var includesSalary: Bool
 
     public var netMinor: Int64 { incomeMinor - spendingMinor }
 
-    public init(monthKey: String, incomeMinor: Int64, spendingMinor: Int64, transactionCount: Int) {
+    public init(monthKey: String, incomeMinor: Int64, spendingMinor: Int64, transactionCount: Int, includesSalary: Bool = false) {
         self.monthKey = monthKey
         self.incomeMinor = incomeMinor
         self.spendingMinor = spendingMinor
         self.transactionCount = transactionCount
+        self.includesSalary = includesSalary
+    }
+}
+
+/// One bar of the income vs. spending trend chart.
+public struct TrendChartBar: Identifiable, Hashable, Sendable {
+    public enum Kind: String, Hashable, Sendable { case income, spending }
+    public var monthKey: String
+    public var kind: Kind
+    public var amountMinor: Int64
+    public var id: String { "\(monthKey)/\(kind.rawValue)" }
+
+    /// Bars to plot. With `hideSalary`, a month whose income includes salary gets no income bar at
+    /// all, so neither its height nor the axis scale it would force can reveal the hidden amount.
+    /// Months without salary keep their income bar, and spending bars are always drawn.
+    public static func bars(for trend: [MonthlyTrendPoint], hideSalary: Bool) -> [TrendChartBar] {
+        trend.flatMap { point -> [TrendChartBar] in
+            let spending = TrendChartBar(monthKey: point.monthKey, kind: .spending, amountMinor: point.spendingMinor)
+            guard !point.isSalaryMasked(hidden: hideSalary) else { return [spending] }
+            return [TrendChartBar(monthKey: point.monthKey, kind: .income, amountMinor: point.incomeMinor), spending]
+        }
     }
 }
 
@@ -81,30 +109,34 @@ public struct WeekdaySpend: Identifiable, Hashable, Sendable {
     }
 }
 
-public struct DailySpendPoint: Identifiable, Hashable, Sendable {
+public struct DailySpendPoint: Identifiable, Hashable, Sendable, SalaryBearing {
     public var id: String { dayKey }
     public var dayKey: String
     public var dayIndex: Int
     public var spendingMinor: Int64
     public var incomeMinor: Int64
     public var cumulativeSpendingMinor: Int64
+    /// `true` when this day's income includes a salary transaction.
+    public var includesSalary: Bool
 
     public init(
         dayKey: String,
         dayIndex: Int,
         spendingMinor: Int64,
         incomeMinor: Int64,
-        cumulativeSpendingMinor: Int64
+        cumulativeSpendingMinor: Int64,
+        includesSalary: Bool = false
     ) {
         self.dayKey = dayKey
         self.dayIndex = dayIndex
         self.spendingMinor = spendingMinor
         self.incomeMinor = incomeMinor
         self.cumulativeSpendingMinor = cumulativeSpendingMinor
+        self.includesSalary = includesSalary
     }
 }
 
-public struct StatisticsSnapshot: Hashable, Sendable {
+public struct StatisticsSnapshot: Hashable, Sendable, SalaryBearing {
     public var period: DatePeriod
     public var current: MonthlySnapshot
     public var previousPeriod: DatePeriod
@@ -123,6 +155,15 @@ public struct StatisticsSnapshot: Hashable, Sendable {
     public var weekdayBreakdown: [WeekdaySpend]
     public var topMerchants: [MerchantSpend]
     public var incomeBreakdown: [CategorySpend]
+    /// `true` when the current period contains a salary transaction (see `MonthlySnapshot`).
+    public var includesSalary: Bool { current.includesSalary }
+    /// `true` when the previous period contains a salary transaction, which masks
+    /// `previousIncomeMinor` and `incomeChangePercent` (the change would reveal the ratio).
+    public var previousIncludesSalary: Bool
+
+    /// Income change vs. the previous period is derived from both periods' income, so it is masked
+    /// when either of them includes salary.
+    public var incomeChangeIncludesSalary: Bool { current.includesSalary || previousIncludesSalary }
 
     public static func compute(
         period: DatePeriod,
@@ -218,6 +259,7 @@ public struct StatisticsSnapshot: Hashable, Sendable {
                 }
             } else {
                 day.incomeMinor += tx.amountMinor
+                if tx.includesSalary { day.includesSalary = true }
                 incomeByCat[tx.category, default: 0] += tx.amountMinor
             }
             periodDayMap[tx.dayKey] = day
@@ -257,7 +299,8 @@ public struct StatisticsSnapshot: Hashable, Sendable {
                 dayIndex: offset + 1,
                 spendingMinor: spent,
                 incomeMinor: inc,
-                cumulativeSpendingMinor: cumulative
+                cumulativeSpendingMinor: cumulative,
+                includesSalary: day?.includesSalary ?? false
             )
         }
 
@@ -319,6 +362,7 @@ public struct StatisticsSnapshot: Hashable, Sendable {
         var monthIncome: [String: Int64] = [:]
         var monthSpending: [String: Int64] = [:]
         var monthTxCount: [String: Int] = [:]
+        var monthsWithSalary: Set<String> = []
 
         for tx in active {
             let mk = tx.monthKey
@@ -326,6 +370,7 @@ public struct StatisticsSnapshot: Hashable, Sendable {
             monthTxCount[mk, default: 0] += 1
             if tx.type == .income {
                 monthIncome[mk, default: 0] += tx.amountMinor
+                if tx.includesSalary { monthsWithSalary.insert(mk) }
             } else {
                 monthSpending[mk, default: 0] += tx.amountMinor
             }
@@ -336,7 +381,8 @@ public struct StatisticsSnapshot: Hashable, Sendable {
                 monthKey: mk,
                 incomeMinor: monthIncome[mk] ?? 0,
                 spendingMinor: monthSpending[mk] ?? 0,
-                transactionCount: monthTxCount[mk] ?? 0
+                transactionCount: monthTxCount[mk] ?? 0,
+                includesSalary: monthsWithSalary.contains(mk)
             )
         }
 
@@ -358,7 +404,8 @@ public struct StatisticsSnapshot: Hashable, Sendable {
             dailySeries: dailySeries,
             weekdayBreakdown: weekdayBreakdown,
             topMerchants: topMerchants,
-            incomeBreakdown: incomeBreakdown
+            incomeBreakdown: incomeBreakdown,
+            previousIncludesSalary: previous.includesSalary
         )
     }
 }
@@ -376,6 +423,7 @@ public extension MonthlySnapshot {
             day.count += 1
             if tx.type == .income {
                 day.incomeMinor += tx.amountMinor
+                if tx.includesSalary { day.includesSalary = true }
             } else {
                 day.spendingMinor += tx.amountMinor
             }
@@ -393,6 +441,7 @@ public extension MonthlySnapshot {
             month.spendingMinor += summary.spendingMinor
             month.incomeMinor += summary.incomeMinor
             month.count += summary.count
+            if summary.includesSalary { month.includesSalary = true }
             result[monthKey] = month
         }
         return result
@@ -408,6 +457,7 @@ public extension MonthlySnapshot {
             total.spendingMinor += day.spendingMinor
             total.incomeMinor += day.incomeMinor
             total.count += day.count
+            if day.includesSalary { total.includesSalary = true }
         }
         return total
     }

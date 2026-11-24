@@ -1,8 +1,8 @@
 // make-icon.swift
 //
 // Renders Tally's *Paws & Cream* kawaii Japanese storybook app icon:
-// Fluffy Golden Retriever puppy & chubby mochi Munchkin kitten snuggled cheek-to-cheek
-// over a luminous butter-gold coin & fresh matcha sprout on warm peach-cream watercolor paper.
+// A plump coral-peach Japanese kiss-lock coin pouch (gamaguchi) with a chubby
+// Golden Retriever puppy & Munchkin kitten peeking joyfully over the brass rim.
 //
 // Usage:
 //   swift tools/make-icon.swift [--out path/to/AppIcon.png]
@@ -31,7 +31,7 @@ func makeGradient(_ colors: [CGColor], _ locations: [CGFloat]? = nil) -> CGGradi
 
 func P(_ x: CGFloat, _ y: CGFloat) -> CGPoint { CGPoint(x: x, y: y) }
 
-// Delicate warm cocoa ink (lighter & softer than pure black, per docs/DESIGN_SYSTEM.md)
+// Warm cocoa ink (lighter & softer than pure black, per docs/DESIGN_SYSTEM.md)
 let inkCocoa = rgb(0x5A3E33)
 let inkDeep  = rgb(0x452D24)
 let stretchOpts: CGGradientDrawingOptions = [.drawsBeforeStartLocation, .drawsAfterEndLocation]
@@ -133,28 +133,22 @@ func drawSparkle(_ ctx: CGContext, at c: CGPoint, radius r: CGFloat, color: CGCo
     ctx.restoreGState()
 }
 
-/// Ultra-kawaii sparkling boba eyes with warm lower iris glow + twin catchlights!
 func drawBobaEyes(_ ctx: CGContext, lx: CGFloat, rx: CGFloat, y: CGFloat, rxEye: CGFloat, ryEye: CGFloat, irisGlowHex: UInt32) {
     for cx in [lx, rx] {
         let eyePath = ellipsePath(cx, y, rxEye, ryEye)
-        // Rich dark espresso base
         fillLinear(ctx, path: eyePath, colors: [rgb(0x3B231B), rgb(0x523327)], start: P(cx, y - ryEye), end: P(cx, y + ryEye))
-        // Soft warm glowing lower crescent inside eye (makes eyes feel alive & glossy!)
         ctx.saveGState()
         ctx.addPath(eyePath)
         ctx.clip()
         fillRadial(ctx, center: P(cx, y + ryEye * 0.62), radius: rxEye * 0.92, hex: irisGlowHex, alpha: 0.72)
         ctx.restoreGState()
-        // Big bright upper-left catchlight
         ctx.setFillColor(rgb(0xFFFFFF, 0.96))
         ctx.fillEllipse(in: CGRect(x: cx - rxEye * 0.52, y: y - ryEye * 0.56, width: rxEye * 0.64, height: ryEye * 0.56))
-        // Tiny dreamy lower-right sparkle dot
         ctx.setFillColor(rgb(0xFFFFFF, 0.88))
         ctx.fillEllipse(in: CGRect(x: cx + rxEye * 0.20, y: y + ryEye * 0.24, width: rxEye * 0.26, height: ryEye * 0.24))
     }
 }
 
-/// Soft rosy watercolor cheeks with delicate Japanese chibi blush marks (///) like chibi_wife.png
 func drawKawaiiBlush(_ ctx: CGContext, lx: CGFloat, rx: CGFloat, y: CGFloat, radius: CGFloat, hex: UInt32) {
     for cx in [lx, rx] {
         fillRadial(ctx, center: P(cx, y), radius: radius, hex: hex, alpha: 0.68)
@@ -177,21 +171,17 @@ func drawBackground(_ ctx: CGContext) {
     )
     ctx.saveGState()
     ctx.clip(to: canvas)
-    // Soft dreamy pastel watercolor blooms
     fillRadial(ctx, center: P(150, 150), radius: 520, hex: 0xFFD0C0, alpha: 0.44)
     fillRadial(ctx, center: P(880, 170), radius: 480, hex: 0xFFEAC2, alpha: 0.40)
     fillRadial(ctx, center: P(860, 880), radius: 560, hex: 0xCBEEDB, alpha: 0.42)
     fillRadial(ctx, center: P(150, 870), radius: 480, hex: 0xFFD5DF, alpha: 0.36)
-    // Luminous milk-white storybook halo behind the pets
-    fillRadial(ctx, center: P(512, 515), radius: 485, hex: 0xFFFFFF, alpha: 0.68)
+    fillRadial(ctx, center: P(512, 515), radius: 495, hex: 0xFFFFFF, alpha: 0.68)
 
-    // Subtle PawPrintBackdrop
     drawPawPrint(ctx, at: P(134, 148), size: 70, angleDeg: -22, alpha: 0.085)
     drawPawPrint(ctx, at: P(892, 162), size: 64, angleDeg: 24, alpha: 0.08)
     drawPawPrint(ctx, at: P(124, 864), size: 62, angleDeg: 18, alpha: 0.075)
     drawPawPrint(ctx, at: P(894, 848), size: 68, angleDeg: -18, alpha: 0.08)
 
-    // Soft watercolor speckles + cold-press paper grain
     var seed: UInt64 = 0x54414C4C593230
     func nextRand() -> CGFloat {
         seed = seed &* 6364136223846793005 &+ 1442695040888963407
@@ -214,7 +204,7 @@ func drawBackground(_ ctx: CGContext) {
     ctx.restoreGState()
 }
 
-// MARK: - Luminous Gold Coin & Matcha Sprout (inspired by icon_budget.png)
+// MARK: - Matcha Sprout & Mini Gold Coin
 
 func drawSprout(_ ctx: CGContext, base: CGPoint, scale s: CGFloat, lineW: CGFloat) {
     ctx.saveGState()
@@ -249,342 +239,409 @@ func drawSprout(_ ctx: CGContext, base: CGPoint, scale s: CGFloat, lineW: CGFloa
     ctx.restoreGState()
 }
 
-func drawGoldCoin(_ ctx: CGContext, center: CGPoint, radius r: CGFloat, lineW: CGFloat) {
+func drawCoinSproutCharm(_ ctx: CGContext, hinge: CGPoint, lineW: CGFloat) {
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -10), blur: 24, color: rgb(0x6B4423, 0.22))
-    ctx.beginTransparencyLayer(auxiliaryInfo: nil)
-    ctx.setShadow(offset: .zero, blur: 0, color: nil)
 
-    let outer = ellipsePath(center.x, center.y, r, r)
+    // Tiny brass jump ring attached to the right hinge of the gamaguchi frame
+    let ringCenter = P(hinge.x + 16, hinge.y + 22)
+    let ring = ellipsePath(ringCenter.x, ringCenter.y, 15, 15)
+    strokeCocoa(ctx, path: ring, width: 8.5, color: rgb(0xE8AE44))
+    strokeCocoa(ctx, path: ring, width: 4.0, color: rgb(0xFFF3B8))
+
+    // Cute matcha sprout tucked cleanly atop the dangling coin (angled slightly outward)
+    let coinCenter = P(hinge.x + 36, hinge.y + 102)
+    let r: CGFloat = 52
+    ctx.saveGState()
+    ctx.translateBy(x: coinCenter.x + 10, y: coinCenter.y - r + 6)
+    ctx.rotate(by: 18 * .pi / 180)
+    drawSprout(ctx, base: P(0, 0), scale: 0.46, lineW: 7.5)
+    ctx.restoreGState()
+
+    // Gleaming butter-gold coin charm
+    let outer = ellipsePath(coinCenter.x, coinCenter.y, r, r)
     fillLinear(ctx, path: outer,
                colors: [rgb(0xFFF4B8), rgb(0xFFDA68), rgb(0xF3AF42)],
-               start: P(center.x - r * 0.6, center.y - r),
-               end: P(center.x + r * 0.6, center.y + r),
+               start: P(coinCenter.x - r * 0.6, coinCenter.y - r),
+               end: P(coinCenter.x + r * 0.6, coinCenter.y + r),
                locations: [0.0, 0.55, 1.0])
+    let inner = ellipsePath(coinCenter.x, coinCenter.y, r * 0.72, r * 0.72)
+    strokeCocoa(ctx, path: inner, width: 4.5, color: rgb(0xC98524, 0.65))
 
+    // Tiny embossed heart inside coin charm
+    let miniHeart = heartPath(center: P(coinCenter.x, coinCenter.y + 2), size: 36)
+    fillLinear(ctx, path: miniHeart, colors: [rgb(0xFFA89C), rgb(0xE6705E)], start: P(coinCenter.x, coinCenter.y - 14), end: P(coinCenter.x, coinCenter.y + 18))
+    strokeCocoa(ctx, path: miniHeart, width: 4.0, color: rgb(0xA65224, 0.78))
+
+    strokeCocoa(ctx, path: outer, width: lineW * 0.85)
+
+    // Glossy jelly highlight
     ctx.saveGState()
-    ctx.addPath(outer)
-    ctx.clip()
-    let sheen = CGMutablePath()
-    sheen.move(to: P(center.x - r * 0.9, center.y - r * 0.15))
-    sheen.addLine(to: P(center.x + r * 0.15, center.y - r * 1.08))
-    sheen.addLine(to: P(center.x + r * 0.62, center.y - r * 0.78))
-    sheen.addLine(to: P(center.x - r * 0.42, center.y + r * 0.18))
-    sheen.closeSubpath()
-    ctx.addPath(sheen)
-    ctx.setFillColor(rgb(0xFFFFFF, 0.44))
-    ctx.fillPath()
-    fillRadial(ctx, center: P(center.x, center.y + r * 0.72), radius: r * 0.85, hex: 0xD97D1E, alpha: 0.26)
-    ctx.restoreGState()
-
-    // Inner coin rim
-    let inner = ellipsePath(center.x, center.y, r * 0.78, r * 0.78)
-    strokeCocoa(ctx, path: inner, width: lineW * 0.52, color: rgb(0xC98524, 0.65))
-
-    // Delicate embossed tally 5-mark (softer & cleaner)
-    let tally = CGMutablePath()
-    let span = r * 0.42
-    let topY = center.y - r * 0.27
-    let botY = center.y + r * 0.27
-    for i in 0..<4 {
-        let x = center.x - span * 0.75 + CGFloat(i) * (span * 0.5)
-        tally.move(to: P(x, topY))
-        tally.addLine(to: P(x, botY))
-    }
-    let slash = CGMutablePath()
-    slash.move(to: P(center.x - span * 0.96, botY - r * 0.05))
-    slash.addLine(to: P(center.x + span * 0.96, topY + r * 0.05))
-    strokeCocoa(ctx, path: tally, width: lineW * 0.92, color: rgb(0xB36E1E, 0.78))
-    strokeCocoa(ctx, path: slash, width: lineW * 1.02, color: rgb(0xE66D5A, 0.92))
-
-    strokeCocoa(ctx, path: outer, width: lineW)
-
-    // Cute glossy jelly highlight
-    ctx.saveGState()
-    ctx.translateBy(x: center.x - r * 0.48, y: center.y - r * 0.50)
+    ctx.translateBy(x: coinCenter.x - r * 0.44, y: coinCenter.y - r * 0.46)
     ctx.rotate(by: -38 * .pi / 180)
-    ctx.setFillColor(rgb(0xFFFFFF, 0.82))
-    ctx.fillEllipse(in: CGRect(x: -r * 0.16, y: -r * 0.06, width: r * 0.32, height: r * 0.12))
+    ctx.setFillColor(rgb(0xFFFFFF, 0.84))
+    ctx.fillEllipse(in: CGRect(x: -r * 0.18, y: -r * 0.07, width: r * 0.36, height: r * 0.14))
     ctx.restoreGState()
 
-    ctx.endTransparencyLayer()
     ctx.restoreGState()
 }
 
-// MARK: - Kawaii Chubby Mochi Golden Retriever Puppy
+// MARK: - Peeking Chubby Golden Retriever Puppy
 
-func drawKawaiiGolden(_ ctx: CGContext, at origin: CGPoint, scale s: CGFloat, tiltDeg: CGFloat, lineW: CGFloat) {
+func drawPeekingGolden(_ ctx: CGContext, at origin: CGPoint, scale s: CGFloat, tiltDeg: CGFloat, lineW: CGFloat) {
     ctx.saveGState()
     ctx.translateBy(x: origin.x, y: origin.y)
     ctx.rotate(by: tiltDeg * .pi / 180)
     ctx.scaleBy(x: s, y: s)
     let lw = lineW / s
 
-    // Fluffy feathered golden tail wagging behind left
-    let tail = CGMutablePath()
-    tail.move(to: P(-130, 148))
-    tail.addCurve(to: P(-204, 72), control1: P(-186, 152), control2: P(-218, 112))
-    tail.addCurve(to: P(-174, 34), control1: P(-200, 44), control2: P(-188, 32))
-    tail.addCurve(to: P(-138, 82), control1: P(-154, 38), control2: P(-152, 60))
-    tail.addCurve(to: P(-130, 148), control1: P(-128, 102), control2: P(-124, 128))
-    tail.closeSubpath()
-    fillLinear(ctx, path: tail, colors: [rgb(0xFFF0C8), rgb(0xEBB364)], start: P(-198, 36), end: P(-132, 146))
-    strokeCocoa(ctx, path: tail, width: lw)
-
-    // ONE UNIFIED SQUISHY CHUBBY MOCHI-DUMPLING SILHOUETTE (no skinny neck!)
-    // Plump cheeks melt right into a big round squishy golden belly!
-    let mochi = CGMutablePath()
-    mochi.move(to: P(-22, -122))
-    // Cute soft golden baby curl on top
-    mochi.addQuadCurve(to: P(2, -146), control: P(-12, -144))
-    mochi.addQuadCurve(to: P(14, -126), control: P(14, -140))
-    mochi.addQuadCurve(to: P(34, -136), control: P(26, -138))
-    mochi.addQuadCurve(to: P(40, -118), control: P(44, -126))
-    // Wide squishy right cheek bulging softly into chubby right belly
-    mochi.addCurve(to: P(148, 8), control1: P(112, -108), control2: P(144, -56))
-    mochi.addCurve(to: P(162, 114), control1: P(162, 46), control2: P(170, 78))
-    mochi.addCurve(to: P(0, 212), control1: P(150, 186), control2: P(88, 214))
-    // Wide squishy left belly & cheek
-    mochi.addCurve(to: P(-162, 114), control1: P(-88, 214), control2: P(-150, 186))
-    mochi.addCurve(to: P(-148, 8), control1: P(-170, 78), control2: P(-162, 46))
-    mochi.addCurve(to: P(-22, -122), control1: P(-144, -58), control2: P(-98, -118))
-    mochi.closeSubpath()
-
-    // Warm creamy-butter Golden watercolor coat
-    fillLinear(ctx, path: mochi, colors: [rgb(0xFFF2CC), rgb(0xF8CF88), rgb(0xE9AE5D)], start: P(0, -144), end: P(0, 212), locations: [0.0, 0.55, 1.0])
-
+    // Plump soft shoulders tucked down inside the open purse
+    let torso = CGPath(roundedRect: CGRect(x: -118, y: 66, width: 236, height: 118), cornerWidth: 58, cornerHeight: 58, transform: nil)
+    fillLinear(ctx, path: torso, colors: [rgb(0xF8CF88), rgb(0xE9AE5D)], start: P(0, 66), end: P(0, 184))
     ctx.saveGState()
-    ctx.addPath(mochi)
+    ctx.addPath(torso)
     ctx.clip()
-    // Luminous watercolor crown highlight
-    fillRadial(ctx, center: P(-28, -82), radius: 118, hex: 0xFFFFFF, alpha: 0.48)
-    // Soft creamy muzzle pillow
-    fillRadial(ctx, center: P(0, 44), radius: 88, hex: 0xFFFBF0, alpha: 0.72)
-    // Big round creamy chubby tummy cloud!
-    let belly = ellipsePath(0, 154, 108, 76)
-    fillLinear(ctx, path: belly, colors: [rgb(0xFFFDF5), rgb(0xFCE8C2)], start: P(0, 86), end: P(0, 224))
-    // Soft warm watercolor bottom shading
-    fillRadial(ctx, center: P(0, 222), radius: 135, hex: 0xC98240, alpha: 0.16)
+    let chest = ellipsePath(0, 134, 72, 54)
+    fillLinear(ctx, path: chest, colors: [rgb(0xFFFBF0), rgb(0xFCE8C2)], start: P(0, 86), end: P(0, 184))
     ctx.restoreGState()
+    strokeCocoa(ctx, path: torso, width: lw)
 
-    // Coral-peach ribbon collar resting cozily across the chunky chubby neck-roll!
-    let collar = CGMutablePath()
-    collar.move(to: P(-96, 98))
-    collar.addQuadCurve(to: P(96, 98), control: P(0, 132))
+    // Squishy round Golden puppy head with fluffy baby top curl
+    let head = CGMutablePath()
+    head.move(to: P(-22, -124))
+    head.addQuadCurve(to: P(2, -148), control: P(-12, -146))
+    head.addQuadCurve(to: P(14, -128), control: P(14, -142))
+    head.addQuadCurve(to: P(34, -138), control: P(26, -140))
+    head.addQuadCurve(to: P(40, -120), control: P(44, -128))
+    head.addCurve(to: P(144, 6), control1: P(110, -110), control2: P(142, -58))
+    head.addCurve(to: P(134, 66), control1: P(154, 34), control2: P(148, 52))
+    head.addCurve(to: P(0, 114), control1: P(104, 102), control2: P(58, 114))
+    head.addCurve(to: P(-134, 66), control1: P(-58, 114), control2: P(-104, 102))
+    head.addCurve(to: P(-144, 6), control1: P(-148, 52), control2: P(-154, 34))
+    head.addCurve(to: P(-22, -124), control1: P(-142, -60), control2: P(-96, -120))
+    head.closeSubpath()
+
+    fillLinear(ctx, path: head, colors: [rgb(0xFFF2CC), rgb(0xF8CF88), rgb(0xEBB160)], start: P(0, -144), end: P(0, 114), locations: [0.0, 0.56, 1.0])
+
     ctx.saveGState()
-    ctx.addPath(collar)
-    ctx.setLineWidth(22)
-    ctx.setLineCap(.round)
-    ctx.replacePathWithStrokedPath()
-    let collarPath = ctx.path!
+    ctx.addPath(head)
+    ctx.clip()
+    fillRadial(ctx, center: P(-28, -84), radius: 115, hex: 0xFFFFFF, alpha: 0.48)
+    fillRadial(ctx, center: P(0, 50), radius: 86, hex: 0xFFFBF0, alpha: 0.76)
+    fillRadial(ctx, center: P(0, 128), radius: 102, hex: 0xC98240, alpha: 0.16)
     ctx.restoreGState()
-    fillLinear(ctx, path: collarPath, colors: [rgb(0xF69684), rgb(0xE06956)], start: P(0, 88), end: P(0, 132))
-    strokeCocoa(ctx, path: collarPath, width: lw * 0.76)
 
-    // Outer cocoa outline over the whole chubby mochi silhouette
-    strokeCocoa(ctx, path: mochi, width: lw)
+    strokeCocoa(ctx, path: head, width: lw)
 
-    // Tiny adorable stubby chubby golden back foot peeking at bottom-left!
-    let stubbyL = ellipsePath(-96, 198, 30, 20)
-    fillLinear(ctx, path: stubbyL, colors: [rgb(0xFCE2A8), rgb(0xE8AC5B)], start: P(-96, 178), end: P(-96, 218))
-    strokeCocoa(ctx, path: stubbyL, width: lw * 0.88)
-    ctx.setFillColor(rgb(0xD98D68, 0.55))
-    ctx.fillEllipse(in: CGRect(x: -104, y: 196, width: 16, height: 10))
-    ctx.fillEllipse(in: CGRect(x: -110, y: 190, width: 5.5, height: 5.5))
-    ctx.fillEllipse(in: CGRect(x: -99, y: 187, width: 5.5, height: 5.5))
-    ctx.fillEllipse(in: CGRect(x: -88, y: 190, width: 5.5, height: 5.5))
-
-    // Velvety wavy floppy Golden Retriever ears draping over the chubby cheeks!
+    // Velvety wavy floppy Golden Retriever ears draping over the cheeks
     for side: CGFloat in [-1, 1] {
         let ear = CGMutablePath()
-        ear.move(to: P(side * 96, -90))
-        ear.addCurve(to: P(side * 172, 12), control1: P(side * 152, -80), control2: P(side * 180, -32))
-        ear.addCurve(to: P(side * 154, 76), control1: P(side * 178, 46), control2: P(side * 172, 74))
+        ear.move(to: P(side * 96, -92))
+        ear.addCurve(to: P(side * 172, 12), control1: P(side * 150, -82), control2: P(side * 178, -32))
+        ear.addCurve(to: P(side * 154, 76), control1: P(side * 176, 46), control2: P(side * 170, 74))
         ear.addCurve(to: P(side * 116, 48), control1: P(side * 134, 80), control2: P(side * 120, 68))
         ear.addCurve(to: P(side * 112, -22), control1: P(side * 112, 22), control2: P(side * 114, 0))
-        ear.addCurve(to: P(side * 96, -90), control1: P(side * 112, -54), control2: P(side * 108, -76))
+        ear.addCurve(to: P(side * 96, -92), control1: P(side * 112, -54), control2: P(side * 108, -76))
         ear.closeSubpath()
-        fillLinear(ctx, path: ear, colors: [rgb(0xF3BE71), rgb(0xDD9647)], start: P(side * 132, -86), end: P(side * 140, 76))
+        fillLinear(ctx, path: ear, colors: [rgb(0xF3BE71), rgb(0xDD9647)], start: P(side * 132, -88), end: P(side * 140, 76))
         ctx.saveGState()
         ctx.addPath(ear)
         ctx.clip()
-        fillRadial(ctx, center: P(side * 136, -44), radius: 52, hex: 0xFFF2D2, alpha: 0.42)
+        fillRadial(ctx, center: P(side * 134, -44), radius: 52, hex: 0xFFF2D2, alpha: 0.42)
         ctx.restoreGState()
         strokeCocoa(ctx, path: ear, width: lw)
     }
 
-    // Tiny adorable curved puppy eyebrows
+    // Sweet puppy eyebrows
     let brows = CGMutablePath()
-    brows.move(to: P(-68, -42))
-    brows.addQuadCurve(to: P(-46, -46), control: P(-57, -52))
-    brows.move(to: P(46, -46))
-    brows.addQuadCurve(to: P(68, -42), control: P(57, -52))
+    brows.move(to: P(-68, -40))
+    brows.addQuadCurve(to: P(-46, -44), control: P(-57, -50))
+    brows.move(to: P(46, -44))
+    brows.addQuadCurve(to: P(68, -40), control: P(57, -50))
     strokeCocoa(ctx, path: brows, width: lw * 0.55, color: rgb(0x9E6738, 0.72))
 
-    // Kawaii blush cheeks with /// marks (set wide on those fat squishy cheeks!)
-    drawKawaiiBlush(ctx, lx: -92, rx: 92, y: 36, radius: 40, hex: 0xF7989C)
+    // Kawaii rosy blush cheeks
+    drawKawaiiBlush(ctx, lx: -90, rx: 90, y: 38, radius: 40, hex: 0xF7989C)
 
-    // BIG SPARKLING BOBA EYES
-    drawBobaEyes(ctx, lx: -56, rx: 56, y: 6, rxEye: 23, ryEye: 25, irisGlowHex: 0xC97D45)
+    // Big sparkling boba eyes
+    drawBobaEyes(ctx, lx: -55, rx: 55, y: 8, rxEye: 23, ryEye: 25, irisGlowHex: 0xC97D45)
 
-    // Tiny glossy heart-button cocoa nose
-    let nose = roundedTriangle(P(-16, 22), P(16, 22), P(0, 38), radii: (7, 7, 8))
+    // Glossy heart-button cocoa nose
+    let nose = roundedTriangle(P(-16, 24), P(16, 24), P(0, 40), radii: (7, 7, 8))
     ctx.addPath(nose)
     ctx.setFillColor(inkDeep)
     ctx.fillPath()
     ctx.setFillColor(rgb(0xFFFFFF, 0.55))
-    ctx.fillEllipse(in: CGRect(x: -8, y: 23, width: 7.5, height: 4.5))
+    ctx.fillEllipse(in: CGRect(x: -8, y: 25, width: 7.5, height: 4.5))
 
-    // Sweet happy puppy tongue & ":3" smile
-    let tongue = ellipsePath(0, 62, 12, 13)
-    fillLinear(ctx, path: tongue, colors: [rgb(0xFFA8B0), rgb(0xEE7D8A)], start: P(0, 50), end: P(0, 76))
+    // Happy pink tongue & ":3" smile
+    let tongue = ellipsePath(0, 64, 12, 13)
+    fillLinear(ctx, path: tongue, colors: [rgb(0xFFA8B0), rgb(0xEE7D8A)], start: P(0, 52), end: P(0, 78))
     strokeCocoa(ctx, path: tongue, width: lw * 0.62)
 
     let mouth = CGMutablePath()
-    mouth.move(to: P(0, 38))
-    mouth.addLine(to: P(0, 48))
-    mouth.move(to: P(-25, 46))
-    mouth.addQuadCurve(to: P(0, 48), control: P(-12, 64))
-    mouth.addQuadCurve(to: P(25, 46), control: P(12, 64))
+    mouth.move(to: P(0, 40))
+    mouth.addLine(to: P(0, 50))
+    mouth.move(to: P(-25, 48))
+    mouth.addQuadCurve(to: P(0, 50), control: P(-12, 66))
+    mouth.addQuadCurve(to: P(25, 48), control: P(12, 66))
     strokeCocoa(ctx, path: mouth, width: lw * 0.76, color: inkDeep)
-
-    // Tiny gleaming gold bell on collar
-    let bell = ellipsePath(0, 124, 17, 17)
-    fillLinear(ctx, path: bell, colors: [rgb(0xFFF3B2), rgb(0xF6BE4A)], start: P(-6, 108), end: P(8, 140))
-    strokeCocoa(ctx, path: bell, width: lw * 0.75)
 
     ctx.restoreGState()
 }
 
-// MARK: - Kawaii Chubby Mochi Munchkin Kitten
+// MARK: - Peeking Chubby Munchkin Kitten
 
-func drawKawaiiMunchkin(_ ctx: CGContext, at origin: CGPoint, scale s: CGFloat, tiltDeg: CGFloat, lineW: CGFloat) {
+func drawPeekingMunchkin(_ ctx: CGContext, at origin: CGPoint, scale s: CGFloat, tiltDeg: CGFloat, lineW: CGFloat) {
     ctx.saveGState()
     ctx.translateBy(x: origin.x, y: origin.y)
     ctx.rotate(by: tiltDeg * .pi / 180)
     ctx.scaleBy(x: s, y: s)
     let lw = lineW / s
 
-    // Super fluffy bottle-brush Munchkin plume tail curling up on right
+    // Fluffy apricot-cream plume tail curling subtly behind right ear/cheek above the rim
     let tail = CGMutablePath()
-    tail.move(to: P(130, 152))
-    tail.addCurve(to: P(210, 62), control1: P(192, 156), control2: P(222, 112))
-    tail.addCurve(to: P(178, 18), control1: P(206, 30), control2: P(192, 16))
-    tail.addCurve(to: P(150, 52), control1: P(160, 20), control2: P(148, 34))
-    tail.addCurve(to: P(160, 110), control1: P(152, 74), control2: P(166, 92))
-    tail.addCurve(to: P(130, 152), control1: P(154, 128), control2: P(142, 144))
+    tail.move(to: P(108, 124))
+    tail.addCurve(to: P(182, 42), control1: P(166, 124), control2: P(196, 86))
+    tail.addCurve(to: P(150, 4), control1: P(178, 14), control2: P(164, 2))
+    tail.addCurve(to: P(126, 36), control1: P(132, 6), control2: P(122, 20))
+    tail.addCurve(to: P(134, 88), control1: P(128, 54), control2: P(140, 70))
+    tail.addCurve(to: P(108, 124), control1: P(128, 106), control2: P(118, 118))
     tail.closeSubpath()
-    fillLinear(ctx, path: tail, colors: [rgb(0xFFFDF8), rgb(0xF4CA9F)], start: P(182, 20), end: P(162, 152))
+    fillLinear(ctx, path: tail, colors: [rgb(0xFFFDF8), rgb(0xF4CA9F)], start: P(156, 6), end: P(138, 124))
     strokeCocoa(ctx, path: tail, width: lw)
 
-    // Small, plush, wider-set rounded Munchkin ears (makes the mochi body look even chubbier!)
-    let earL = roundedTriangle(P(-122, -36), P(-110, -132), P(-38, -94), radii: (18, 24, 18))
-    let earR = roundedTriangle(P(38, -94), P(110, -132), P(122, -36), radii: (18, 24, 18))
-    let innerL = roundedTriangle(P(-104, -52), P(-96, -108), P(-56, -88), radii: (10, 14, 10))
-    let innerR = roundedTriangle(P(56, -88), P(96, -108), P(104, -52), radii: (10, 14, 10))
+    // Plump shoulders tucked down inside the open purse
+    let torso = CGPath(roundedRect: CGRect(x: -116, y: 70, width: 232, height: 114), cornerWidth: 57, cornerHeight: 57, transform: nil)
+    fillLinear(ctx, path: torso, colors: [rgb(0xFFFFFF), rgb(0xF8E9DB)], start: P(0, 70), end: P(0, 184))
+    strokeCocoa(ctx, path: torso, width: lw)
 
-    fillLinear(ctx, path: earL, colors: [rgb(0xFFFFFF), rgb(0xFBEFE0)], start: P(0, -132), end: P(0, -36))
-    fillLinear(ctx, path: innerL, colors: [rgb(0xFFD8DF), rgb(0xF6B0BC)], start: P(0, -108), end: P(0, -52))
+    // Small plush wider-set rounded Munchkin ears
+    let earL = roundedTriangle(P(-122, -38), P(-110, -134), P(-38, -96), radii: (18, 24, 18))
+    let earR = roundedTriangle(P(38, -96), P(110, -134), P(122, -38), radii: (18, 24, 18))
+    let innerL = roundedTriangle(P(-104, -54), P(-96, -110), P(-56, -90), radii: (10, 14, 10))
+    let innerR = roundedTriangle(P(56, -90), P(96, -110), P(104, -54), radii: (10, 14, 10))
+
+    fillLinear(ctx, path: earL, colors: [rgb(0xFFFFFF), rgb(0xFBEFE0)], start: P(0, -134), end: P(0, -38))
+    fillLinear(ctx, path: innerL, colors: [rgb(0xFFD8DF), rgb(0xF6B0BC)], start: P(0, -110), end: P(0, -54))
     strokeCocoa(ctx, path: earL, width: lw)
 
-    fillLinear(ctx, path: earR, colors: [rgb(0xF8CDA0), rgb(0xEBB37E)], start: P(0, -132), end: P(0, -36))
-    fillLinear(ctx, path: innerR, colors: [rgb(0xFFD8DF), rgb(0xF6B0BC)], start: P(0, -108), end: P(0, -52))
+    fillLinear(ctx, path: earR, colors: [rgb(0xF8CDA0), rgb(0xEBB37E)], start: P(0, -134), end: P(0, -38))
+    fillLinear(ctx, path: innerR, colors: [rgb(0xFFD8DF), rgb(0xF6B0BC)], start: P(0, -110), end: P(0, -54))
     strokeCocoa(ctx, path: earR, width: lw)
 
-    // ONE UNIFIED ULTRA-CHUBBY SQUISHY MOCHI-LOAF MUNCHKIN SILHOUETTE!
-    // Fat marshmallow cheeks flow right into a wide plump pear-shaped loaf belly (zero skinny neck!)
-    let mochi = CGMutablePath()
-    mochi.move(to: P(0, -106))
-    mochi.addCurve(to: P(150, 12), control1: P(98, -106), control2: P(146, -54))
-    mochi.addCurve(to: P(166, 118), control1: P(166, 48), control2: P(176, 82))
-    mochi.addCurve(to: P(0, 206), control1: P(154, 186), control2: P(90, 208))
-    mochi.addCurve(to: P(-166, 118), control1: P(-90, 208), control2: P(-154, 186))
-    mochi.addCurve(to: P(-150, 12), control1: P(-176, 82), control2: P(-166, 48))
-    mochi.addCurve(to: P(0, -106), control1: P(-146, -54), control2: P(-98, -106))
-    mochi.closeSubpath()
+    // Squishy marshmallow-round Munchkin head
+    let head = CGMutablePath()
+    head.move(to: P(0, -110))
+    head.addCurve(to: P(148, 8), control1: P(96, -110), control2: P(144, -58))
+    head.addCurve(to: P(140, 66), control1: P(160, 34), control2: P(154, 52))
+    head.addCurve(to: P(0, 112), control1: P(110, 102), control2: P(62, 112))
+    head.addCurve(to: P(-140, 66), control1: P(-62, 112), control2: P(-110, 102))
+    head.addCurve(to: P(-148, 8), control1: P(-154, 52), control2: P(-160, 34))
+    head.addCurve(to: P(0, -110), control1: P(-144, -58), control2: P(-96, -110))
+    head.closeSubpath()
 
-    fillLinear(ctx, path: mochi, colors: [rgb(0xFFFFFF), rgb(0xFFFBF5), rgb(0xF8E9DB)], start: P(0, -106), end: P(0, 206), locations: [0.0, 0.58, 1.0])
+    fillLinear(ctx, path: head, colors: [rgb(0xFFFFFF), rgb(0xFFFBF5), rgb(0xF8E9DB)], start: P(0, -110), end: P(0, 112), locations: [0.0, 0.58, 1.0])
 
-    // Soft apricot calico patch + caramel forehead stripes + warm belly shading
     ctx.saveGState()
-    ctx.addPath(mochi)
+    ctx.addPath(head)
     ctx.clip()
-    let patch = ellipsePath(80, -70, 78, 54)
-    fillLinear(ctx, path: patch, colors: [rgb(0xFAD2A7, 0.90), rgb(0xEEB782, 0.86)], start: P(30, -110), end: P(118, -26))
-    // Cute soft caramel side-belly patch too (calico charm!)
-    let hipPatch = ellipsePath(146, 126, 56, 48)
-    fillLinear(ctx, path: hipPatch, colors: [rgb(0xFAD2A7, 0.72), rgb(0xEEB782, 0.68)], start: P(100, 90), end: P(175, 165))
-    // Tiny cute soft caramel forehead stripes (|||)
+    let patch = ellipsePath(78, -72, 76, 54)
+    fillLinear(ctx, path: patch, colors: [rgb(0xFAD2A7, 0.90), rgb(0xEEB782, 0.86)], start: P(30, -112), end: P(118, -28))
     let stripes = CGMutablePath()
-    stripes.move(to: P(-16, -100)); stripes.addLine(to: P(-14, -80))
-    stripes.move(to: P(0, -104));   stripes.addLine(to: P(0, -78))
-    stripes.move(to: P(16, -100));  stripes.addLine(to: P(14, -80))
+    stripes.move(to: P(-16, -102)); stripes.addLine(to: P(-14, -82))
+    stripes.move(to: P(0, -106));   stripes.addLine(to: P(0, -80))
+    stripes.move(to: P(16, -102));  stripes.addLine(to: P(14, -82))
     strokeCocoa(ctx, path: stripes, width: 7.5, color: rgb(0xEBB683, 0.52))
-    fillRadial(ctx, center: P(0, 218), radius: 135, hex: 0xD9AC8A, alpha: 0.16)
+    fillRadial(ctx, center: P(0, 126), radius: 112, hex: 0xD9AC8A, alpha: 0.16)
     ctx.restoreGState()
 
-    // Matcha-mint ribbon collar resting across the plump chubby mochi neck-roll!
-    let collar = CGMutablePath()
-    collar.move(to: P(-96, 98))
-    collar.addQuadCurve(to: P(96, 98), control: P(0, 132))
-    ctx.saveGState()
-    ctx.addPath(collar)
-    ctx.setLineWidth(21)
-    ctx.setLineCap(.round)
-    ctx.replacePathWithStrokedPath()
-    let collarPath = ctx.path!
-    ctx.restoreGState()
-    fillLinear(ctx, path: collarPath, colors: [rgb(0x9BE0BF), rgb(0x6BB997)], start: P(0, 90), end: P(0, 132))
-    strokeCocoa(ctx, path: collarPath, width: lw * 0.76)
+    strokeCocoa(ctx, path: head, width: lw)
 
-    // Outer cocoa outline around the whole fat mochi loaf
-    strokeCocoa(ctx, path: mochi, width: lw)
+    // Kawaii blush cheeks
+    drawKawaiiBlush(ctx, lx: -90, rx: 90, y: 40, radius: 40, hex: 0xF9A2AE)
 
-    // Iconic TINY stubby Munchkin bean foot peeking out of the fat round belly with pink toe beans!
-    let stubby = ellipsePath(94, 194, 28, 19)
-    fillLinear(ctx, path: stubby, colors: [rgb(0xFFFFFF), rgb(0xF7E6D3)], start: P(94, 175), end: P(94, 213))
-    strokeCocoa(ctx, path: stubby, width: lw * 0.88)
-    ctx.setFillColor(rgb(0xF7A6B2, 0.88))
-    ctx.fillEllipse(in: CGRect(x: 86, y: 192, width: 16, height: 10.5))
-    ctx.fillEllipse(in: CGRect(x: 79, y: 186, width: 5.8, height: 5.8))
-    ctx.fillEllipse(in: CGRect(x: 91, y: 183, width: 5.8, height: 5.8))
-    ctx.fillEllipse(in: CGRect(x: 103, y: 186, width: 5.8, height: 5.8))
-
-    // Kawaii blush cheeks with /// marks (wide on those squishy fat cheeks!)
-    drawKawaiiBlush(ctx, lx: -94, rx: 94, y: 38, radius: 40, hex: 0xF9A2AE)
-
-    // BIG SPARKLING BOBA EYES
-    drawBobaEyes(ctx, lx: -56, rx: 56, y: 10, rxEye: 23, ryEye: 25, irisGlowHex: 0xC98D6B)
+    // Big sparkling boba eyes
+    drawBobaEyes(ctx, lx: -55, rx: 55, y: 12, rxEye: 23, ryEye: 25, irisGlowHex: 0xC98D6B)
 
     // Tiny pink strawberry nose + dainty ":3" mouth
-    let nose = roundedTriangle(P(-12, 26), P(12, 26), P(0, 38), radii: (5, 5, 6))
-    fillLinear(ctx, path: nose, colors: [rgb(0xFFB4BC), rgb(0xF08996)], start: P(0, 24), end: P(0, 38))
+    let nose = roundedTriangle(P(-12, 28), P(12, 28), P(0, 40), radii: (5, 5, 6))
+    fillLinear(ctx, path: nose, colors: [rgb(0xFFB4BC), rgb(0xF08996)], start: P(0, 26), end: P(0, 40))
     strokeCocoa(ctx, path: nose, width: lw * 0.5)
 
     let mouth = CGMutablePath()
-    mouth.move(to: P(0, 38))
-    mouth.addLine(to: P(0, 48))
-    mouth.move(to: P(-24, 46))
-    mouth.addQuadCurve(to: P(0, 48), control: P(-12, 64))
-    mouth.addQuadCurve(to: P(24, 46), control: P(12, 64))
+    mouth.move(to: P(0, 40))
+    mouth.addLine(to: P(0, 50))
+    mouth.move(to: P(-24, 48))
+    mouth.addQuadCurve(to: P(0, 50), control: P(-12, 66))
+    mouth.addQuadCurve(to: P(24, 48), control: P(12, 66))
     strokeCocoa(ctx, path: mouth, width: lw * 0.76, color: inkDeep)
 
     // Delicate short cocoa whiskers
     let whiskers = CGMutablePath()
     for side: CGFloat in [-1, 1] {
-        whiskers.move(to: P(side * 112, 24))
-        whiskers.addLine(to: P(side * 144, 18))
-        whiskers.move(to: P(side * 114, 42))
-        whiskers.addLine(to: P(side * 146, 48))
+        whiskers.move(to: P(side * 108, 26))
+        whiskers.addLine(to: P(side * 140, 20))
+        whiskers.move(to: P(side * 110, 44))
+        whiskers.addLine(to: P(side * 142, 50))
     }
     strokeCocoa(ctx, path: whiskers, width: lw * 0.58, color: rgb(0x876A5E, 0.72))
 
-    // Tiny butter-gold bell on mint collar
-    let bell = ellipsePath(0, 124, 16, 16)
-    fillLinear(ctx, path: bell, colors: [rgb(0xFFF7C6), rgb(0xF6CB5F)], start: P(-6, 108), end: P(8, 140))
-    strokeCocoa(ctx, path: bell, width: lw * 0.75)
-
     ctx.restoreGState()
+}
+
+// MARK: - Gamaguchi Coin Purse (Back Arch, Plump Coral Body, Brass Clasp & Leather Patch)
+
+func drawGamaguchiBack(_ ctx: CGContext, lineW: CGFloat) {
+    // Open back brass arch & dark cozy pouch interior lining
+    let interior = CGMutablePath()
+    interior.move(to: P(228, 534))
+    interior.addQuadCurve(to: P(796, 534), control: P(512, 424))
+    interior.addQuadCurve(to: P(228, 534), control: P(512, 576))
+    interior.closeSubpath()
+
+    fillLinear(ctx, path: interior, colors: [rgb(0x9E463B), rgb(0x702B24)], start: P(512, 470), end: P(512, 560))
+
+    // Back brass metal arch rim
+    let backRim = CGMutablePath()
+    backRim.move(to: P(228, 534))
+    backRim.addQuadCurve(to: P(796, 534), control: P(512, 424))
+    ctx.saveGState()
+    ctx.addPath(backRim)
+    ctx.setLineWidth(24)
+    ctx.setLineCap(.round)
+    ctx.replacePathWithStrokedPath()
+    let rimPath = ctx.path!
+    ctx.restoreGState()
+
+    fillLinear(ctx, path: rimPath, colors: [rgb(0xF8D36D), rgb(0xD99634)], start: P(512, 466), end: P(512, 540))
+    strokeCocoa(ctx, path: rimPath, width: lineW * 0.90)
+}
+
+func drawLeatherTallyPatch(_ ctx: CGContext, center: CGPoint, lineW: CGFloat) {
+    let w: CGFloat = 264
+    let h: CGFloat = 136
+    let rect = CGRect(x: center.x - w / 2, y: center.y - h / 2, width: w, height: h)
+    let badge = CGPath(roundedRect: rect, cornerWidth: 58, cornerHeight: 58, transform: nil)
+
+    ctx.saveGState()
+    ctx.setShadow(offset: CGSize(width: 0, height: -5), blur: 12, color: rgb(0x7A2B1F, 0.28))
+    ctx.beginTransparencyLayer(auxiliaryInfo: nil)
+    ctx.setShadow(offset: .zero, blur: 0, color: nil)
+
+    fillLinear(ctx, path: badge, colors: [rgb(0xFFFDF8), rgb(0xF8E8D4)], start: P(center.x, rect.minY), end: P(center.x, rect.maxY))
+    strokeCocoa(ctx, path: badge, width: lineW * 0.84)
+
+    // Delicate stitched cream-caramel inner border
+    let stitchRect = rect.insetBy(dx: 14, dy: 14)
+    let stitchPath = CGPath(roundedRect: stitchRect, cornerWidth: 44, cornerHeight: 44, transform: nil)
+    ctx.saveGState()
+    ctx.addPath(stitchPath)
+    ctx.setStrokeColor(rgb(0xC98D6B, 0.70))
+    ctx.setLineWidth(4.5)
+    ctx.setLineCap(.round)
+    ctx.setLineDash(phase: 0, lengths: [10, 10])
+    ctx.strokePath()
+    ctx.restoreGState()
+
+    // Signature Tally 5-mark embossed on the leather patch!
+    let tally = CGMutablePath()
+    let span: CGFloat = 104
+    let topY = center.y - 30
+    let botY = center.y + 30
+    for i in 0..<4 {
+        let x = center.x - span * 0.56 + CGFloat(i) * (span * 0.37)
+        tally.move(to: P(x, topY))
+        tally.addLine(to: P(x, botY))
+    }
+    let slash = CGMutablePath()
+    slash.move(to: P(center.x - span * 0.72, botY - 4))
+    slash.addLine(to: P(center.x + span * 0.72, topY + 4))
+
+    strokeCocoa(ctx, path: tally, width: 10.5, color: rgb(0x9E5E24, 0.85))
+    strokeCocoa(ctx, path: slash, width: 11.5, color: rgb(0xE66D5A, 0.96))
+
+    ctx.endTransparencyLayer()
+    ctx.restoreGState()
+}
+
+func drawGamaguchiFront(_ ctx: CGContext, lineW: CGFloat) {
+    // Plump coral-peach gamaguchi pouch body (#F8A08B -> #E67360 -> #D25B49)
+    let body = CGMutablePath()
+    body.move(to: P(228, 534))
+    body.addQuadCurve(to: P(796, 534), control: P(512, 574))
+    body.addCurve(to: P(848, 728), control1: P(838, 598), control2: P(858, 668))
+    body.addCurve(to: P(512, 896), control1: P(832, 842), control2: P(696, 896))
+    body.addCurve(to: P(176, 728), control1: P(328, 896), control2: P(192, 842))
+    body.addCurve(to: P(228, 534), control1: P(166, 668), control2: P(186, 598))
+    body.closeSubpath()
+
+    fillLinear(ctx, path: body,
+               colors: [rgb(0xFAA591), rgb(0xEB7763), rgb(0xD45C4A)],
+               start: P(512, 534), end: P(512, 896),
+               locations: [0.0, 0.56, 1.0])
+
+    // Soft fabric highlights, bottom shading, and gentle gather pleats from the brass frame
+    ctx.saveGState()
+    ctx.addPath(body)
+    ctx.clip()
+    fillRadial(ctx, center: P(380, 610), radius: 290, hex: 0xFFD4C8, alpha: 0.44)
+    fillRadial(ctx, center: P(512, 920), radius: 340, hex: 0x993528, alpha: 0.24)
+
+    let pleats = CGMutablePath()
+    pleats.move(to: P(292, 554)); pleats.addQuadCurve(to: P(264, 646), control: P(274, 596))
+    pleats.move(to: P(388, 560)); pleats.addQuadCurve(to: P(372, 638), control: P(378, 598))
+    pleats.move(to: P(636, 560)); pleats.addQuadCurve(to: P(652, 638), control: P(646, 598))
+    pleats.move(to: P(732, 554)); pleats.addQuadCurve(to: P(760, 646), control: P(750, 596))
+    strokeCocoa(ctx, path: pleats, width: 6.5, color: rgb(0xB84737, 0.28))
+    ctx.restoreGState()
+
+    strokeCocoa(ctx, path: body, width: lineW)
+
+    // Stitched cream leather Tally patch centered on the pouch belly
+    drawLeatherTallyPatch(ctx, center: P(512, 734), lineW: lineW)
+
+    // Front gleaming gold/brass kiss-lock metal frame rim
+    let frontRim = CGMutablePath()
+    frontRim.move(to: P(228, 534))
+    frontRim.addQuadCurve(to: P(796, 534), control: P(512, 574))
+    ctx.saveGState()
+    ctx.addPath(frontRim)
+    ctx.setLineWidth(28)
+    ctx.setLineCap(.round)
+    ctx.replacePathWithStrokedPath()
+    let frontRimPath = ctx.path!
+    ctx.restoreGState()
+
+    fillLinear(ctx, path: frontRimPath,
+               colors: [rgb(0xFFF6C2), rgb(0xFFDA68), rgb(0xDE9B34)],
+               start: P(512, 520), end: P(512, 568),
+               locations: [0.0, 0.55, 1.0])
+    strokeCocoa(ctx, path: frontRimPath, width: lineW * 0.92)
+
+    // Glossy specular highlight streak along front brass frame
+    let rimGloss = CGMutablePath()
+    rimGloss.move(to: P(254, 531))
+    rimGloss.addQuadCurve(to: P(474, 545), control: P(364, 541))
+    strokeCocoa(ctx, path: rimGloss, width: 5.5, color: rgb(0xFFFFFF, 0.65))
+
+    // Hinge pins on left & right corners of the brass frame
+    for hx: CGFloat in [228, 796] {
+        let pin = ellipsePath(hx, 534, 15, 15)
+        fillLinear(ctx, path: pin, colors: [rgb(0xFFF7CA), rgb(0xE8A73B)], start: P(hx - 6, 520), end: P(hx + 6, 548))
+        strokeCocoa(ctx, path: pin, width: lineW * 0.72)
+    }
+
+    // Two classic kissing gold clasp balls (● ●) at top-center of the front frame!
+    for cx: CGFloat in [492, 532] {
+        let bead = ellipsePath(cx, 528, 20, 20)
+        fillLinear(ctx, path: bead,
+                   colors: [rgb(0xFFF8CA), rgb(0xFFD864), rgb(0xDC962F)],
+                   start: P(cx - 8, 508), end: P(cx + 8, 548),
+                   locations: [0.0, 0.55, 1.0])
+        strokeCocoa(ctx, path: bead, width: lineW * 0.82)
+        ctx.setFillColor(rgb(0xFFFFFF, 0.85))
+        ctx.fillEllipse(in: CGRect(x: cx - 9, y: 515, width: 9.5, height: 5.5))
+    }
 }
 
 func drawPaw(_ ctx: CGContext, at c: CGPoint, rx: CGFloat, ry: CGFloat, angleDeg: CGFloat, topHex: UInt32, botHex: UInt32, lineW: CGFloat) {
@@ -618,46 +675,64 @@ func render() -> CGImage {
 
     drawBackground(ctx)
 
-    // Soft warm cocoa ambient shadow beneath the duo
+    // Unified soft warm cocoa ambient shadow around the whole gamaguchi + peeking pets
     ctx.saveGState()
-    ctx.setShadow(offset: CGSize(width: 0, height: -16), blur: 44, color: rgb(0x6B4423, 0.20))
+    ctx.setShadow(offset: CGSize(width: 0, height: -18), blur: 46, color: rgb(0x6B4423, 0.22))
     ctx.beginTransparencyLayer(auxiliaryInfo: nil)
     ctx.setShadow(offset: .zero, blur: 0, color: nil)
 
-    // Extra-chubby mochi Golden Retriever puppy (left) & Munchkin kitten (right) snuggled cozy & close!
-    drawKawaiiGolden(ctx, at: P(304, 466), scale: 1.14, tiltDeg: -4, lineW: 10.5)
-    drawKawaiiMunchkin(ctx, at: P(720, 478), scale: 1.14, tiltDeg: 4, lineW: 10.5)
+    // 1. Open gamaguchi back arch & cozy interior lining
+    drawGamaguchiBack(ctx, lineW: 10.0)
 
-    // Fresh matcha sprout peeking gently above the gold coin
-    drawSprout(ctx, base: P(512, 616), scale: 0.84, lineW: 9.5)
+    // 2. Golden Retriever puppy (left) & Munchkin kitten (right) tucked inside, clipped cleanly above front pouch
+    ctx.saveGState()
+    let abovePouchClip = CGMutablePath()
+    abovePouchClip.move(to: P(0, 0))
+    abovePouchClip.addLine(to: P(1024, 0))
+    abovePouchClip.addLine(to: P(1024, 540))
+    abovePouchClip.addLine(to: P(796, 540))
+    abovePouchClip.addQuadCurve(to: P(228, 540), control: P(512, 580))
+    abovePouchClip.addLine(to: P(0, 540))
+    abovePouchClip.closeSubpath()
+    ctx.addPath(abovePouchClip)
+    ctx.clip()
 
-    // Compact gleaming butter-gold Tally coin so the two chubby mochi pets are the big stars!
-    drawGoldCoin(ctx, center: P(512, 728), radius: 118, lineW: 10.5)
+    drawPeekingGolden(ctx, at: P(362, 386), scale: 1.03, tiltDeg: -4, lineW: 10.0)
+    drawPeekingMunchkin(ctx, at: P(662, 392), scale: 1.03, tiltDeg: 4, lineW: 10.0)
+    ctx.restoreGState()
 
-    // Tiny adorable stubby paws hugging the coin (tucked snugly against their chubby bellies!)
-    drawPaw(ctx, at: P(392, 706), rx: 40, ry: 30, angleDeg: 14, topHex: 0xFFF1CA, botHex: 0xEEB86B, lineW: 9.8)
-    drawPaw(ctx, at: P(632, 710), rx: 34, ry: 26, angleDeg: -14, topHex: 0xFFFFFF, botHex: 0xF8E7D4, lineW: 9.8)
+    // 3. Plump coral-peach gamaguchi front body, Tally leather patch, brass frame & kiss-lock beads
+    drawGamaguchiFront(ctx, lineW: 10.0)
+
+    // 4. Tiny coin + matcha sprout charm dangling from the right hinge
+    drawCoinSproutCharm(ctx, hinge: P(796, 534), lineW: 10.0)
+
+    // 5. Four tiny chubby paws hooked over the front brass rim!
+    drawPaw(ctx, at: P(292, 540), rx: 32, ry: 24, angleDeg: 10, topHex: 0xFFF1CA, botHex: 0xEEB86B, lineW: 9.2)
+    drawPaw(ctx, at: P(424, 550), rx: 32, ry: 24, angleDeg: -8, topHex: 0xFFF1CA, botHex: 0xEEB86B, lineW: 9.2)
+    drawPaw(ctx, at: P(598, 550), rx: 28, ry: 22, angleDeg: 8, topHex: 0xFFFFFF, botHex: 0xF8E7D4, lineW: 9.2)
+    drawPaw(ctx, at: P(732, 540), rx: 28, ry: 22, angleDeg: -10, topHex: 0xFFFFFF, botHex: 0xF8E7D4, lineW: 9.2)
 
     ctx.endTransparencyLayer()
     ctx.restoreGState()
 
-    // Soft floating coral-peach heart between their heads
-    let heart = heartPath(center: P(512, 206), size: 112)
+    // Floating cozy coral-peach heart above between their heads
+    let heart = heartPath(center: P(512, 186), size: 98)
     ctx.saveGState()
     ctx.setShadow(offset: CGSize(width: 0, height: -6), blur: 16, color: rgb(0xE67360, 0.28))
     ctx.beginTransparencyLayer(auxiliaryInfo: nil)
     ctx.setShadow(offset: .zero, blur: 0, color: nil)
-    fillLinear(ctx, path: heart, colors: [rgb(0xFFA89C), rgb(0xE6705E)], start: P(470, 156), end: P(550, 260))
-    strokeCocoa(ctx, path: heart, width: 9.5)
+    fillLinear(ctx, path: heart, colors: [rgb(0xFFA89C), rgb(0xE6705E)], start: P(470, 142), end: P(550, 234))
+    strokeCocoa(ctx, path: heart, width: 9.2)
     ctx.setFillColor(rgb(0xFFFFFF, 0.70))
-    ctx.fillEllipse(in: CGRect(x: 472, y: 178, width: 20, height: 12))
+    ctx.fillEllipse(in: CGRect(x: 478, y: 160, width: 18, height: 11))
     ctx.endTransparencyLayer()
     ctx.restoreGState()
 
     // Storybook sparkles
-    drawSparkle(ctx, at: P(182, 224), radius: 22, color: rgb(0xF6BF58, 0.90))
-    drawSparkle(ctx, at: P(846, 232), radius: 20, color: rgb(0x8AD6AE, 0.92))
-    drawSparkle(ctx, at: P(838, 796), radius: 16, color: rgb(0xF6BF58, 0.82))
+    drawSparkle(ctx, at: P(192, 232), radius: 20, color: rgb(0xF6BF58, 0.90))
+    drawSparkle(ctx, at: P(838, 224), radius: 19, color: rgb(0x8AD6AE, 0.92))
+    drawSparkle(ctx, at: P(178, 822), radius: 15, color: rgb(0xF6BF58, 0.80))
 
     return ctx.makeImage()!
 }
@@ -675,7 +750,6 @@ func renderMacSquircle(from base: CGImage) -> CGImage {
     let cornerRadius: CGFloat = 185.4
     let clipPath = CGPath(roundedRect: box, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
 
-    // Soft warm cocoa drop shadow on transparent macOS dock canvas
     ctx.saveGState()
     ctx.setShadow(offset: CGSize(width: 0, height: -14), blur: 28, color: rgb(0x452D24, 0.28))
     ctx.addPath(clipPath)
@@ -689,7 +763,6 @@ func renderMacSquircle(from base: CGImage) -> CGImage {
     ctx.draw(base, in: box)
     ctx.restoreGState()
 
-    // Subtle warm specular inner rim
     ctx.saveGState()
     ctx.addPath(clipPath)
     ctx.setStrokeColor(rgb(0xFFFFFF, 0.45))
@@ -734,7 +807,7 @@ try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), 
 
 let baseIcon = render()
 writePNG(baseIcon, to: target)
-print("Wrote kawaii Paws & Cream icon to \(target.path)")
+print("Wrote Gamaguchi Paws & Cream icon to \(target.path)")
 
 if outPath == nil {
     let macFull = renderMacSquircle(from: baseIcon)

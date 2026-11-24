@@ -6,6 +6,7 @@ public enum AppStore {
         SDTransaction.self,
         SDBudgetLimit.self,
         SDSavingsGoal.self,
+        SDInstallmentPlan.self,
     ])
 
     /// Shared ModelContainer for both the app UI and background App Intents (Apple Shortcuts).

@@ -31,6 +31,7 @@ public struct TransactionEditorSheet: View {
     @State private var selectedMemberName: String = ""
     @State private var errorMessage: String?
     @State private var confirmingDelete = false
+    @State private var showingConvertSheet = false
 
     @FocusState private var focusedField: EditorField?
 
@@ -70,6 +71,8 @@ public struct TransactionEditorSheet: View {
                         if showNoteField || !note.isEmpty {
                             noteInputCard(lang: lang)
                         }
+
+                        installmentSection(lang: lang)
 
                         if let raw = existing?.rawSourceText ?? rawSourceText, !raw.isEmpty {
                             Card(L10n.text(lang, en: "Original alert text", vi: "Nội dung thông báo gốc", zh: "原始通知内容"), symbol: "text.quote") {
@@ -151,6 +154,14 @@ public struct TransactionEditorSheet: View {
                 }
             }
             .onAppear(perform: populate)
+            .sheet(isPresented: $showingConvertSheet) {
+                if let existing {
+                    ConvertToInstallmentSheet(transaction: existing) {
+                        // The original expense is replaced by the plan's payments: close the editor.
+                        dismiss()
+                    }
+                }
+            }
             .sheet(isPresented: $showingDatePicker) {
                 NavigationStack {
                     HorizonSingleDateCalendarView(
@@ -502,6 +513,56 @@ public struct TransactionEditorSheet: View {
             RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
                 .strokeBorder(Color.hairline, lineWidth: 1)
         )
+    }
+
+    // MARK: - Installments
+
+    /// "Convert to installment" for saved expenses that are not already plan payments; a short
+    /// note for plan payments themselves.
+    @ViewBuilder
+    private func installmentSection(lang: AppLanguage) -> some View {
+        if let existing, existing.type == .expense, type == .expense, !existing.isDeleted {
+            if existing.isPlanPayment {
+                HStack(alignment: .top, spacing: 8) {
+                    CozyUIIcon(.creditCard, size: 15, color: Color.textSecondary)
+                    Text(L10n.text(
+                        lang,
+                        en: "This is a payment of an installment or loan. Edit or settle the plan from Commitments.",
+                        vi: "Đây là một kỳ trả góp hoặc khoản vay. Hãy sửa hoặc tất toán kế hoạch tại Khoản cam kết.",
+                        zh: "这是分期或贷款的一期还款。请在“分期与贷款”中编辑或结清计划。"
+                    ))
+                    .font(.appCaption)
+                    .foregroundStyle(Color.textSecondary)
+                }
+                .padding(.horizontal, 4)
+            } else {
+                let looksLikeIPP = InstallmentHint.looksLikeInstallment(existing)
+                VStack(alignment: .leading, spacing: 6) {
+                    Button {
+                        focusedField = nil
+                        showingConvertSheet = true
+                    } label: {
+                        HStack(spacing: 8) {
+                            CozyUIIcon(.creditCard, size: 16, color: looksLikeIPP ? Color.onInk : Color.textPrimary)
+                            Text(L10n.text(lang, en: "Convert to installment", vi: "Chuyển thành trả góp", zh: "转为分期"))
+                        }
+                    }
+                    .pillButton(prominent: looksLikeIPP)
+
+                    if looksLikeIPP {
+                        Text(L10n.text(
+                            lang,
+                            en: "This looks like an installment purchase. Spread it over monthly payments?",
+                            vi: "Giao dịch này có vẻ là mua trả góp. Chia thành các kỳ trả hàng tháng?",
+                            zh: "这看起来是一笔分期消费，要拆分成每月还款吗？"
+                        ))
+                        .font(.appCaption)
+                        .foregroundStyle(Color.textSecondary)
+                    }
+                }
+                .padding(.horizontal, 2)
+            }
+        }
     }
 
     // MARK: - Compact Save Bar (shown while system keyboard is visible)

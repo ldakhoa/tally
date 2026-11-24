@@ -11,6 +11,7 @@ public struct OverviewView: View {
     public var onSelectStatistics: () -> Void
     public var onSelectBudgets: () -> Void
     public var onSelectGoals: () -> Void
+    public var onSelectCommitments: () -> Void
     public var onSelectSettings: () -> Void
 
     @Environment(AppSettings.self) private var settings
@@ -26,12 +27,14 @@ public struct OverviewView: View {
         onSelectStatistics: @escaping () -> Void = {},
         onSelectBudgets: @escaping () -> Void = {},
         onSelectGoals: @escaping () -> Void = {},
+        onSelectCommitments: @escaping () -> Void = {},
         onSelectSettings: @escaping () -> Void = {}
     ) {
         self.onSelectTransactions = onSelectTransactions
         self.onSelectStatistics = onSelectStatistics
         self.onSelectBudgets = onSelectBudgets
         self.onSelectGoals = onSelectGoals
+        self.onSelectCommitments = onSelectCommitments
         self.onSelectSettings = onSelectSettings
     }
 
@@ -68,6 +71,9 @@ public struct OverviewView: View {
                     // 3 compact metric tiles: Income, Spending, Budget Left
                     metricsRow(snapshot, lang: lang)
                         .cozyEntrance(index: 1)
+
+                    // Installments & loans: this month's committed payments (hidden when none are active)
+                    commitmentsCard(lang: lang)
 
                     if viewportWidth >= 780 {
                         HStack(alignment: .top, spacing: 16) {
@@ -240,7 +246,7 @@ public struct OverviewView: View {
         if snapshot.transactions.isEmpty {
             return .sleepy
         }
-        if snapshot.netSavingsMinor > 0 {
+        if snapshot.netSavingsMinor > 0 && !snapshot.isSalaryMasked(hidden: settings.hideSalary) {
             return .happy
         }
         return .cozy
@@ -262,6 +268,7 @@ public struct OverviewView: View {
     private func heroSavingsCard(_ snapshot: MonthlySnapshot, lang: AppLanguage) -> some View {
         let shape = RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
         let mood = heroPetMood(for: snapshot)
+        let netHidden = snapshot.isSalaryMasked(hidden: settings.hideSalary)
         let isDark = colorScheme == .dark
         let gradientColors: [Color] = isDark
             ? [Color(hex: 0x3A2A25), Color(hex: 0x2F2224)]
@@ -285,7 +292,8 @@ public struct OverviewView: View {
                                 .foregroundStyle(Color.textSecondary)
                         }
 
-                        Text(MoneyFormat.format(minor: snapshot.netSavingsMinor, currency: settings.currency, language: lang))
+                        Text(MoneyFormat.masked(MoneyFormat.format(minor: snapshot.netSavingsMinor, currency: settings.currency, language: lang), hidden: netHidden))
+                            .salaryMaskAccessibility(netHidden, language: lang)
                             .font(.appMetricHero)
                             .foregroundStyle(Color.textPrimary)
                             .lineLimit(1)
@@ -293,7 +301,7 @@ public struct OverviewView: View {
                             .contentTransition(.numericText())
                             .animation(.spring(response: 0.45, dampingFraction: 0.8), value: snapshot.netSavingsMinor)
 
-                        if let rate = snapshot.savingsRatePercent {
+                        if let rate = snapshot.savingsRatePercent, !netHidden {
                             Text("✨ \(rate)% \(L10n.text(lang, en: "saved", vi: "thu nhập", zh: "结余率"))")
                                 .font(.appCaption.weight(.semibold))
                                 .padding(.horizontal, 10)
@@ -377,9 +385,10 @@ public struct OverviewView: View {
         return LazyVGrid(columns: columns, spacing: 12) {
             metricTile(
                 title: L10n.text(lang, en: "Income", vi: "Thu nhập", zh: "收入"),
-                value: MoneyFormat.format(minor: snapshot.incomeMinor, currency: settings.currency, language: lang, compact: settings.currency == .vnd && snapshot.incomeMinor >= 100_000_000_00),
+                value: MoneyFormat.masked(MoneyFormat.format(minor: snapshot.incomeMinor, currency: settings.currency, language: lang, compact: settings.currency == .vnd && snapshot.incomeMinor >= 100_000_000_00), hidden: snapshot.isSalaryMasked(hidden: settings.hideSalary)),
                 note: L10n.text(lang, en: "Received", vi: "Đã nhận", zh: "已入账"),
-                icon: .income
+                icon: .income,
+                isIncome: true
             ) {
                 store.activityTypeFilter = .income
                 store.activityCategoryFilter = nil
@@ -422,7 +431,39 @@ public struct OverviewView: View {
         }
     }
 
-    private func metricTile(title: String, value: String, note: String, icon: CozyMetricIconKind, action: @escaping () -> Void) -> some View {
+    private func metricTile(title: String, value: String, note: String, icon: CozyMetricIconKind, isIncome: Bool = false, action: @escaping () -> Void) -> some View {
+        ZStack(alignment: .topTrailing) {
+            metricTileButton(title: title, value: value, note: note, icon: icon, isIncome: isIncome, action: action)
+            if isIncome {
+                hideSalaryToggle
+                    .padding(.top, 14)
+                    .padding(.trailing, 12)
+            }
+        }
+    }
+
+    /// Hand-drawn eye / eye-closed privacy toggle that masks salary and the figures that include it.
+    /// Revealing asks for Face ID / passcode when that requirement is on; hiding never does.
+    private var hideSalaryToggle: some View {
+        let lang = settings.language
+        let hidden = settings.hideSalary
+        return Button {
+            CozyHaptics.light()
+            Task {
+                await settings.toggleSalaryVisibility()
+            }
+        } label: {
+            CozyUIIcon(hidden ? .eyeClosed : .eye, size: 20, color: Color.textSecondary)
+                .frame(width: 32, height: 32)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.themedPlain)
+        .accessibilityLabel(hidden
+            ? L10n.text(lang, en: "Show salary", vi: "Hiện lương", zh: "显示工资")
+            : L10n.text(lang, en: "Hide salary", vi: "Ẩn lương", zh: "隐藏工资"))
+    }
+
+    private func metricTileButton(title: String, value: String, note: String, icon: CozyMetricIconKind, isIncome: Bool, action: @escaping () -> Void) -> some View {
         Button {
             CozyHaptics.light()
             CozySounds.play(.pop)
@@ -436,9 +477,14 @@ public struct OverviewView: View {
                         .foregroundStyle(Color.textSecondary)
                         .lineLimit(1)
                     Spacer(minLength: 2)
-                    CozyUIIcon(.chevronRight, size: 12, color: Color.textSecondary.opacity(0.55))
+                    if isIncome {
+                        Color.clear.frame(width: 32, height: 12)
+                    } else {
+                        CozyUIIcon(.chevronRight, size: 12, color: Color.textSecondary.opacity(0.55))
+                    }
                 }
                 Text(value)
+                    .salaryMaskAccessibility(value == MoneyFormat.hiddenPlaceholder, language: settings.language)
                     .font(.appMetric)
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
@@ -461,6 +507,9 @@ public struct OverviewView: View {
     private func cashFlowCard(_ snapshot: MonthlySnapshot, lang: AppLanguage) -> some View {
         let incomeLabel = L10n.text(lang, en: "Income", vi: "Thu", zh: "收入")
         let spendLabel = L10n.text(lang, en: "Spending", vi: "Chi", zh: "支出")
+        let hideSalary = settings.hideSalary
+        // Only weeks whose income includes salary lose their income bar; others are drawn.
+        let plottedIncomeBins = snapshot.weeklyCashFlow.filter { !$0.isSalaryMasked(hidden: hideSalary) }
 
         return Card {
             HStack {
@@ -475,7 +524,9 @@ public struct OverviewView: View {
                 }
                 Spacer()
                 HStack(spacing: 10) {
-                    legendDot(color: Color.positive.opacity(0.7), label: incomeLabel)
+                    if !plottedIncomeBins.isEmpty {
+                        legendDot(color: Color.positive.opacity(0.7), label: incomeLabel)
+                    }
                     legendDot(color: Color.ink, label: spendLabel)
                 }
             }
@@ -484,13 +535,17 @@ public struct OverviewView: View {
                 ForEach(snapshot.weeklyCashFlow) { bin in
                     let isDimmed = hoveredWeekLabel != nil && hoveredWeekLabel != bin.label
 
-                    BarMark(
-                        x: .value("Week", bin.label),
-                        y: .value(incomeLabel, settings.currency.toMajor(bin.incomeMinor))
-                    )
-                    .foregroundStyle(Color.positive.opacity(isDimmed ? 0.28 : 0.75))
-                    .cornerRadius(4)
-                    .position(by: .value("Kind", incomeLabel))
+                    // A week whose income includes hidden salary is left out of the chart data so
+                    // the bar height and axis scale cannot reveal it.
+                    if !bin.isSalaryMasked(hidden: hideSalary) {
+                        BarMark(
+                            x: .value("Week", bin.label),
+                            y: .value(incomeLabel, settings.currency.toMajor(bin.incomeMinor))
+                        )
+                        .foregroundStyle(Color.positive.opacity(isDimmed ? 0.28 : 0.75))
+                        .cornerRadius(4)
+                        .position(by: .value("Kind", incomeLabel))
+                    }
 
                     BarMark(
                         x: .value("Week", bin.label),
@@ -545,12 +600,12 @@ public struct OverviewView: View {
                             cashFlowTooltipCard(
                                 title: bin.label,
                                 incomeLabel: incomeLabel,
-                                incomeText: MoneyFormat.format(
+                                incomeText: MoneyFormat.masked(MoneyFormat.format(
                                     minor: bin.incomeMinor,
                                     currency: settings.currency,
                                     language: lang,
                                     signed: bin.incomeMinor > 0
-                                ),
+                                ), hidden: bin.isSalaryMasked(hidden: hideSalary)),
                                 spendLabel: spendLabel,
                                 spendText: MoneyFormat.format(
                                     minor: bin.spendingMinor,
@@ -594,6 +649,7 @@ public struct OverviewView: View {
                     .font(.system(size: 11, weight: .medium, design: .rounded))
                     .foregroundStyle(Color.textSecondary)
                 Text(incomeText)
+                    .salaryMaskAccessibility(incomeText == MoneyFormat.hiddenPlaceholder, language: settings.language)
                     .font(.system(size: 11.5, weight: .bold, design: .rounded))
                     .monospacedDigit()
                     .foregroundStyle(Color.textPrimary)
@@ -744,6 +800,88 @@ public struct OverviewView: View {
                 }
             }
         }
+    }
+
+    @ViewBuilder
+    private func commitmentsCard(lang: AppLanguage) -> some View {
+        let overview = CommitmentsOverview(plans: store.activePlans, todayKey: DateKey.dayKey(from: Date()))
+        if !overview.active.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                SectionHeading(
+                    L10n.text(lang, en: "Commitments", vi: "Khoản cam kết", zh: "分期与贷款"),
+                    actionLabel: L10n.text(lang, en: "All commitments", vi: "Tất cả khoản cam kết", zh: "全部分期与贷款"),
+                    action: onSelectCommitments
+                )
+
+                Button {
+                    CozyHaptics.light()
+                    onSelectCommitments()
+                } label: {
+                    VStack(alignment: .leading, spacing: 14) {
+                        HStack(alignment: .top, spacing: 16) {
+                            commitmentStat(
+                                title: L10n.text(lang, en: "This month", vi: "Tháng này", zh: "本月应还"),
+                                minor: overview.committedThisMonthMinor,
+                                lang: lang
+                            )
+                            commitmentStat(
+                                title: L10n.text(lang, en: "Remaining debt", vi: "Dư nợ còn lại", zh: "剩余债务"),
+                                minor: overview.remainingDebtMinor,
+                                lang: lang
+                            )
+                        }
+
+                        if let next = overview.nextPayment {
+                            Divider().overlay(Color.hairline)
+                            HStack(spacing: 10) {
+                                CategoryBadge(category: next.plan.category, size: 30)
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text(L10n.text(lang, en: "Next payment", vi: "Kỳ tiếp theo", zh: "下期还款"))
+                                        .font(.appCaption)
+                                        .foregroundStyle(Color.textSecondary)
+                                    Text(next.plan.name)
+                                        .font(.appBodyMedium)
+                                        .foregroundStyle(Color.textPrimary)
+                                        .lineLimit(1)
+                                }
+                                Spacer(minLength: 8)
+                                VStack(alignment: .trailing, spacing: 1) {
+                                    Text(MoneyFormat.format(minor: next.payment.amountMinor, currency: settings.currency, language: lang))
+                                        .font(.appAmount)
+                                        .foregroundStyle(Color.textPrimary)
+                                        .lineLimit(1)
+                                    Text(DateKey.formatCompactDay(next.payment.dayKey, language: lang))
+                                        .font(.appCaption)
+                                        .foregroundStyle(Color.textSecondary)
+                                }
+                                .fixedSize(horizontal: true, vertical: false)
+                            }
+                        }
+                    }
+                    .padding(18)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .cardSurface()
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.themedPlain)
+                .accessibilityHint(L10n.text(lang, en: "Opens commitments", vi: "Mở khoản cam kết", zh: "打开分期与贷款"))
+            }
+            .cozyEntrance(index: 2)
+        }
+    }
+
+    private func commitmentStat(title: String, minor: Int64, lang: AppLanguage) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.appCaption)
+                .foregroundStyle(Color.textSecondary)
+            Text(MoneyFormat.format(minor: minor, currency: settings.currency, language: lang))
+                .font(.appMetric)
+                .foregroundStyle(Color.textPrimary)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func goalsPreviewCard(lang: AppLanguage) -> some View {

@@ -45,6 +45,8 @@ let tests: [String: [String]] = [
     "ClaudeKit": ["TallyCore"],
     "BudgetKit": ["TallyCore", "ClaudeKit"],
     "SyncKit": ["TallyCore", "BudgetKit"],
+    // Store/sync wiring tests run against an in-memory SwiftData container (never the app's store).
+    "AppServices": ["TallyCore", "ClaudeKit", "BudgetKit", "SyncKit", "Persistence"],
 ]
 
 func makeTargets(_ name: String, dependencies: [String]) -> [Target] {

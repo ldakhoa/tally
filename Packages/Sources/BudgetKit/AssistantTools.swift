@@ -14,6 +14,19 @@ public struct AssistantActionReceipt: Identifiable, Codable, Hashable, Sendable 
         case goalCreated
         case goalUpdated
         case goalDeleted
+        case planCreated
+        case planConverted
+        case planUpdated
+        case planSettled
+        case planUnsettled
+        case planDeleted
+
+        public var isPlan: Bool {
+            switch self {
+            case .planCreated, .planConverted, .planUpdated, .planSettled, .planUnsettled, .planDeleted: return true
+            default: return false
+            }
+        }
     }
 
     public let id: UUID
@@ -23,6 +36,9 @@ public struct AssistantActionReceipt: Identifiable, Codable, Hashable, Sendable 
     public let subtitle: String
     public let amountText: String?
     public let isPositive: Bool
+    /// Extra lines shown in full under the subtitle (plan receipts list the saved values here).
+    /// Optional so receipts persisted before this field existed still decode.
+    public let details: [String]?
 
     public init(
         id: UUID = UUID(),
@@ -31,7 +47,8 @@ public struct AssistantActionReceipt: Identifiable, Codable, Hashable, Sendable 
         title: String,
         subtitle: String,
         amountText: String? = nil,
-        isPositive: Bool = false
+        isPositive: Bool = false,
+        details: [String]? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -40,6 +57,7 @@ public struct AssistantActionReceipt: Identifiable, Codable, Hashable, Sendable 
         self.subtitle = subtitle
         self.amountText = amountText
         self.isPositive = isPositive
+        self.details = details
     }
 }
 
@@ -54,6 +72,8 @@ public enum AssistantCommand: Equatable, Sendable {
         public let dayKey: String
         public let note: String
         public let memberHint: String?
+        /// Currency the amount was stated in when it is not the household's (converted by code).
+        public let currency: CurrencyCode?
 
         public init(
             name: String,
@@ -62,7 +82,8 @@ public enum AssistantCommand: Equatable, Sendable {
             category: CategoryID,
             dayKey: String,
             note: String = "",
-            memberHint: String? = nil
+            memberHint: String? = nil,
+            currency: CurrencyCode? = nil
         ) {
             self.name = name
             self.amountMajor = amountMajor
@@ -71,6 +92,7 @@ public enum AssistantCommand: Equatable, Sendable {
             self.dayKey = dayKey
             self.note = note
             self.memberHint = memberHint
+            self.currency = currency
         }
     }
 
@@ -111,6 +133,12 @@ public enum AssistantCommand: Equatable, Sendable {
         newName: String?
     )
     case deleteSavingsGoal(goalID: String?, goalName: String?)
+    case createPlan(PlanFields)
+    case convertTransactionToPlan(transactionID: String, months: Int, firstPaymentDayKey: String)
+    case updatePlan(planID: String, fields: PlanFields)
+    case settlePlan(planID: String, dayKey: String)
+    case undoPlanSettlement(planID: String)
+    case deletePlan(planID: String, removePayments: Bool)
 }
 
 public enum AssistantToolDecodeError: Error, Equatable, Sendable {
@@ -130,7 +158,11 @@ public enum AssistantToolCatalog {
     public static let updateSavingsGoalName = "update_savings_goal"
     public static let deleteSavingsGoalName = "delete_savings_goal"
 
-    public static let allTools: [ClaudeTool] = [
+    /// Every tool offered to Claude: transactions, budgets, goals, installment plans/loans, the
+    /// read-only adviser figures and calculators, and the salary access request.
+    public static let allTools: [ClaudeTool] = baseTools + planTools + AdviserToolCatalog.tools + [SalaryAccessTool.tool]
+
+    static let baseTools: [ClaudeTool] = [
         ClaudeTool(
             name: addTransactionsName,
             description: "Record one or more completed expenses or income transactions into Tally. Use this whenever the user says they paid for something, spent money, paid a bill/credit card/rent, or received salary/income.",
@@ -138,10 +170,11 @@ public enum AssistantToolCatalog {
                 ("items", .schemaArray(
                     of: .schemaObject([
                         ("name", .schemaString("Short, clear merchant or description (e.g. 'Rent', 'Credit card payment', 'Tiền nhà', '房租').")),
-                        ("amount", .schemaNumber("Positive numeric amount in the household's active currency major units.")),
+                        ("amount", .schemaNumber("Positive amount in major units, exactly as stated (do not convert currencies yourself).")),
+                        ("currency", .schemaEnum(CurrencyCode.allCases.map(\.rawValue), "Only when the amount was stated in a currency other than the household's: that currency. Tally converts it and keeps the original in the note.")),
                         ("type", .schemaEnum(["expense", "income"], "Whether this is an expense or income.")),
                         ("category", .schemaEnum(CategoryID.allCases.map(\.rawValue), "Best matching category ID. Use 'housing' for rent, 'bills' for utilities/credit card payments/subscriptions, 'food' for meals/groceries, 'transport' for rides/MRT, 'shopping' for purchases, 'health' for medical/gym, 'entertainment' for fun, 'salary'/'freelance'/'income' for income.")),
-                        ("day_key", .schemaString("Optional transaction date in YYYY-MM-DD format. Defaults to today if omitted.")),
+                        ("day_key", .schemaString("Optional transaction date in YYYY-MM-DD format, taken from the dates listed in the context (e.g. yesterday). Defaults to today if omitted.")),
                         ("note", .schemaString("Optional short note.")),
                         ("member", .schemaString("Optional household member: 'me', 'partner', or their display name.")),
                     ], required: ["name", "amount", "type", "category"]),
@@ -235,6 +268,9 @@ public enum AssistantToolCatalog {
         defaultMonthKey: String
     ) -> Result<AssistantCommand, AssistantToolDecodeError> {
         let input = toolUse.input
+        if planToolNames.contains(toolUse.name) {
+            return decodePlanTool(toolUse, todayKey: defaultDayKey)
+        }
         switch toolUse.name {
         case addTransactionsName:
             guard let rawItems = input["items"]?.arrayValue, !rawItems.isEmpty else {
@@ -257,6 +293,7 @@ public enum AssistantToolCatalog {
                 let dayKey = rawDay.flatMap { DateKey.date(fromDayKey: $0) != nil ? $0 : nil } ?? defaultDayKey
                 let note = item["note"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let member = item["member"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let currency = item["currency"]?.stringValue.flatMap { CurrencyCode(rawValue: $0.uppercased()) }
                 parsed.append(.init(
                     name: rawName,
                     amountMajor: amount,
@@ -264,7 +301,8 @@ public enum AssistantToolCatalog {
                     category: category,
                     dayKey: dayKey,
                     note: note,
-                    memberHint: member?.isEmpty == false ? member : nil
+                    memberHint: member?.isEmpty == false ? member : nil,
+                    currency: currency
                 ))
             }
             guard !parsed.isEmpty else {
@@ -373,5 +411,47 @@ public enum AssistantToolCatalog {
         default:
             return .failure(.unknownTool(toolUse.name))
         }
+    }
+}
+
+// MARK: - Deterministic helpers for tool execution
+
+public enum AssistantAmounts {
+    /// Storage amount in `household` currency for an amount the user stated in `stated` currency
+    /// (approximate conversion via `CurrencyConverter`), and the note with the original amount
+    /// appended when converted. Never below one payable unit.
+    public static func storageMinor(
+        amountMajor: Double,
+        stated: CurrencyCode?,
+        household: CurrencyCode,
+        note: String,
+        language: AppLanguage
+    ) -> (minor: Int64, note: String) {
+        let draft = ParsedTransactionDraft(name: "", amountMajor: amountMajor, currency: stated, note: note)
+        let resolved = AITransactionParser.resolvedAmountAndNote(for: draft, targetCurrency: household, language: language)
+        return (max(AdviserMath.step(for: household), resolved.amountMinor), resolved.note)
+    }
+}
+
+public enum AssistantBudgetStatus {
+    /// After an expense is saved: that category's budget for the month, computed (spent, limit,
+    /// remaining or over, % used), so the model reports it without doing the sums. `nil` when the
+    /// category has no budget that month.
+    public static func line(
+        category: CategoryID,
+        monthKey: String,
+        transactions: [TransactionRecord],
+        budgets: [BudgetLimitRecord],
+        currency: CurrencyCode
+    ) -> String? {
+        guard let budget = budgets.first(where: { !$0.isDeleted && $0.monthKey == monthKey && $0.category == category }) else { return nil }
+        let spent = transactions
+            .filter { !$0.isDeleted && $0.type == .expense && $0.category == category && $0.monthKey == monthKey }
+            .reduce(Int64(0)) { $0 + $1.amountMinor }
+        let money = { (minor: Int64) in MoneyFormat.format(minor: minor, currency: currency, language: .english) }
+        let percent = AdviserMath.percent(spent, of: budget.limitMinor).map { String(format: "%.1f%%", $0) } ?? "n/a"
+        let left = budget.limitMinor - spent
+        let tail = left >= 0 ? "\(money(left)) left" : "over by \(money(-left))"
+        return "Budget \(category.rawValue) \(monthKey): spent \(money(spent)) of \(money(budget.limitMinor)) (\(percent) used), \(tail)."
     }
 }

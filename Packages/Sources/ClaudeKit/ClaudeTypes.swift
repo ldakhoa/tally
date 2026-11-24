@@ -94,18 +94,66 @@ public struct ClaudeToolUse: Codable, Hashable, Sendable {
     }
 }
 
+/// Base64 image for an `image` content block. Never log `base64Data`.
+public struct ClaudeImageSource: Hashable, Sendable {
+    /// `image/jpeg`, `image/png`, `image/gif` or `image/webp`.
+    public var mediaType: String
+    /// Standard base64 (no line breaks) of the encoded image bytes.
+    public var base64Data: String
+
+    public static let supportedMediaTypes: Set<String> = ["image/jpeg", "image/png", "image/gif", "image/webp"]
+
+    public init(mediaType: String, base64Data: String) {
+        self.mediaType = mediaType
+        self.base64Data = base64Data
+    }
+
+    public init(mediaType: String, data: Data) {
+        self.init(mediaType: mediaType, base64Data: data.base64EncodedString())
+    }
+}
+
 public enum ClaudeContentBlock: Hashable, Sendable {
     case text(String)
+    case image(ClaudeImageSource)
     case toolUse(ClaudeToolUse)
     case toolResult(toolUseID: String, content: String, isError: Bool = false)
+
+    public var isImage: Bool {
+        if case .image = self { return true }
+        return false
+    }
+
+    public var isToolResult: Bool {
+        if case .toolResult = self { return true }
+        return false
+    }
+}
+
+extension ClaudeContentBlock: CustomStringConvertible {
+    /// Debug description that never includes image bytes.
+    public var description: String {
+        switch self {
+        case .text(let text): return "text(\(text.count) chars)"
+        case .image(let source): return "image(\(source.mediaType), \(source.base64Data.count) base64 chars)"
+        case .toolUse(let tool): return "tool_use(\(tool.name))"
+        case .toolResult(let id, _, let isError): return "tool_result(\(id)\(isError ? ", error" : ""))"
+        }
+    }
 }
 
 extension ClaudeContentBlock: Codable {
     private enum CodingKeys: String, CodingKey {
-        case type, text, id, name, input
+        case type, text, id, name, input, source
         case toolUseID = "tool_use_id"
         case content
         case isError = "is_error"
+    }
+
+    private enum ImageSourceKeys: String, CodingKey {
+        case type
+        case mediaType = "media_type"
+        case data
     }
 
     public init(from decoder: Decoder) throws {
@@ -114,6 +162,16 @@ extension ClaudeContentBlock: Codable {
         switch type {
         case "text":
             self = .text(try container.decode(String.self, forKey: .text))
+        case "image":
+            let source = try container.nestedContainer(keyedBy: ImageSourceKeys.self, forKey: .source)
+            let sourceType = try source.decode(String.self, forKey: .type)
+            guard sourceType == "base64" else {
+                throw DecodingError.dataCorruptedError(forKey: .type, in: source, debugDescription: "Unsupported image source \(sourceType)")
+            }
+            self = .image(ClaudeImageSource(
+                mediaType: try source.decode(String.self, forKey: .mediaType),
+                base64Data: try source.decode(String.self, forKey: .data)
+            ))
         case "tool_use":
             let id = try container.decode(String.self, forKey: .id)
             let name = try container.decode(String.self, forKey: .name)
@@ -135,6 +193,12 @@ extension ClaudeContentBlock: Codable {
         case .text(let value):
             try container.encode("text", forKey: .type)
             try container.encode(value, forKey: .text)
+        case .image(let image):
+            try container.encode("image", forKey: .type)
+            var source = container.nestedContainer(keyedBy: ImageSourceKeys.self, forKey: .source)
+            try source.encode("base64", forKey: .type)
+            try source.encode(image.mediaType, forKey: .mediaType)
+            try source.encode(image.base64Data, forKey: .data)
         case .toolUse(let tool):
             try container.encode("tool_use", forKey: .type)
             try container.encode(tool.id, forKey: .id)
@@ -206,7 +270,37 @@ public struct ClaudeMessage: Codable, Hashable, Sendable {
     }
 
     public static func user(_ content: String) -> ClaudeMessage { .init(role: .user, content: content) }
+    /// A user turn with images. Images come first, then the text (the order the Messages API
+    /// recommends); with no images this is a plain text message.
+    public static func user(_ text: String, images: [ClaudeImageSource]) -> ClaudeMessage {
+        guard !images.isEmpty else { return .user(text) }
+        var blocks: [ClaudeContentBlock] = images.map { .image($0) }
+        if !text.isEmpty { blocks.append(.text(text)) }
+        return .init(role: .user, blocks: blocks)
+    }
     public static func assistant(_ content: String) -> ClaudeMessage { .init(role: .assistant, content: content) }
+
+    /// `true` for a user message carrying tool results (part of a tool loop, not a user turn).
+    public var isToolResults: Bool {
+        role == .user && (blocks?.contains(where: \.isToolResult) ?? false)
+    }
+
+    /// `true` for a message the user typed (text and/or images), as opposed to tool results.
+    public var isUserTurn: Bool { role == .user && !isToolResults }
+
+    public var imageCount: Int { blocks?.filter(\.isImage).count ?? 0 }
+
+    /// The same message with every image block replaced by one short text placeholder, so old
+    /// turns are not resent with their image bytes.
+    public func replacingImages(withPlaceholder placeholder: String) -> ClaudeMessage {
+        guard let blocks, blocks.contains(where: \.isImage) else { return self }
+        var result: [ClaudeContentBlock] = [.text(placeholder)]
+        result.append(contentsOf: blocks.filter { !$0.isImage })
+        if result.allSatisfy({ if case .text = $0 { return true } else { return false } }) {
+            return .init(role: role, content: result.compactMap { if case .text(let t) = $0 { return t } else { return nil } }.joined(separator: "\n"))
+        }
+        return .init(role: role, blocks: result)
+    }
     public static func assistant(blocks: [ClaudeContentBlock]) -> ClaudeMessage { .init(role: .assistant, blocks: blocks) }
     public static func toolResults(_ results: [(id: String, content: String, isError: Bool)]) -> ClaudeMessage {
         .init(role: .user, blocks: results.map { .toolResult(toolUseID: $0.id, content: $0.content, isError: $0.isError) })

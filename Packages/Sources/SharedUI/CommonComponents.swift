@@ -161,12 +161,13 @@ public struct PeriodPickerSheet: View {
                             if selectedSummary.incomeMinor > 0 || selectedSummary.spendingMinor > 0 {
                                 HStack(spacing: 8) {
                                     if selectedSummary.incomeMinor > 0 {
-                                        Text(MoneyFormat.format(
+                                        Text(MoneyFormat.masked(MoneyFormat.format(
                                             minor: selectedSummary.incomeMinor,
                                             currency: settings.currency,
                                             language: lang,
                                             signed: true
-                                        ))
+                                        ), hidden: selectedSummary.isSalaryMasked(hidden: settings.hideSalary)))
+                                        .salaryMaskAccessibility(selectedSummary.isSalaryMasked(hidden: settings.hideSalary), language: lang)
                                         .foregroundStyle(Color.positive)
                                     }
                                     if selectedSummary.spendingMinor > 0 {
@@ -408,6 +409,7 @@ public struct TransactionRow: View {
             Spacer(minLength: 8)
 
             Text(formattedAmount)
+                .salaryMaskAccessibility(hidesAmount, language: settings.language)
                 .font(.appAmount)
                 .foregroundStyle(transaction.type == .income ? Color.positive : Color.textPrimary)
                 .lineLimit(1)
@@ -443,13 +445,17 @@ public struct TransactionRow: View {
         return parts.joined(separator: " · ")
     }
 
+    private var hidesAmount: Bool {
+        transaction.isSalaryMasked(hidden: settings.hideSalary)
+    }
+
     private var formattedAmount: String {
         let signed = transaction.type == .income ? transaction.amountMinor : -transaction.amountMinor
-        return MoneyFormat.format(
+        return MoneyFormat.masked(MoneyFormat.format(
             minor: signed,
             currency: settings.currency,
             language: settings.language,
             signed: transaction.type == .income
-        )
+        ), hidden: hidesAmount)
     }
 }

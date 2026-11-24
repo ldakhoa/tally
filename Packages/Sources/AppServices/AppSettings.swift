@@ -70,6 +70,22 @@ public final class AppSettings {
         didSet { defaults.set(syncsWithICloud, forKey: Keys.syncsWithICloud) }
     }
 
+    /// Salary privacy (per device): owns the hidden state and the optional Face ID requirement.
+    /// Change it through the gate (`hide()`, `reveal`, `toggle`, `setRequiresAuthentication`).
+    public let salaryGate: SalaryVisibilityGate
+
+    /// The effective state every screen and the assistant read: `true` while salary and the
+    /// figures that include it are masked (see `BudgetKit.SalaryPrivacy`).
+    public var hideSalary: Bool { salaryGate.isHidden }
+
+    /// `true` when revealing salary needs owner authentication.
+    public var requiresAuthToShowSalary: Bool { salaryGate.requiresAuthentication }
+
+    /// The eye control: hides salary, or reveals it (after Face ID / passcode when required).
+    public func toggleSalaryVisibility() async {
+        await salaryGate.toggle(reason: SalaryAuthPrompt.reveal(in: language))
+    }
+
     public var soundEffectsEnabled: Bool {
         didSet {
             defaults.set(soundEffectsEnabled, forKey: Keys.soundEffectsEnabled)
@@ -102,6 +118,7 @@ public final class AppSettings {
     public var emailInboxURL: String {
         didSet { defaults.set(emailInboxURL, forKey: Keys.emailInboxURL) }
     }
+
 
     public private(set) var hasEmailInboxSecret = false
     public var isEmailInboxConfigured: Bool {
@@ -211,6 +228,7 @@ public final class AppSettings {
         self.flagAutoCapturedForReview = storedFlagReview
         self.syncsWithICloud = storedSync
         self.soundEffectsEnabled = storedSounds
+        self.salaryGate = SalaryVisibilityGate(defaults: defaults)
         self.myMemberID = storedMemberID
         self.myDisplayName = storedName
         self.partnerDisplayName = storedPartner

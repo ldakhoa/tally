@@ -3,6 +3,7 @@ import AssistantUI
 import BudgetsUI
 import BudgetKit
 import CloudKit
+import Combine
 import DesignSystem
 import GoalsUI
 import OverviewUI
@@ -44,6 +45,7 @@ struct TallyApp: App {
                 .environment(cloudSync)
                 .environment(emailInbox)
                 .environment(assistant)
+                .environment(\.hideSalary, settings.hideSalary)
                 #if os(macOS)
                 .frame(minWidth: 780, minHeight: 580)
                 #endif
@@ -55,12 +57,22 @@ struct TallyApp: App {
                     emailInbox.syncIfConfigured(settings: settings, store: store)
                 }
                 .onChange(of: scenePhase) { _, phase in
+                    // Re-lock salary when the app leaves the foreground for real. `.inactive`
+                    // (the Face ID sheet, Control Centre, an incoming call) deliberately does not.
+                    if phase == .background {
+                        settings.salaryGate.appDidEnterBackground()
+                    }
                     if phase == .active {
                         store.reload()
                         settings.refreshKeychain()
                         cloudSync.appBecameActive()
                         emailInbox.syncIfConfigured(settings: settings, store: store)
                     }
+                }
+                // Day rollover while the app stays open (e.g. left running past midnight):
+                // `reload()` notices the new day and books plan payments that just fell due.
+                .onReceive(Self.dayChangePublisher) { _ in
+                    store.reload()
                 }
                 .onOpenURL { url in
                     Task { await handleDeepLink(url) }
@@ -77,6 +89,18 @@ struct TallyApp: App {
             #endif
         }
     }
+
+    /// Calendar day changed (posted at local midnight and after clock / time zone changes), plus
+    /// UIKit's significant time change on iOS & iPadOS. Delivered on the main run loop.
+    private static let dayChangePublisher: AnyPublisher<Notification, Never> = {
+        let dayChanged = NotificationCenter.default.publisher(for: .NSCalendarDayChanged)
+        #if os(iOS)
+        let significant = NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)
+        return dayChanged.merge(with: significant).receive(on: RunLoop.main).eraseToAnyPublisher()
+        #else
+        return dayChanged.receive(on: RunLoop.main).eraseToAnyPublisher()
+        #endif
+    }()
 
     /// Fallback URL scheme for Apple Shortcuts or Share Sheets:
     /// `tally://log?text=TK+1903+-125000+VND+tai+Highlands&source=bankEmail`

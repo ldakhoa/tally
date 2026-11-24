@@ -10,19 +10,48 @@ public struct ChatEntry: Identifiable, Codable, Hashable, Sendable {
     public var text: String
     public var actions: [AssistantActionReceipt]
     public let timestamp: Date
+    /// Images attached to a user message (display copies live in `ChatImageStore`). Optional so
+    /// history written before images existed still decodes.
+    public var attachments: [ChatImageAttachment]?
+    /// Salary consent cards shown in this assistant reply (what was asked and how it ended, never
+    /// a salary figure). Optional so history written before consent cards existed still decodes.
+    public var consents: [SalaryConsentRecord]?
 
     public init(
         id: UUID = UUID(),
         role: ClaudeMessage.Role,
         text: String,
         actions: [AssistantActionReceipt] = [],
-        timestamp: Date = Date()
+        timestamp: Date = Date(),
+        attachments: [ChatImageAttachment]? = nil,
+        consents: [SalaryConsentRecord]? = nil
     ) {
         self.id = id
         self.role = role
         self.text = text
         self.actions = actions
         self.timestamp = timestamp
+        self.attachments = attachments
+        self.consents = consents
+    }
+
+    public var hasAttachments: Bool { !(attachments ?? []).isEmpty }
+    public var hasConsents: Bool { !(consents ?? []).isEmpty }
+
+    /// Worth keeping in history: has text, receipts, images or consent cards.
+    var hasContent: Bool {
+        !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !actions.isEmpty || hasAttachments || hasConsents
+    }
+
+    /// Adds `record` or replaces the card with the same id.
+    mutating func upsertConsent(_ record: SalaryConsentRecord) {
+        var list = consents ?? []
+        if let index = list.firstIndex(where: { $0.id == record.id }) {
+            list[index] = record
+        } else {
+            list.append(record)
+        }
+        consents = list
     }
 }
 
@@ -45,7 +74,7 @@ public struct ChatSession: Identifiable, Codable, Hashable, Sendable {
     }
 }
 
-private struct PersistedChatHistory: Codable {
+struct PersistedChatHistory: Codable {
     var activeSessionID: UUID?
     var sessions: [ChatSession]
 }
@@ -62,23 +91,99 @@ public final class AssistantService {
     public private(set) var statusLabel: String?
     public private(set) var errorMessage: String?
 
-    @ObservationIgnored private var wireHistory: [ClaudeMessage] = []
+    /// Context resent to the model (earlier turns' images replaced by placeholders).
+    @ObservationIgnored private(set) var wireHistory: [ClaudeMessage] = []
     @ObservationIgnored private var activeTask: Task<Void, Never>?
     @ObservationIgnored private var didUserCancel = false
     @ObservationIgnored private let persistEnabled: Bool
+    @ObservationIgnored private let historyURL: URL?
+    /// Display copies of attached images (device-only files beside the history JSON).
+    @ObservationIgnored public let imageStore: ChatImageStore?
+    /// Upload copies of the most recent user turn's images, kept in memory so Retry can resend
+    /// them; never persisted.
+    @ObservationIgnored private var lastTurnImages: (entryID: UUID, images: [ClaudeImageSource])?
+    /// Salary consent cards: the model's `request_salary_access` waits here for the user.
+    public let salaryAccess = SalaryAccessBroker()
+    /// `false` where no chat screen can show a consent card (Siri one-shots): salary requests are
+    /// answered "unavailable" without asking.
+    @ObservationIgnored var presentsConsentCards = true
+    /// Chat screens currently on screen; a consent card needs one to be answered.
+    @ObservationIgnored private var visibleChatScreens = 0
 
-    public init(persist: Bool = true) {
+    public init(persist: Bool = true, imageStore: ChatImageStore? = nil) {
         self.persistEnabled = persist
+        self.historyURL = persist ? Self.defaultHistoryFileURL : nil
+        self.imageStore = imageStore ?? (persist ? ChatImageStore.standard() : nil)
         if persist {
             loadHistoryFromDisk()
         }
     }
 
-    public func send(_ text: String, settings: AppSettings, store: BudgetStore) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isStreaming else { return }
+    /// History and images at explicit locations (tests).
+    init(historyFileURL: URL, imageStore: ChatImageStore) {
+        self.persistEnabled = true
+        self.historyURL = historyFileURL
+        self.imageStore = imageStore
+        loadHistoryFromDisk()
+    }
 
+    /// `true` when the backend that would answer the next message can read images (Claude).
+    /// The on-device Apple Intelligence path sends text-only prompts.
+    public static func canAttachImages(settings: AppSettings) -> Bool {
+        settings.resolvedBackend(for: .assistantChat) == .claude
+    }
+
+    /// Placeholder that replaces an earlier turn's images in the context resent to the model.
+    static func imagePlaceholder(count: Int) -> String {
+        count == 1
+            ? "[The user attached 1 image here earlier; it is no longer included.]"
+            : "[The user attached \(count) images here earlier; they are no longer included.]"
+    }
+
+    /// Display copy of an attached image, or `nil` when the file is missing or unreadable.
+    public func imageData(for attachment: ChatImageAttachment) -> Data? {
+        imageStore?.load(attachment.id)
+    }
+
+    public func send(_ text: String, images: [PreparedChatImage] = [], settings: AppSettings, store: BudgetStore) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty || !images.isEmpty, !isStreaming else { return }
+        if !images.isEmpty, !Self.canAttachImages(settings: settings) {
+            errorMessage = Self.imagesUnsupportedMessage(in: settings.language)
+            return
+        }
+        var attachments: [ChatImageAttachment] = []
+        for image in images.prefix(ImageUploadPolicy.maxImagesPerMessage) {
+            if let imageStore { try? imageStore.save(image.displayJPEG, for: image.id) }
+            attachments.append(image.attachment)
+        }
+        submit(
+            trimmed,
+            images: images.prefix(ImageUploadPolicy.maxImagesPerMessage).map(\.claudeSource),
+            attachments: attachments,
+            settings: settings,
+            store: store
+        )
+    }
+
+    public static func imagesUnsupportedMessage(in language: AppLanguage) -> String {
+        L10n.text(
+            language,
+            en: "Images need the Claude assistant. Apple Intelligence on this device reads text only — switch AI provider to Claude in Settings to attach photos.",
+            vi: "Gửi ảnh cần trợ lý Claude. Apple Intelligence trên máy chỉ đọc được chữ — hãy chuyển nhà cung cấp AI sang Claude trong Cài đặt để đính kèm ảnh.",
+            zh: "发送图片需要使用 Claude 助手。本机的 Apple 智能仅支持文字——请在设置中将 AI 提供方切换为 Claude 以附加图片。"
+        )
+    }
+
+    private func submit(
+        _ trimmed: String,
+        images: [ClaudeImageSource],
+        attachments: [ChatImageAttachment],
+        settings: AppSettings,
+        store: BudgetStore
+    ) {
         let lang = settings.language
+        guard !trimmed.isEmpty || !images.isEmpty else { return }
         guard let backend = settings.resolvedBackend(for: .assistantChat) else {
             errorMessage = settings.aiProvider == .appleIntelligence
                 ? settings.appleIntelligenceStatus.detail(in: lang)
@@ -93,8 +198,10 @@ public final class AssistantService {
         if activeSessionID == nil {
             activeSessionID = UUID()
         }
-        messages.append(ChatEntry(role: .user, text: trimmed))
-        wireHistory.append(.user(trimmed))
+        let userEntry = ChatEntry(role: .user, text: trimmed, attachments: attachments.isEmpty ? nil : attachments)
+        messages.append(userEntry)
+        wireHistory.append(.user(trimmed, images: images))
+        lastTurnImages = images.isEmpty ? nil : (userEntry.id, images)
         persistCurrentSession()
 
         let assistantID = UUID()
@@ -106,6 +213,8 @@ public final class AssistantService {
             defer {
                 self.isStreaming = false
                 self.statusLabel = nil
+                // The images were sent with their turn; later requests only carry a placeholder.
+                self.replaceImagesInWireHistory()
                 self.persistCurrentSession()
             }
             do {
@@ -260,6 +369,7 @@ public final class AssistantService {
             case .claude:
                 if let client = settings.makeClaudeClient() {
                     let tempService = AssistantService(persist: false)
+                    tempService.presentsConsentCards = false
                     tempService.wireHistory = [.user(trimmed)]
                     let tempID = UUID()
                     tempService.messages = [ChatEntry(id: tempID, role: .assistant, text: "")]
@@ -303,7 +413,7 @@ public final class AssistantService {
                 needsReview: false
             )
             store.saveTransaction(record)
-            let formatted = MoneyFormat.format(minor: record.amountMinor, currency: settings.currency, language: lang)
+            let formatted = MoneyFormat.masked(MoneyFormat.format(minor: record.amountMinor, currency: settings.currency, language: lang), hidden: record.isSalaryMasked(hidden: settings.hideSalary))
             let reply = L10n.text(
                 lang,
                 en: "Logged \(record.name): \(formatted) in \(record.category.title(in: lang)).",
@@ -345,16 +455,20 @@ public final class AssistantService {
         store: BudgetStore
     ) async throws -> String {
         let lang = settings.language
-        let maxToolRounds = 4
+        // Room for: figure tools -> salary request -> figure tools again -> answer, plus actions.
+        let maxToolRounds = 6
         var diagnostic = "claude no-rounds"
         for round in 0...maxToolRounds {
             let systemPrompt = BudgetAssistantPrompt.systemPrompt(
                 snapshot: store.monthlySnapshot,
                 goals: store.activeGoals,
+                plans: store.plans,
                 currency: settings.currency,
                 language: lang,
                 myName: settings.currentMember.name,
-                partnerName: settings.partnerDisplayName
+                partnerName: settings.partnerDisplayName,
+                hideSalary: settings.hideSalary,
+                adviserSnapshot: AdviserSnapshot.lines(data: Self.adviserData(settings: settings, store: store))
             )
 
             let request = ClaudeRequest(
@@ -402,7 +516,22 @@ public final class AssistantService {
                 var receipts: [AssistantActionReceipt] = []
 
                 for toolUse in completion.toolUses {
-                    let outcome = self.execute(toolUse: toolUse, settings: settings, store: store)
+                    if toolUse.name == SalaryAccessTool.name {
+                        let outcome = await self.requestSalaryAccess(toolUse, assistantID: assistantID, settings: settings)
+                        toolResults.append((id: toolUse.id, content: outcome.toolResult, isError: outcome.isError))
+                        continue
+                    }
+                    if AdviserToolCatalog.names.contains(toolUse.name) {
+                        let output = AdviserToolCatalog.run(toolUse, context: AdviserToolContext(
+                            data: Self.adviserData(settings: settings, store: store),
+                            currentMemberID: settings.currentMember.id,
+                            members: store.knownMembers(settings: settings),
+                            salaryRequestAvailable: self.presentsConsentCards && !self.salaryAccess.hasRequested(turnID: assistantID)
+                        ))
+                        toolResults.append((id: toolUse.id, content: output.text, isError: output.isError))
+                        continue
+                    }
+                    let outcome = Self.execute(toolUse: toolUse, settings: settings, store: store)
                     toolResults.append((id: toolUse.id, content: outcome.toolOutput, isError: outcome.isError))
                     receipts.append(contentsOf: outcome.receipts)
                 }
@@ -414,6 +543,8 @@ public final class AssistantService {
 
                 self.wireHistory.append(.toolResults(toolResults))
                 self.statusLabel = nil
+                // Stopped while a consent card was waiting: end here (the results are recorded).
+                try Task.checkCancellation()
                 continue
             }
 
@@ -437,27 +568,108 @@ public final class AssistantService {
         activeTask = nil
         isStreaming = false
         statusLabel = nil
-        if let last = messages.last, last.role == .assistant, last.text.isEmpty, last.actions.isEmpty {
+        if let last = messages.last, last.role == .assistant, last.text.isEmpty, last.actions.isEmpty, !last.hasConsents {
             messages.removeLast()
         }
         persistCurrentSession()
     }
 
+    // MARK: - Salary consent
+
+    /// Runs one `request_salary_access` call: a consent card in the reply `assistantID`, waiting
+    /// for Allow / Not now, then the gate. The card's final state is saved with the chat.
+    func requestSalaryAccess(_ toolUse: ClaudeToolUse, assistantID: UUID, settings: AppSettings) async -> SalaryAccessOutcome {
+        // Nobody can answer a card (Siri, or the user left the chat while the reply was running):
+        // treated as declined.
+        guard presentsConsentCards, visibleChatScreens > 0 else { return .unavailable }
+        let lang = settings.language
+        let previousStatus = statusLabel
+        let outcome = await salaryAccess.request(
+            reason: SalaryAccessTool.reason(from: toolUse.input),
+            turnID: assistantID,
+            gate: settings.salaryGate,
+            language: lang
+        ) { record in
+            if let index = self.messages.firstIndex(where: { $0.id == assistantID }) {
+                self.messages[index].upsertConsent(record)
+            }
+            self.statusLabel = record.status == .pending
+                ? L10n.text(lang, en: "Waiting for your answer…", vi: "Đang chờ bạn trả lời…", zh: "正在等待您的回答…")
+                : previousStatus
+            self.persistCurrentSession()
+        }
+        return outcome
+    }
+
+    /// Allow on a consent card.
+    public func allowSalaryRequest(_ id: UUID) {
+        salaryAccess.allow(id)
+    }
+
+    /// Not now on a consent card.
+    public func declineSalaryRequest(_ id: UUID) {
+        salaryAccess.decline(id)
+    }
+
+    public func chatScreenDidAppear() {
+        visibleChatScreens += 1
+    }
+
+    /// The chat screen went away: a card still waiting is treated as Not now.
+    public func chatScreenDidDisappear() {
+        visibleChatScreens = max(0, visibleChatScreens - 1)
+        if visibleChatScreens == 0 {
+            salaryAccess.declinePending()
+        }
+    }
+
+    /// The data the adviser tools and snapshot are computed from.
+    static func adviserData(settings: AppSettings, store: BudgetStore, now: Date = Date()) -> AdviserDataSet {
+        AdviserDataSet(
+            transactions: store.activeTransactions,
+            budgets: store.activeBudgets,
+            goals: store.activeGoals,
+            plans: store.plans,
+            currency: settings.currency,
+            todayKey: DateKey.dayKey(from: now),
+            salaryHidden: settings.hideSalary
+        )
+    }
+
     public func retryLast(settings: AppSettings, store: BudgetStore) {
         guard !isStreaming else { return }
         guard let lastUserIdx = messages.lastIndex(where: { $0.role == .user }) else { return }
-        let lastUserText = messages[lastUserIdx].text
+        let entry = messages[lastUserIdx]
+        let attachments = entry.attachments ?? []
+        var images: [ClaudeImageSource] = []
+        if !attachments.isEmpty {
+            guard Self.canAttachImages(settings: settings) else {
+                errorMessage = Self.imagesUnsupportedMessage(in: settings.language)
+                return
+            }
+            if let cached = lastTurnImages, cached.entryID == entry.id {
+                images = cached.images
+            } else {
+                // After a relaunch only the display copies remain: re-encode those for upload.
+                images = attachments.compactMap { attachment in
+                    imageStore?.load(attachment.id)
+                        .flatMap { ChatImageEncoder.prepareFromDisplayCopy($0, id: attachment.id) }?
+                        .claudeSource
+                }
+            }
+        }
         messages.removeSubrange(lastUserIdx...)
-        if let wireIdx = wireHistory.lastIndex(where: { $0.role == .user && $0.blocks == nil }) {
+        if let wireIdx = wireHistory.lastIndex(where: \.isUserTurn) {
             wireHistory.removeSubrange(wireIdx...)
         }
-        send(lastUserText, settings: settings, store: store)
+        submit(entry.text, images: images, attachments: attachments, settings: settings, store: store)
     }
 
     /// Starts a fresh chat while preserving the current conversation in history.
     public func startNewChat() {
         persistCurrentSession()
         didUserCancel = true
+        salaryAccess.reset()
         activeTask?.cancel()
         activeTask = nil
         isStreaming = false
@@ -466,6 +678,7 @@ public final class AssistantService {
         activeSessionID = nil
         messages.removeAll()
         wireHistory.removeAll()
+        lastTurnImages = nil
         saveHistoryToDisk()
     }
 
@@ -485,7 +698,12 @@ public final class AssistantService {
     }
 
     public func deleteSession(id: UUID) {
+        var orphaned = sessions.filter { $0.id == id }.reduce(into: Set<UUID>()) { $0.formUnion($1.attachmentIDs) }
+        if activeSessionID == id {
+            orphaned.formUnion(messages.flatMap { $0.attachments ?? [] }.map(\.id))
+        }
         sessions.removeAll { $0.id == id }
+        imageStore?.delete(orphaned)
         if activeSessionID == id {
             activeSessionID = nil
             messages.removeAll()
@@ -497,6 +715,7 @@ public final class AssistantService {
 
     public func clearAllHistory() {
         didUserCancel = true
+        salaryAccess.reset()
         activeTask?.cancel()
         activeTask = nil
         isStreaming = false
@@ -506,12 +725,14 @@ public final class AssistantService {
         messages.removeAll()
         wireHistory.removeAll()
         sessions.removeAll()
+        lastTurnImages = nil
+        imageStore?.deleteAll()
         saveHistoryToDisk()
     }
 
     // MARK: - Local History Persistence
 
-    private static var historyFileURL: URL? {
+    private static var defaultHistoryFileURL: URL? {
         guard let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else {
             return nil
         }
@@ -521,12 +742,18 @@ public final class AssistantService {
     }
 
     private func loadHistoryFromDisk() {
-        guard let url = Self.historyFileURL,
-              let data = try? Data(contentsOf: url),
-              let decoded = try? JSONDecoder().decode(PersistedChatHistory.self, from: data) else {
+        guard let url = historyURL else { return }
+        guard let data = try? Data(contentsOf: url) else {
+            // No history at all: any stored image is left over.
+            if !FileManager.default.fileExists(atPath: url.path) { imageStore?.removeOrphans(keeping: []) }
+            return
+        }
+        guard let decoded = try? JSONDecoder().decode(PersistedChatHistory.self, from: data) else {
             return
         }
         sessions = decoded.sessions.sorted { $0.updatedAt > $1.updatedAt }
+        // Images whose message is gone (e.g. a crash between saving the image and the history).
+        imageStore?.removeOrphans(keeping: sessions.reduce(into: Set<UUID>()) { $0.formUnion($1.attachmentIDs) })
         if let activeID = decoded.activeSessionID,
            let active = sessions.first(where: { $0.id == activeID }) {
             activeSessionID = active.id
@@ -537,14 +764,14 @@ public final class AssistantService {
 
     private func persistCurrentSession() {
         guard persistEnabled else { return }
-        let cleaned = messages.filter { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !$0.actions.isEmpty }
+        let cleaned = messages.filter(\.hasContent)
         guard !cleaned.isEmpty else { return }
 
         let sessionID = activeSessionID ?? UUID()
         activeSessionID = sessionID
 
-        let firstUserText = cleaned.first(where: { $0.role == .user })?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Chat"
-        let title = String(firstUserText.prefix(56))
+        let firstUserText = cleaned.first(where: { $0.role == .user && !$0.text.isEmpty })?.text.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let title = firstUserText.isEmpty ? "Chat" : String(firstUserText.prefix(56))
         let updated = ChatSession(id: sessionID, title: title, updatedAt: Date(), messages: cleaned)
 
         if let idx = sessions.firstIndex(where: { $0.id == sessionID }) {
@@ -554,13 +781,15 @@ public final class AssistantService {
         }
         sessions.sort { $0.updatedAt > $1.updatedAt }
         if sessions.count > 40 {
+            let dropped = sessions.dropFirst(40).reduce(into: Set<UUID>()) { $0.formUnion($1.attachmentIDs) }
             sessions = Array(sessions.prefix(40))
+            imageStore?.delete(dropped)
         }
         saveHistoryToDisk()
     }
 
     private func saveHistoryToDisk() {
-        guard persistEnabled, let url = Self.historyFileURL else { return }
+        guard persistEnabled, let url = historyURL else { return }
         let payload = PersistedChatHistory(activeSessionID: activeSessionID, sessions: sessions)
         if let data = try? JSONEncoder().encode(payload) {
             try? data.write(to: url, options: .atomic)
@@ -569,35 +798,47 @@ public final class AssistantService {
 
     private func rebuildWireHistory(from entries: [ChatEntry]) {
         wireHistory = entries.suffix(24).compactMap { entry in
-            let trimmed = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            var trimmed = entry.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            let imageCount = entry.attachments?.count ?? 0
+            if entry.role == .user, imageCount > 0 {
+                trimmed = trimmed.isEmpty ? Self.imagePlaceholder(count: imageCount) : Self.imagePlaceholder(count: imageCount) + "\n" + trimmed
+            }
             guard !trimmed.isEmpty else { return nil }
             return entry.role == .user ? .user(trimmed) : .assistant(trimmed)
+        }
+    }
+
+    /// Replaces the image blocks of every user turn in the resent context with a placeholder.
+    private func replaceImagesInWireHistory() {
+        wireHistory = wireHistory.map { message in
+            message.imageCount > 0 ? message.replacingImages(withPlaceholder: Self.imagePlaceholder(count: message.imageCount)) : message
         }
     }
 
     private func dropEmptyAssistant(id: UUID) {
         if let idx = messages.firstIndex(where: { $0.id == id }),
            messages[idx].text.isEmpty,
-           messages[idx].actions.isEmpty {
+           messages[idx].actions.isEmpty,
+           !messages[idx].hasConsents {
             messages.remove(at: idx)
         }
     }
 
     private func popDanglingUserWireMessage() {
-        if let last = wireHistory.last, last.role == .user, last.blocks == nil {
+        if let last = wireHistory.last, last.isUserTurn {
             wireHistory.removeLast()
         }
     }
 
     // MARK: - Cross-App Tool Execution
 
-    private struct ToolExecutionOutcome {
+    struct ToolExecutionOutcome {
         let toolOutput: String
         let isError: Bool
         let receipts: [AssistantActionReceipt]
     }
 
-    private func execute(
+    static func execute(
         toolUse: ClaudeToolUse,
         settings: AppSettings,
         store: BudgetStore
@@ -620,16 +861,24 @@ public final class AssistantService {
             case .addTransactions(let items):
                 var receipts: [AssistantActionReceipt] = []
                 var summaries: [String] = []
+                var touchedBudgets: [(CategoryID, String)] = []
                 for item in items {
                     let member = resolveMember(hint: item.memberHint, settings: settings, store: store)
-                    let minor = max(1, currency.toStorageMinor(item.amountMajor))
+                    let amount = AssistantAmounts.storageMinor(
+                        amountMajor: item.amountMajor,
+                        stated: item.currency,
+                        household: currency,
+                        note: item.note,
+                        language: lang
+                    )
+                    let minor = amount.minor
                     let record = TransactionRecord(
                         name: item.name,
                         amountMinor: minor,
                         type: item.type,
                         category: item.category,
                         dayKey: item.dayKey,
-                        note: item.note,
+                        note: amount.note,
                         source: .aiQuickAdd,
                         memberID: member.id,
                         memberName: member.name,
@@ -639,7 +888,7 @@ public final class AssistantService {
                     store.ensureVisible(dayKey: record.dayKey)
 
                     let signedMinor = item.type == .income ? minor : -minor
-                    let amtStr = MoneyFormat.format(minor: signedMinor, currency: currency, language: lang, signed: item.type == .income)
+                    let amtStr = MoneyFormat.masked(MoneyFormat.format(minor: signedMinor, currency: currency, language: lang, signed: item.type == .income), hidden: record.isSalaryMasked(hidden: settings.hideSalary))
                     receipts.append(AssistantActionReceipt(
                         kind: .transactionAdded,
                         emoji: item.category.cuteEmoji,
@@ -648,7 +897,16 @@ public final class AssistantService {
                         amountText: amtStr,
                         isPositive: item.type == .income
                     ))
-                    summaries.append("Added transaction [id:\(record.id)] \(record.name) \(amtStr) in \(item.category.rawValue) on \(record.dayKey)")
+                    let converted = item.currency.map { $0 != currency } ?? false
+                    summaries.append("Added transaction [id:\(record.id)] \(record.name) \(amtStr) in \(item.category.rawValue) on \(record.dayKey)\(converted ? " (converted from \(item.currency!.rawValue); note: \(record.note))" : "")")
+                    if record.type == .expense, !touchedBudgets.contains(where: { $0 == (record.category, record.monthKey) }) {
+                        touchedBudgets.append((record.category, record.monthKey))
+                    }
+                }
+                for (category, monthKey) in touchedBudgets {
+                    if let line = AssistantBudgetStatus.line(category: category, monthKey: monthKey, transactions: store.activeTransactions, budgets: store.activeBudgets, currency: currency) {
+                        summaries.append(line)
+                    }
                 }
                 return ToolExecutionOutcome(toolOutput: summaries.joined(separator: "\n"), isError: false, receipts: receipts)
 
@@ -656,6 +914,8 @@ public final class AssistantService {
                 guard var tx = store.activeTransactions.first(where: { $0.id == id }) else {
                     return ToolExecutionOutcome(toolOutput: "Transaction not found with id \(id).", isError: true, receipts: [])
                 }
+                // Judged by the stored transaction, before any mutation below.
+                let stored = tx
                 if let name { tx.name = name }
                 if let amountMajor { tx.amountMinor = max(1, currency.toStorageMinor(amountMajor)) }
                 if let category {
@@ -666,7 +926,7 @@ public final class AssistantService {
                 if let note { tx.note = note }
                 store.saveTransaction(tx)
                 let signedMinor = tx.type == .income ? tx.amountMinor : -tx.amountMinor
-                let amtStr = MoneyFormat.format(minor: signedMinor, currency: currency, language: lang, signed: tx.type == .income)
+                let amtStr = MoneyFormat.masked(MoneyFormat.format(minor: signedMinor, currency: currency, language: lang, signed: tx.type == .income), hidden: SalaryPrivacy.masksToolEcho(stored: stored, resulting: tx, hidden: settings.hideSalary))
                 let receipt = AssistantActionReceipt(
                     kind: .transactionUpdated,
                     emoji: tx.category.cuteEmoji,
@@ -783,11 +1043,14 @@ public final class AssistantService {
                     subtitle: L10n.text(lang, en: "Deleted savings goal", vi: "Đã xoá mục tiêu", zh: "已删除存钱目标")
                 )
                 return ToolExecutionOutcome(toolOutput: "Deleted savings goal '\(goal.name)'.", isError: false, receipts: [receipt])
+
+            case .createPlan, .convertTransactionToPlan, .updatePlan, .settlePlan, .undoPlanSettlement, .deletePlan:
+                return executePlan(command, todayKey: todayKey, settings: settings, store: store)
             }
         }
     }
 
-    private func resolveMember(hint: String?, settings: AppSettings, store: BudgetStore) -> HouseholdMember {
+    static func resolveMember(hint: String?, settings: AppSettings, store: BudgetStore) -> HouseholdMember {
         guard let raw = hint?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
             return settings.currentMember
         }
@@ -812,19 +1075,7 @@ public final class AssistantService {
         return settings.currentMember
     }
 
-    private func matchGoal(id: String?, name: String?, in goals: [SavingsGoalRecord]) -> SavingsGoalRecord? {
-        if let id, let exact = goals.first(where: { $0.id == id }) {
-            return exact
-        }
-        if let name {
-            let needle = name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            if let exact = goals.first(where: { $0.name.lowercased() == needle }) {
-                return exact
-            }
-            if let partial = goals.first(where: { $0.name.lowercased().contains(needle) || needle.contains($0.name.lowercased()) }) {
-                return partial
-            }
-        }
-        return nil
+    static func matchGoal(id: String?, name: String?, in goals: [SavingsGoalRecord]) -> SavingsGoalRecord? {
+        AdviserToolCatalog.matchGoal(id: id, name: name, in: goals)
     }
 }

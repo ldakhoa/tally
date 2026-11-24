@@ -350,6 +350,18 @@ public struct TransactionRecord: Codable, Identifiable, Hashable, Sendable {
     public var needsReview: Bool
     public var updatedAt: Date
     public var isDeleted: Bool
+    /// Installment/loan plan this transaction belongs to. On a scheduled payment it is the
+    /// owning plan; on a tombstoned original expense that was converted into a plan it marks the
+    /// conversion (see `isConvertedPlanSource`). `nil` for ordinary transactions and for
+    /// payloads written before plans existed.
+    public var planID: String?
+    /// 0-based schedule index for a plan payment (`nil` otherwise).
+    public var planPaymentIndex: Int?
+    /// Merge state of a scheduled plan payment: the latest explicit user operation and the
+    /// automatic schedule state, kept apart so merging is a join (see `PlanPaymentState`). The
+    /// visible fields above are derived from it. `nil` for ordinary transactions and payloads
+    /// written before plans existed.
+    public var paymentState: PlanPaymentState?
 
     public init(
         id: String = UUID().uuidString,
@@ -366,7 +378,10 @@ public struct TransactionRecord: Codable, Identifiable, Hashable, Sendable {
         memberName: String = "",
         needsReview: Bool = false,
         updatedAt: Date = Date(),
-        isDeleted: Bool = false
+        isDeleted: Bool = false,
+        planID: String? = nil,
+        planPaymentIndex: Int? = nil,
+        paymentState: PlanPaymentState? = nil
     ) {
         self.id = id
         self.name = name
@@ -383,9 +398,37 @@ public struct TransactionRecord: Codable, Identifiable, Hashable, Sendable {
         self.needsReview = needsReview
         self.updatedAt = updatedAt
         self.isDeleted = isDeleted
+        self.planID = planID
+        self.planPaymentIndex = planPaymentIndex
+        self.paymentState = paymentState
     }
 
     public var monthKey: String { DateKey.monthKey(fromDayKey: dayKey) }
+
+    /// `true` for a scheduled installment/loan payment (live or tombstoned).
+    public var isPlanPayment: Bool {
+        guard let planID else { return false }
+        return planPaymentIndex != nil || id.hasPrefix(InstallmentPlanRecord.paymentIDPrefix(planID: planID))
+    }
+
+    /// `true` for a plan payment whose visible state comes from an explicit user operation (or
+    /// that has no schedule state at all). Automatic schedule writes never override it.
+    public var hasUserPaymentWrite: Bool {
+        isPlanPayment && effectivePaymentState.user != nil
+    }
+
+    /// `true` for a plan payment the user explicitly deleted (also by deleting its plan with
+    /// payments). It is never booked again; only a later explicit user operation revives it.
+    /// Withdrawals by the schedule are not user deletions and stay revivable.
+    public var isUserDeletedPlanPayment: Bool {
+        isDeleted && hasUserPaymentWrite
+    }
+
+    /// `true` for a tombstoned expense that was converted into an installment plan. Deduplication
+    /// treats it as "already captured" so the same bank alert cannot resurrect the full amount.
+    public var isConvertedPlanSource: Bool {
+        isDeleted && planID != nil && !isPlanPayment
+    }
 }
 
 public struct BudgetLimitRecord: Codable, Identifiable, Hashable, Sendable {

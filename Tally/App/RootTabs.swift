@@ -42,23 +42,34 @@ enum TallyTab: String, CaseIterable, Identifiable {
 }
 
 enum PlanSegment: String, CaseIterable, Identifiable {
-    case budgets, goals
+    case budgets, goals, commitments
     var id: String { rawValue }
 
+    /// Page title (navigation bar).
     func title(in language: AppLanguage) -> String {
         switch self {
         case .budgets: return L10n.text(language, en: "Budgets", vi: "Ngân sách", zh: "预算")
         case .goals: return L10n.text(language, en: "Goals", vi: "Mục tiêu", zh: "目标")
+        case .commitments: return L10n.text(language, en: "Commitments", vi: "Khoản cam kết", zh: "分期与贷款")
+        }
+    }
+
+    /// Short label for the segmented control: three segments with icons must fit on the narrowest
+    /// iPhone, and "Commitments" / "Khoản cam kết" / "分期与贷款" are too long for one third.
+    func segmentTitle(in language: AppLanguage) -> String {
+        switch self {
+        case .commitments: return L10n.text(language, en: "Loans", vi: "Trả góp", zh: "分期")
+        default: return title(in: language)
         }
     }
 }
 
 enum SidebarDestination: String, CaseIterable, Identifiable, Hashable {
-    case overview, transactions, statistics, budgets, goals, settings
+    case overview, transactions, statistics, budgets, goals, commitments, settings
     var id: String { rawValue }
 
     static var primaryCases: [SidebarDestination] {
-        [.overview, .transactions, .statistics, .budgets, .goals]
+        [.overview, .transactions, .statistics, .budgets, .goals, .commitments]
     }
 
     func title(in language: AppLanguage) -> String {
@@ -68,6 +79,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable, Hashable {
         case .statistics: return L10n.text(language, en: "Statistics", vi: "Thống kê", zh: "统计")
         case .budgets: return L10n.text(language, en: "Budgets", vi: "Ngân sách", zh: "预算")
         case .goals: return L10n.text(language, en: "Goals", vi: "Mục tiêu", zh: "目标")
+        case .commitments: return L10n.text(language, en: "Commitments", vi: "Khoản cam kết", zh: "分期与贷款")
         case .settings: return L10n.text(language, en: "Settings", vi: "Cài đặt", zh: "设置")
         }
     }
@@ -79,6 +91,7 @@ enum SidebarDestination: String, CaseIterable, Identifiable, Hashable {
         case .statistics: return "⌘3"
         case .budgets: return "⌘4"
         case .goals: return "⌘5"
+        case .commitments: return "⌘6"
         case .settings: return "⌘,"
         }
     }
@@ -96,7 +109,12 @@ final class TabRouter {
             case .overview: return .overview
             case .transactions: return .transactions
             case .statistics: return .statistics
-            case .budgets: return planSegment == .goals ? .goals : .budgets
+            case .budgets:
+                switch planSegment {
+                case .budgets: return .budgets
+                case .goals: return .goals
+                case .commitments: return .commitments
+                }
             case .settings: return .settings
             }
         }
@@ -110,6 +128,9 @@ final class TabRouter {
                 selectedTab = .budgets
             case .goals:
                 planSegment = .goals
+                selectedTab = .budgets
+            case .commitments:
+                planSegment = .commitments
                 selectedTab = .budgets
             case .settings:
                 selectedTab = .settings
@@ -144,6 +165,12 @@ final class TabRouter {
         selectedTab = .budgets
     }
 
+    func goToCommitments() {
+        CozyHaptics.selection()
+        planSegment = .commitments
+        selectedTab = .budgets
+    }
+
     func goToSettings() {
         CozyHaptics.selection()
         selectedTab = .settings
@@ -162,6 +189,7 @@ private struct TabPagesHost: View {
                     onSelectStatistics: router.goToStatistics,
                     onSelectBudgets: router.goToBudgets,
                     onSelectGoals: router.goToGoals,
+                    onSelectCommitments: router.goToCommitments,
                     onSelectSettings: router.goToSettings
                 )
                 .opacity(router.selectedTab == .overview ? 1 : 0)
@@ -248,15 +276,20 @@ struct RootTabs: View {
         }
         .task {
             CozySounds.warmUp()
-            // Stagger pre-warming of remaining tabs on phone so first tap or scrub is locked at 120fps.
-            try? await Task.sleep(for: .milliseconds(250))
+            // Pre-warm the remaining tabs on phone so the first tap is instant, but only while the
+            // user is NOT scrolling. Building a whole tab (Charts, calendars, lists) costs several
+            // frames on the main thread; doing that mid-scroll on launch was the source of the
+            // "laggy for the first few scrolls" jank on Overview.
+            guard !usesSidebarShell else { return }
+            try? await Task.sleep(for: .milliseconds(1200))
             let tabsToWarm: [TallyTab] = [.transactions, .budgets, .statistics, .settings]
             for tab in tabsToWarm {
                 guard !Task.isCancelled else { break }
-                if !loadedTabs.contains(tab) {
-                    loadedTabs.insert(tab)
-                }
-                try? await Task.sleep(for: .milliseconds(120))
+                guard !loadedTabs.contains(tab) else { continue }
+                await Self.waitUntilScrollIdle()
+                guard !Task.isCancelled else { break }
+                loadedTabs.insert(tab)
+                try? await Task.sleep(for: .milliseconds(400))
             }
         }
         .onChange(of: router.selectedTab) { _, newTab in
@@ -288,6 +321,22 @@ struct RootTabs: View {
             router.selectedTab = .settings
             settings.isShowingSettings = false
         }
+    }
+
+    /// Suspends until the main run loop has left scroll tracking mode (finger down or
+    /// decelerating) and stayed idle briefly, so background view building never steals scroll frames.
+    private static func waitUntilScrollIdle() async {
+        #if os(iOS)
+        var idleChecks = 0
+        while idleChecks < 2, !Task.isCancelled {
+            if RunLoop.current.currentMode == .tracking {
+                idleChecks = 0
+            } else {
+                idleChecks += 1
+            }
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+        #endif
     }
 
     // MARK: - iPhone Compact Tab Bar Shell
@@ -385,6 +434,7 @@ struct RootTabs: View {
                 onSelectStatistics: router.goToStatistics,
                 onSelectBudgets: router.goToBudgets,
                 onSelectGoals: router.goToGoals,
+                onSelectCommitments: router.goToCommitments,
                 onSelectSettings: router.goToSettings
             )
         case .transactions:
@@ -395,6 +445,8 @@ struct RootTabs: View {
             BudgetsView(embedded: false)
         case .goals:
             GoalsView(embedded: false)
+        case .commitments:
+            CommitmentsView(embedded: false)
         case .settings:
             SettingsView(isModal: false)
         }
@@ -747,6 +799,12 @@ private struct SidebarNavRow: View {
                 size: 21,
                 style: isSelected ? .watercolor : .tinted(Color.textSecondary.opacity(0.75))
             )
+        case .commitments:
+            CozyUIIcon(
+                .creditCard,
+                size: 21,
+                color: isSelected ? Color.accent : Color.textSecondary.opacity(0.75)
+            )
         case .settings:
             CozyTabIconView(kind: .settings, isSelected: isSelected)
                 .scaleEffect(0.82)
@@ -754,7 +812,7 @@ private struct SidebarNavRow: View {
     }
 }
 
-/// Hosts Budgets and Savings Goals cleanly under the 4th tab on compact iPhone width so all 5 primary
+/// Hosts Budgets, Savings Goals and Commitments cleanly under the 4th tab on compact iPhone width so all 5 primary
 /// tabs stay visible without overflowing into iOS's "More" tab.
 private struct PlanTabView: View {
     @Bindable var router: TabRouter
@@ -790,23 +848,31 @@ private struct PlanTabView: View {
                                             size: 18,
                                             style: selected ? .tinted(Color.onInk) : .watercolor
                                         )
+                                    case .commitments:
+                                        CozyUIIcon(.creditCard, size: 18, color: selected ? Color.onInk : Color.accent)
                                     }
-                                    Text(option.title(in: lang))
+                                    Text(option.segmentTitle(in: lang))
                                         .font(.appControl)
+                                        .lineLimit(1)
+                                        .minimumScaleFactor(0.8)
                                 }
                                 .frame(maxWidth: .infinity, minHeight: 40)
                                 .foregroundStyle(selected ? Color.onInk : Color.textPrimary)
+                                // Each segment only publishes its frame; the single pill below follows the
+                                // selected one, so it slides at full opacity instead of fading out and back in.
                                 .background {
-                                    if selected {
-                                        Capsule()
-                                            .fill(Color.ink)
-                                            .matchedGeometryEffect(id: "planSegmentPill", in: segmentNamespace)
-                                    }
+                                    Color.clear
+                                        .matchedGeometryEffect(id: option, in: segmentNamespace)
                                 }
                                 .contentShape(Capsule())
                             }
                             .buttonStyle(.plain)
                         }
+                    }
+                    .background {
+                        Capsule()
+                            .fill(Color.ink)
+                            .matchedGeometryEffect(id: router.planSegment, in: segmentNamespace, isSource: false)
                     }
                     .padding(4)
                     .background(Color.cardBackground, in: Capsule())
@@ -818,6 +884,8 @@ private struct PlanTabView: View {
                         BudgetsView(embedded: true)
                     case .goals:
                         GoalsView(embedded: true)
+                    case .commitments:
+                        CommitmentsView(embedded: true)
                     }
                 }
                 .documentColumn()

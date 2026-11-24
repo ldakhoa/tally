@@ -153,7 +153,8 @@ public struct TransactionsView: View {
                             SectionLabel(DateKey.formatShortDay(group.dayKey, language: lang))
                             Spacer()
                             if group.totalIncomeMinor > 0 {
-                                Text(MoneyFormat.format(minor: group.totalIncomeMinor, currency: settings.currency, language: lang, signed: true))
+                                Text(MoneyFormat.masked(MoneyFormat.format(minor: group.totalIncomeMinor, currency: settings.currency, language: lang, signed: true), hidden: group.isSalaryMasked(hidden: settings.hideSalary)))
+                                    .salaryMaskAccessibility(group.isSalaryMasked(hidden: settings.hideSalary), language: lang)
                                     .font(.appCaption.weight(.semibold))
                                     .monospacedDigit()
                                     .foregroundStyle(Color.positive)

@@ -109,12 +109,14 @@ public struct SmartCaptureSheet: View {
                                 }
                                 Spacer()
                                 let minor = settings.currency.toStorageMinor(draft.amountMajor)
-                                Text(MoneyFormat.format(
+                                let hidesAmount = settings.hideSalary && draft.type == .income && draft.category.includesSalary
+                                Text(MoneyFormat.masked(MoneyFormat.format(
                                     minor: draft.type == .income ? minor : -minor,
                                     currency: settings.currency,
                                     language: lang,
                                     signed: draft.type == .income
-                                ))
+                                ), hidden: hidesAmount))
+                                .salaryMaskAccessibility(hidesAmount, language: lang)
                                 .font(.appAmount)
                                 .foregroundStyle(draft.type == .income ? Color.positive : Color.textPrimary)
                             }

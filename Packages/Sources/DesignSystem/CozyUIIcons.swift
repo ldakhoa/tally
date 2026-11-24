@@ -41,6 +41,8 @@ public enum CozyUIIconKind: String, CaseIterable, Hashable, Sendable {
     case checkmark
     case checkmarkCircle
     case warning
+    case eye
+    case eyeClosed
 
     // Settings, KPI & transaction sources
     case sliders
@@ -56,6 +58,7 @@ public enum CozyUIIconKind: String, CaseIterable, Hashable, Sendable {
     case pencil
     case leaf
     case flame
+    case photo
 
     /// Maps legacy SF Symbol names used across `SettingsIconTile` and `Card` to hand-drawn cozy icons.
     public init?(sfSymbol: String) {
@@ -80,6 +83,7 @@ public enum CozyUIIconKind: String, CaseIterable, Hashable, Sendable {
         case "arrow.up.right", "arrow.up.right.square", "arrow.up.forward.app.fill": self = .trendUp
         case "arrow.down.right": self = .trendDown
         case "calendar", "calendar.day.timeline.left": self = .calendar
+        case "photo", "photo.on.rectangle", "photo.badge.plus": self = .photo
         case "list.bullet", "list.bullet.rectangle": self = .list
         case "note.text", "note.text.badge.plus": self = .note
         case "number.square": self = .keypad
@@ -192,6 +196,10 @@ public struct CozyUIIcon: View {
                 trendIcon(up: true, s: s, style: style)
             case .trendDown:
                 trendIcon(up: false, s: s, style: style)
+            case .eye:
+                eyeIcon(open: true, s: s, style: style)
+            case .eyeClosed:
+                eyeIcon(open: false, s: s, style: style)
             case .calendar:
                 calendarIcon(s: s, style: style)
             case .list:
@@ -246,6 +254,8 @@ public struct CozyUIIcon: View {
                 leafIcon(s: s, style: style)
             case .flame:
                 flameIcon(s: s, style: style)
+            case .photo:
+                photoIcon(s: s, style: style)
             }
         }
         .frame(width: size, height: size)
@@ -535,6 +545,75 @@ public struct CozyUIIcon: View {
     // MARK: - Input, Composer & Calendar
 
     @ViewBuilder
+    private func eyeIcon(open: Bool, s: CGFloat, style: StrokeStyle) -> some View {
+        let c = 12 * s
+        ZStack {
+            if open {
+                // Almond-shaped eye outline
+                Path { p in
+                    p.move(to: CGPoint(x: 2.5 * s, y: c))
+                    p.addQuadCurve(to: CGPoint(x: 21.5 * s, y: c), control: CGPoint(x: 12 * s, y: 1.5 * s))
+                    p.addQuadCurve(to: CGPoint(x: 2.5 * s, y: c), control: CGPoint(x: 12 * s, y: 22.5 * s))
+                }
+                .fill(strokeColor.opacity(0.12))
+                Path { p in
+                    p.move(to: CGPoint(x: 2.5 * s, y: c))
+                    p.addQuadCurve(to: CGPoint(x: 21.5 * s, y: c), control: CGPoint(x: 12 * s, y: 1.5 * s))
+                    p.addQuadCurve(to: CGPoint(x: 2.5 * s, y: c), control: CGPoint(x: 12 * s, y: 22.5 * s))
+                }
+                .stroke(strokeColor, style: style)
+                Circle()
+                    .stroke(strokeColor, style: style)
+                    .frame(width: 6.5 * s, height: 6.5 * s)
+                Circle()
+                    .fill(strokeColor)
+                    .frame(width: 2.2 * s, height: 2.2 * s)
+            } else {
+                // Sleepy closed lid with lashes
+                Path { p in
+                    p.move(to: CGPoint(x: 2.5 * s, y: 9 * s))
+                    p.addQuadCurve(to: CGPoint(x: 21.5 * s, y: 9 * s), control: CGPoint(x: 12 * s, y: 19.5 * s))
+                }
+                .stroke(strokeColor, style: style)
+                Path { p in
+                    p.move(to: CGPoint(x: 6.2 * s, y: 13.4 * s))
+                    p.addLine(to: CGPoint(x: 4.4 * s, y: 16.4 * s))
+                    p.move(to: CGPoint(x: 12 * s, y: 15.4 * s))
+                    p.addLine(to: CGPoint(x: 12 * s, y: 19 * s))
+                    p.move(to: CGPoint(x: 17.8 * s, y: 13.4 * s))
+                    p.addLine(to: CGPoint(x: 19.6 * s, y: 16.4 * s))
+                }
+                .stroke(strokeColor, style: style)
+            }
+        }
+        .frame(width: 24 * s, height: 24 * s)
+    }
+
+    @ViewBuilder
+    /// Little framed picture: rounded frame, a soft sun and two plump hills.
+    private func photoIcon(s: CGFloat, style: StrokeStyle) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 4.5 * s, style: .continuous)
+                .fill(strokeColor.opacity(0.12))
+                .overlay(RoundedRectangle(cornerRadius: 4.5 * s, style: .continuous).stroke(strokeColor, style: style))
+                .frame(width: 19 * s, height: 16 * s)
+
+            Circle()
+                .fill(strokeColor)
+                .frame(width: 3.6 * s, height: 3.6 * s)
+                .offset(x: 4.2 * s, y: -3 * s)
+
+            Path { path in
+                path.move(to: CGPoint(x: 3.5 * s, y: 17 * s))
+                path.addQuadCurve(to: CGPoint(x: 10.5 * s, y: 11.2 * s), control: CGPoint(x: 6.2 * s, y: 11 * s))
+                path.addQuadCurve(to: CGPoint(x: 14 * s, y: 14 * s), control: CGPoint(x: 12.6 * s, y: 11.6 * s))
+                path.addQuadCurve(to: CGPoint(x: 20.5 * s, y: 16.5 * s), control: CGPoint(x: 17.4 * s, y: 12.4 * s))
+            }
+            .stroke(strokeColor, style: style)
+            .frame(width: 24 * s, height: 24 * s)
+        }
+    }
+
     private func calendarIcon(s: CGFloat, style: StrokeStyle) -> some View {
         ZStack {
             // Rounded calendar body

@@ -5,7 +5,9 @@ import DesignSystem
 import SharedUI
 import SwiftUI
 import TallyCore
+import UniformTypeIdentifiers
 #if os(iOS)
+import PhotosUI
 import UIKit
 #else
 import AppKit
@@ -24,6 +26,15 @@ public struct AskTallyView: View {
     @State private var copiedMessageID: UUID?
     @State private var celebrationTrigger = 0
     @State private var isShowingHistory = false
+    @State private var pendingImages: [PreparedChatImage] = []
+    @State private var preparingCount = 0
+    @State private var attachNote: String?
+    @State private var viewerItem: ChatImageViewerItem?
+    #if os(iOS)
+    @State private var photoSelection: [PhotosPickerItem] = []
+    #else
+    @State private var isShowingFileImporter = false
+    #endif
     @FocusState private var isComposerFocused: Bool
 
     private let bottomAnchorID = "ask-tally-bottom-anchor"
@@ -99,6 +110,9 @@ public struct AskTallyView: View {
                             celebrationTrigger += 1
                         }
                     }
+                    .onChange(of: assistant.salaryAccess.pending?.id) { _, _ in
+                        scrollToBottom(proxy: proxy, animated: true)
+                    }
                     .onChange(of: isComposerFocused) { _, focused in
                         if focused {
                             DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
@@ -123,6 +137,9 @@ public struct AskTallyView: View {
             }
             .animation(.spring(response: 0.28, dampingFraction: 0.8), value: dictation.isRecording)
             .pageBackground()
+            .onAppear { assistant.chatScreenDidAppear() }
+            // A consent card still waiting when the chat goes away counts as Not now.
+            .onDisappear { assistant.chatScreenDidDisappear() }
             .navigationTitle(L10n.text(lang, en: "Ask Tally", vi: "Trợ lý Tally AI", zh: "Tally AI 助手"))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -186,12 +203,55 @@ public struct AskTallyView: View {
             }
             .interactiveDismissDisabled(
                 !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || !pendingImages.isEmpty
                     || dictation.isRecording
                     || assistant.isStreaming
             )
             .onDisappear {
                 dictation.stop()
             }
+            .onDrop(of: [.image, .fileURL], isTargeted: nil) { providers in
+                guard canAttachImages else {
+                    attachNote = AssistantService.imagesUnsupportedMessage(in: lang)
+                    return false
+                }
+                return attachImages(from: providers)
+            }
+            #if os(macOS)
+            .onPasteCommand(of: [.image, .fileURL]) { providers in
+                guard canAttachImages else { return }
+                _ = attachImages(from: providers)
+            }
+            .fileImporter(isPresented: $isShowingFileImporter, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
+                guard case .success(let urls) = result else { return }
+                let slots = ImageUploadPolicy.remainingSlots(current: pendingImages.count + preparingCount)
+                prepareImages(urls.prefix(slots).map { url in
+                    { @Sendable in
+                        let scoped = url.startAccessingSecurityScopedResource()
+                        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                        return try? Data(contentsOf: url)
+                    }
+                })
+            }
+            #else
+            .onChange(of: photoSelection) { _, items in
+                guard !items.isEmpty else { return }
+                photoSelection = []
+                let slots = ImageUploadPolicy.remainingSlots(current: pendingImages.count + preparingCount)
+                prepareImages(items.prefix(slots).map { item in
+                    { @Sendable in try? await item.loadTransferable(type: Data.self) }
+                })
+            }
+            #endif
+            #if os(iOS)
+            .fullScreenCover(item: $viewerItem) { item in
+                ChatImageViewer(attachment: item.attachment, data: imageLoader(for: item.attachment), language: lang)
+            }
+            #else
+            .sheet(item: $viewerItem) { item in
+                ChatImageViewer(attachment: item.attachment, data: imageLoader(for: item.attachment), language: lang)
+            }
+            #endif
         }
         .cozySheetFrame(minWidth: 540, idealWidth: 640, minHeight: 600, idealHeight: 700)
     }
@@ -347,31 +407,43 @@ public struct AskTallyView: View {
     private func messageRow(for entry: ChatEntry, lang: AppLanguage) -> some View {
         let isUser = entry.role == .user
         let isLastAssistant = !isUser && entry.id == assistant.messages.last?.id
-        let isThinking = !isUser && entry.text.isEmpty && entry.actions.isEmpty && assistant.isStreaming && isLastAssistant
+        let isThinking = !isUser && entry.text.isEmpty && entry.actions.isEmpty && !entry.hasConsents && assistant.isStreaming && isLastAssistant
 
         if isUser {
             let userAvatar: ChibiAsset = settings.currentMember.id == HouseholdMember.defaultPartnerID ? .wife : .husband
             HStack(alignment: .bottom, spacing: 8) {
                 Spacer(minLength: 42)
-                Text(entry.text)
-                    .font(.appBody)
-                    .foregroundStyle(Color.onInk)
-                    .textSelection(.enabled)
-                    .padding(.horizontal, 15)
-                    .padding(.vertical, 10)
-                    .background(
-                        Color.ink,
-                        in: UnevenRoundedRectangle(
-                            topLeadingRadius: 20,
-                            bottomLeadingRadius: 20,
-                            bottomTrailingRadius: 6,
-                            topTrailingRadius: 20,
-                            style: .continuous
+                VStack(alignment: .trailing, spacing: 6) {
+                    if let attachments = entry.attachments, !attachments.isEmpty {
+                        ChatAttachmentGrid(
+                            attachments: attachments,
+                            data: { imageLoader(for: $0) },
+                            onOpen: { viewerItem = ChatImageViewerItem(attachment: $0) },
+                            language: lang
                         )
-                    )
+                    }
+                    if !entry.text.isEmpty {
+                        Text(entry.text)
+                            .font(.appBody)
+                            .foregroundStyle(Color.onInk)
+                            .textSelection(.enabled)
+                            .padding(.horizontal, 15)
+                            .padding(.vertical, 10)
+                            .background(
+                                Color.ink,
+                                in: UnevenRoundedRectangle(
+                                    topLeadingRadius: 20,
+                                    bottomLeadingRadius: 20,
+                                    bottomTrailingRadius: 6,
+                                    topTrailingRadius: 20,
+                                    style: .continuous
+                                )
+                            )
+                    }
+                }
                 ChibiAvatarView(asset: userAvatar, size: 28)
             }
-        } else if isThinking || !entry.text.isEmpty || !entry.actions.isEmpty {
+        } else if isThinking || !entry.text.isEmpty || !entry.actions.isEmpty || entry.hasConsents {
             VStack(alignment: .leading, spacing: 8) {
                 // Assistant header with cute Shiba Pet avatar
                 HStack(spacing: 8) {
@@ -405,6 +477,15 @@ public struct AskTallyView: View {
                     VStack(spacing: 6) {
                         ForEach(entry.actions) { receipt in
                             actionReceiptCard(receipt)
+                        }
+                    }
+                }
+
+                // Salary consent cards (asked by the assistant, answered here)
+                if let consents = entry.consents, !consents.isEmpty {
+                    VStack(spacing: 6) {
+                        ForEach(consents) { record in
+                            salaryConsentCard(record, lang: lang)
                         }
                     }
                 }
@@ -479,29 +560,108 @@ public struct AskTallyView: View {
 
     @ViewBuilder
     private func formattedMessageText(_ text: String, isUser: Bool) -> some View {
-        if !isUser,
-           let attributed = try? AttributedString(
-            markdown: text,
-            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-           ) {
-            Text(attributed)
-                .font(.appBody)
-                .foregroundStyle(Color.textPrimary)
-                .textSelection(.enabled)
-        } else {
+        if isUser {
             Text(text)
                 .font(.appBody)
-                .foregroundStyle(isUser ? Color.onInk : Color.textPrimary)
+                .foregroundStyle(Color.onInk)
                 .textSelection(.enabled)
+        } else {
+            let blocks = AssistantMessageBlock.parse(text)
+            VStack(alignment: .leading, spacing: 12) {
+                ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
+                    switch block {
+                    case .text(let markdown):
+                        Text(Self.inlineMarkdown(markdown))
+                            .font(.appBody)
+                            .foregroundStyle(Color.textPrimary)
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    case .table(let headers, let rows):
+                        messageTable(headers: headers, rows: rows)
+                    }
+                }
+            }
+        }
+    }
+
+    private static func inlineMarkdown(_ text: String) -> AttributedString {
+        (try? AttributedString(
+            markdown: text,
+            options: AttributedString.MarkdownParsingOptions(interpretedSyntax: .inlineOnlyPreservingWhitespace)
+        )) ?? AttributedString(text)
+    }
+
+    /// A Markdown table from the assistant, laid out as a grid. Wide tables scroll sideways
+    /// inside the bubble so columns keep a readable width on iPhone.
+    private func messageTable(headers: [String], rows: [[String]]) -> some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
+                GridRow {
+                    ForEach(Array(headers.enumerated()), id: \.offset) { _, header in
+                        tableCell(header, isHeader: true)
+                    }
+                }
+                .background(Color.hairline.opacity(0.6))
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    Rectangle()
+                        .fill(Color.hairline)
+                        .frame(height: 1)
+                        .gridCellColumns(max(headers.count, 1))
+                    GridRow {
+                        ForEach(Array(row.enumerated()), id: \.offset) { _, cell in
+                            tableCell(cell, isHeader: false)
+                        }
+                    }
+                }
+            }
+            .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color.hairlineStrong, lineWidth: 1)
+            )
+        }
+    }
+
+    private func tableCell(_ text: String, isHeader: Bool) -> some View {
+        Text(Self.inlineMarkdown(text))
+            .font(isHeader ? .appControl : .appSecondary)
+            .monospacedDigit()
+            .foregroundStyle(isHeader ? Color.textSecondary : Color.textPrimary)
+            .textSelection(.enabled)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(minWidth: 28, maxWidth: 190, alignment: .leading)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func receiptIconView(_ receipt: AssistantActionReceipt) -> some View {
+        switch receipt.icon {
+        case .category(let category):
+            CozyCategoryIcon(category: category, size: 24)
+        case .goal(let goal):
+            CozyGoalIcon(goal: goal, size: 24)
+        case .plan:
+            CozyUIIcon(.calendar, size: 17, color: Color.textPrimary)
+        case .settled:
+            CozyUIIcon(.checkmarkCircle, size: 17, color: Color.textPrimary)
+        case .unsettled:
+            CozyUIIcon(.refresh, size: 17, color: Color.textPrimary)
+        case .deleted:
+            CozyUIIcon(.trash, size: 17, color: Color.textPrimary)
+        case .emoji(let emoji):
+            Text(emoji)
+                .font(.system(size: 16))
         }
     }
 
     private func actionReceiptCard(_ receipt: AssistantActionReceipt) -> some View {
-        HStack(spacing: 10) {
-            Text(receipt.emoji)
-                .font(.system(size: 16))
+        HStack(alignment: receipt.details?.isEmpty == false ? .top : .center, spacing: 10) {
+            receiptIconView(receipt)
                 .frame(width: 30, height: 30)
                 .background(Color.softFill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
 
             VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: 4) {
@@ -515,6 +675,17 @@ public struct AskTallyView: View {
                     .font(.system(size: 11))
                     .foregroundStyle(Color.textSecondary)
                     .lineLimit(1)
+                if let details = receipt.details, !details.isEmpty {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(Array(details.enumerated()), id: \.offset) { _, line in
+                            Text(line)
+                                .font(.system(size: 11, design: .rounded).monospacedDigit())
+                                .foregroundStyle(Color.textPrimary.opacity(0.85))
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .padding(.top, 3)
+                }
             }
 
             Spacer(minLength: 6)
@@ -532,6 +703,94 @@ public struct AskTallyView: View {
         .overlay(
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.hairline, lineWidth: 1)
+        )
+    }
+
+    /// The assistant's request to use salary figures: Allow / Not now while waiting, then a small
+    /// record of the answer. A card left waiting by a relaunch shows as dismissed.
+    private func salaryConsentCard(_ record: SalaryConsentRecord, lang: AppLanguage) -> some View {
+        let isLive = record.status == .pending && assistant.salaryAccess.pending?.id == record.id
+        var shown = record
+        if record.status == .pending && !isLive { shown.status = .cancelled }
+        let tint: Color = switch shown.status {
+        case .allowed: Color.positive
+        case .pending: Color.accent
+        default: Color.textSecondary
+        }
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 10) {
+                CozyUIIcon(shown.status == .allowed ? .eye : .eyeClosed, size: 17, color: tint)
+                    .frame(width: 30, height: 30)
+                    .background(tint.opacity(0.12), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(shown.title(in: lang))
+                        .font(.appCaption.weight(.semibold))
+                        .foregroundStyle(Color.textPrimary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(record.reason)
+                        .font(.system(size: 12, design: .rounded))
+                        .foregroundStyle(Color.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
+            }
+            if isLive {
+                Text(salaryConsentExplainer(lang: lang))
+                    .font(.system(size: 11, design: .rounded))
+                    .foregroundStyle(Color.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 8) {
+                    Spacer(minLength: 0)
+                    Button {
+                        haptic(.light)
+                        assistant.declineSalaryRequest(record.id)
+                    } label: {
+                        Text(L10n.text(lang, en: "Not now", vi: "Để sau", zh: "暂不"))
+                            .font(.appCaption.weight(.semibold))
+                            .foregroundStyle(Color.textPrimary)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 7)
+                            .background(Color.softFill, in: Capsule())
+                    }
+                    .buttonStyle(.themedPlain)
+                    Button {
+                        haptic(.medium)
+                        assistant.allowSalaryRequest(record.id)
+                    } label: {
+                        Text(L10n.text(lang, en: "Allow", vi: "Cho phép", zh: "允许"))
+                            .font(.appCaption.weight(.semibold))
+                            .foregroundStyle(Color.onInk)
+                            .padding(.horizontal, 16)
+                            .padding(.vertical, 7)
+                            .background(Color.ink, in: Capsule())
+                    }
+                    .buttonStyle(.themedPlain)
+                }
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Color.appBackground, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(isLive ? Color.accent.opacity(0.35) : Color.hairline, lineWidth: 1)
+        )
+        .animation(.spring(response: 0.28, dampingFraction: 0.85), value: shown.status)
+    }
+
+    private func salaryConsentExplainer(lang: AppLanguage) -> String {
+        let base = L10n.text(
+            lang,
+            en: "Allowing shows your salary in Tally, as the eye button does, so this answer can use it.",
+            vi: "Cho phép sẽ hiện lương trong Tally, giống nút con mắt, để câu trả lời này dùng được.",
+            zh: "允许后，Tally 会像点按眼睛按钮一样显示您的工资，以便本次回答使用。"
+        )
+        guard settings.requiresAuthToShowSalary else { return base }
+        return base + " " + L10n.text(
+            lang,
+            en: "You'll confirm it's you first.",
+            vi: "Bạn sẽ cần xác nhận danh tính trước.",
+            zh: "需要先验证您的身份。"
         )
     }
 
@@ -601,14 +860,47 @@ public struct AskTallyView: View {
     // MARK: - Pro Floating Composer Bar (Mic inside input box, swipe down to dismiss keyboard)
 
     private func composerBar(lang: AppLanguage) -> some View {
-        let canSend = settings.isAIReady && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let hasContent = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingImages.isEmpty
+        let canSend = settings.isAIReady && hasContent && preparingCount == 0
 
         return VStack(spacing: 0) {
             Divider().overlay(Color.hairline)
 
+            if !pendingImages.isEmpty || preparingCount > 0 {
+                PendingAttachmentStrip(images: pendingImages, isPreparing: preparingCount > 0, language: lang) { image in
+                    withAnimation(.snappy(duration: 0.18)) { pendingImages.removeAll { $0.id == image.id } }
+                }
+                .padding(.horizontal, 16)
+            }
+
+            if let attachNote {
+                HStack(alignment: .top, spacing: 6) {
+                    CozyUIIcon(.photo, size: 13, color: Color.textSecondary)
+                    Text(attachNote)
+                        .font(.appCaption)
+                        .foregroundStyle(Color.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 4)
+                    Button {
+                        withAnimation(.snappy(duration: 0.18)) { self.attachNote = nil }
+                    } label: {
+                        CozyUIIcon(.xmark, size: 10, color: Color.textSecondary)
+                            .frame(width: 22, height: 22)
+                    }
+                    .buttonStyle(.themedPlain)
+                    .accessibilityLabel(L10n.text(lang, en: "Dismiss", vi: "Đóng", zh: "关闭"))
+                }
+                .padding(.horizontal, 18)
+                .padding(.top, 8)
+                .transition(.opacity)
+            }
+
             HStack(alignment: .bottom, spacing: 10) {
                 // Roomy, comfortable input capsule (Claude / ChatGPT iOS feel) with built-in Mic
                 HStack(alignment: .bottom, spacing: 8) {
+                    attachButton(lang: lang)
+                        .padding(.bottom, 5)
+
                     TextField(
                         L10n.text(
                             lang,
@@ -644,7 +936,7 @@ public struct AskTallyView: View {
                             : L10n.text(lang, en: "Dictate in Vietnamese, English, or Chinese", vi: "Nói tiếng Việt, Anh hoặc Trung", zh: "语音输入（自动识别中英越）")
                     )
                 }
-                .padding(.leading, 16)
+                .padding(.leading, 6)
                 .padding(.trailing, 8)
                 .frame(minHeight: 48)
                 .background(Color.cardBackground, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
@@ -729,14 +1021,159 @@ public struct AskTallyView: View {
 
     private func sendDraft() {
         let text = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty else { return }
+        guard !text.isEmpty || !pendingImages.isEmpty, preparingCount == 0 else { return }
+        if !pendingImages.isEmpty, !canAttachImages {
+            attachNote = AssistantService.imagesUnsupportedMessage(in: settings.language)
+            return
+        }
         haptic(.light)
         CozySounds.play(.pop)
         dictation.stop()
+        let images = pendingImages
         draft = ""
         draftBeforeDictation = ""
+        pendingImages = []
+        attachNote = nil
         isComposerFocused = false
-        assistant.send(text, settings: settings, store: store)
+        assistant.send(text, images: images, settings: settings, store: store)
+    }
+
+    // MARK: - Image attachments
+
+    private var canAttachImages: Bool { AssistantService.canAttachImages(settings: settings) }
+
+    private func imageLoader(for attachment: ChatImageAttachment) -> @Sendable () -> Data? {
+        let store = assistant.imageStore
+        let id = attachment.id
+        return { store?.load(id) }
+    }
+
+    /// Attach control: photo library on iPhone/iPad, file picker on Mac (plus drag-and-drop and
+    /// paste on the whole sheet). Disabled with a short explanation when the on-device Apple
+    /// Intelligence backend (text only) would answer.
+    @ViewBuilder
+    private func attachButton(lang: AppLanguage) -> some View {
+        let enabled = settings.isAIReady && canAttachImages && !assistant.isStreaming
+            && ImageUploadPolicy.remainingSlots(current: pendingImages.count + preparingCount) > 0
+        let label = CozyUIIcon(.photo, size: 20, color: Color.textSecondary)
+            .frame(width: 34, height: 34)
+            .opacity(enabled ? 1 : 0.4)
+        let accessibility = L10n.text(lang, en: "Attach images", vi: "Đính kèm ảnh", zh: "附加图片")
+        if !canAttachImages || !settings.isAIReady {
+            Button {
+                CozyHaptics.light()
+                withAnimation(.snappy(duration: 0.18)) {
+                    attachNote = AssistantService.imagesUnsupportedMessage(in: lang)
+                }
+            } label: { label }
+            .buttonStyle(.themedPlain)
+            .disabled(!settings.isAIReady)
+            .accessibilityLabel(accessibility)
+            .accessibilityHint(AssistantService.imagesUnsupportedMessage(in: lang))
+        } else {
+            #if os(iOS)
+            PhotosPicker(
+                selection: $photoSelection,
+                maxSelectionCount: max(1, ImageUploadPolicy.remainingSlots(current: pendingImages.count + preparingCount)),
+                matching: .images,
+                preferredItemEncoding: .compatible
+            ) { label }
+            .buttonStyle(.themedPlain)
+            .disabled(!enabled)
+            .accessibilityLabel(accessibility)
+            #else
+            Button {
+                CozyHaptics.light()
+                isShowingFileImporter = true
+            } label: { label }
+            .buttonStyle(.themedPlain)
+            .disabled(!enabled)
+            .help(L10n.text(lang, en: "Attach images (or drag & drop / paste them here)", vi: "Đính kèm ảnh (hoặc kéo thả / dán vào đây)", zh: "附加图片（也可拖放或粘贴到此处）"))
+            .contextMenu {
+                Button(L10n.text(lang, en: "Paste Image", vi: "Dán ảnh", zh: "粘贴图片")) {
+                    pasteImagesFromPasteboard()
+                }
+            }
+            .accessibilityLabel(accessibility)
+            #endif
+        }
+    }
+
+    /// Loads image data from drag-and-drop or paste providers (image data or image files).
+    private func attachImages(from providers: [NSItemProvider]) -> Bool {
+        let slots = ImageUploadPolicy.remainingSlots(current: pendingImages.count + preparingCount)
+        let usable = providers.filter {
+            $0.hasItemConformingToTypeIdentifier(UTType.image.identifier) || $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier)
+        }.prefix(slots)
+        guard !usable.isEmpty else { return false }
+        prepareImages(usable.map { provider in
+            { @Sendable in await Self.loadImageData(from: provider) }
+        })
+        return true
+    }
+
+    private static func loadImageData(from provider: NSItemProvider) async -> Data? {
+        if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+            return await withCheckedContinuation { continuation in
+                _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.image.identifier) { data, _ in
+                    continuation.resume(returning: data)
+                }
+            }
+        }
+        return await withCheckedContinuation { continuation in
+            _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { data, _ in
+                guard let data, let url = URL(dataRepresentation: data, relativeTo: nil),
+                      UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) == true
+                else { return continuation.resume(returning: nil) }
+                continuation.resume(returning: try? Data(contentsOf: url))
+            }
+        }
+    }
+
+    #if os(macOS)
+    private func pasteImagesFromPasteboard() {
+        let pasteboard = NSPasteboard.general
+        let slots = ImageUploadPolicy.remainingSlots(current: pendingImages.count + preparingCount)
+        var loaders: [@Sendable () async -> Data?] = []
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingContentsConformToTypes: [UTType.image.identifier]]) as? [URL] {
+            loaders += urls.map { url in { @Sendable in try? Data(contentsOf: url) } }
+        }
+        if loaders.isEmpty {
+            for type in [NSPasteboard.PasteboardType.png, .tiff, NSPasteboard.PasteboardType(UTType.jpeg.identifier)] {
+                if let data = pasteboard.data(forType: type) {
+                    loaders.append { @Sendable in data }
+                    break
+                }
+            }
+        }
+        if loaders.isEmpty {
+            attachNote = L10n.text(settings.language, en: "There's no image on the clipboard.", vi: "Bộ nhớ tạm không có ảnh.", zh: "剪贴板中没有图片。")
+            return
+        }
+        prepareImages(Array(loaders.prefix(slots)))
+    }
+    #endif
+
+    /// Downscales and re-encodes each image off the main thread, then adds it to the composer.
+    private func prepareImages(_ loaders: [@Sendable () async -> Data?]) {
+        guard !loaders.isEmpty else { return }
+        let lang = settings.language
+        attachNote = nil
+        preparingCount += loaders.count
+        for loader in loaders {
+            Task {
+                let prepared: PreparedChatImage? = await Task.detached(priority: .userInitiated) {
+                    guard let data = await loader() else { return nil }
+                    return try? ChatImageEncoder.prepare(data)
+                }.value
+                preparingCount = max(0, preparingCount - 1)
+                if let prepared, pendingImages.count < ImageUploadPolicy.maxImagesPerMessage {
+                    withAnimation(.snappy(duration: 0.18)) { pendingImages.append(prepared) }
+                } else if prepared == nil {
+                    attachNote = L10n.text(lang, en: "That image couldn't be read. Try another one.", vi: "Không đọc được ảnh này. Hãy thử ảnh khác.", zh: "无法读取该图片，请换一张试试。")
+                }
+            }
+        }
     }
 
     private func copyText(_ text: String, id: UUID) {

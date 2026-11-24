@@ -9,9 +9,40 @@ struct GeneralSettingsPane: View {
     @Environment(BudgetStore.self) private var store
     @Environment(\.colorScheme) private var colorScheme
 
+    /// Hiding never asks; showing asks for Face ID / passcode when that requirement is on.
+    private var hideSalaryBinding: Binding<Bool> {
+        Binding(
+            get: { settings.hideSalary },
+            set: { hide in
+                if hide {
+                    settings.salaryGate.hide()
+                } else {
+                    Task { await settings.salaryGate.reveal(reason: SalaryAuthPrompt.reveal(in: settings.language)) }
+                }
+            }
+        )
+    }
+
+    /// Turning the requirement on needs a passcode on the device; turning it off needs
+    /// authentication.
+    private var requireAuthBinding: Binding<Bool> {
+        Binding(
+            get: { settings.requiresAuthToShowSalary },
+            set: { enabled in
+                Task {
+                    await settings.salaryGate.setRequiresAuthentication(
+                        enabled,
+                        reason: SalaryAuthPrompt.turnOffRequirement(in: settings.language)
+                    )
+                }
+            }
+        )
+    }
+
     var body: some View {
         @Bindable var settings = settings
         let lang = settings.language
+        let gate = settings.salaryGate
 
         Form {
             Section {
@@ -87,6 +118,46 @@ struct GeneralSettingsPane: View {
             } header: {
                 formSectionHeader(L10n.text(lang, en: "Theme", vi: "Chủ đề giao diện", zh: "主题风格"))
             }
+
+            Section {
+                Toggle(isOn: hideSalaryBinding) {
+                    HStack(spacing: 10) {
+                        CozyUIIcon(settings.hideSalary ? .eyeClosed : .eye, size: 20, color: Color.textSecondary)
+                        Text(L10n.text(lang, en: "Hide salary", vi: "Ẩn lương", zh: "隐藏工资"))
+                    }
+                }
+                .disabled(gate.isAuthenticating)
+
+                Toggle(isOn: requireAuthBinding) {
+                    HStack(spacing: 10) {
+                        CozyUIIcon(.key, size: 20, color: Color.textSecondary)
+                        Text(gate.authKind.requirementTitle(in: lang))
+                    }
+                }
+                .disabled(gate.isAuthenticating)
+            } footer: {
+                VStack(alignment: .leading, spacing: 6) {
+                    formSectionFooter(L10n.text(
+                        lang,
+                        en: "Masks salary, and totals, net savings and savings rate for any period that includes salary. Other income and spending stay visible. Applies to this device only.",
+                        vi: "Ẩn lương, cùng tổng thu, tiết kiệm ròng và tỷ lệ tiết kiệm của mọi kỳ có lương. Thu nhập khác và chi tiêu vẫn hiển thị. Chỉ áp dụng cho thiết bị này.",
+                        zh: "隐藏工资，以及包含工资的任何时间段的总收入、净结余和结余率。其他收入和支出仍然可见。仅对本设备生效。"
+                    ))
+                    if gate.requiresAuthentication {
+                        formSectionFooter(L10n.text(
+                            lang,
+                            en: "Salary starts hidden every time Tally opens and is hidden again when you leave the app.",
+                            vi: "Lương luôn được ẩn mỗi khi mở Tally và ẩn lại khi bạn rời khỏi app.",
+                            zh: "每次打开 Tally 时工资都会先隐藏，离开应用后也会重新隐藏。"
+                        ))
+                    }
+                    if let notice = gate.notice {
+                        formSectionFooter(notice.message(in: lang))
+                            .foregroundStyle(Color.negative)
+                    }
+                }
+            }
+            .onAppear { gate.refreshAvailability() }
 
             Section {
                 Toggle(

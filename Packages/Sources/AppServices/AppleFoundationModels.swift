@@ -255,7 +255,7 @@ struct FMAddTransactionTool: Tool {
             context.store.ensureVisible(dayKey: record.dayKey)
 
             let signedMinor = txType == .income ? minor : -minor
-            let amtStr = MoneyFormat.format(minor: signedMinor, currency: currency, language: lang, signed: txType == .income)
+            let amtStr = MoneyFormat.masked(MoneyFormat.format(minor: signedMinor, currency: currency, language: lang, signed: txType == .income), hidden: record.isSalaryMasked(hidden: context.settings.hideSalary))
             context.receipts.append(AssistantActionReceipt(
                 kind: .transactionAdded,
                 emoji: cat.cuteEmoji,
@@ -412,6 +412,63 @@ struct FMContributeGoalTool: Tool {
     }
 }
 
+@available(iOS 26.0, macOS 26.0, *)
+@Generable
+struct FMCreatePlanArgs: Sendable {
+    @Guide(description: "Either 'installment' (purchase split into monthly payments) or 'loan' (borrowed money with interest)")
+    var kind: String
+
+    @Guide(description: "Short plan name, e.g. 'iPhone', 'Car loan'")
+    var name: String
+
+    @Guide(description: "Installments: total price being split. Loans: amount borrowed (principal). 0 if the user did not say")
+    var amount: Double
+
+    @Guide(description: "Loans: regular monthly payment. 0 if not a loan or not stated")
+    var monthlyPayment: Double
+
+    @Guide(description: "Number of monthly payments in the whole term. 0 if the user did not say")
+    var months: Int
+
+    @Guide(description: "First payment date in YYYY-MM-DD format; empty if the user did not say")
+    var firstPaymentDate: String
+
+    @Guide(description: "How many of the first payments are already paid and already recorded in Tally; 0 if none or unknown")
+    var alreadyPaidPayments: Int
+}
+
+/// Creates an installment plan or loan through the same validation and execution as the Claude
+/// `create_installment_plan` tool (`AssistantService.execute`).
+@available(iOS 26.0, macOS 26.0, *)
+struct FMCreatePlanTool: Tool {
+    let name = "create_installment_plan"
+    let description = "Create an installment plan or a loan with monthly payments. Never guess the amount, months or first payment date: if one is missing, ask the user instead of calling this tool."
+    let context: AppleToolContext
+
+    func call(arguments: FMCreatePlanArgs) async throws -> String {
+        await MainActor.run {
+            var input: [String: JSONValue] = [
+                "kind": .string(arguments.kind.lowercased()),
+                "name": .string(arguments.name),
+            ]
+            let isLoan = arguments.kind.lowercased() == InstallmentKind.loan.rawValue
+            if arguments.amount > 0 { input[isLoan ? "amount_borrowed" : "total_amount"] = .double(arguments.amount) }
+            if arguments.monthlyPayment > 0 { input["monthly_payment"] = .double(arguments.monthlyPayment) }
+            if arguments.months > 0 { input["months"] = .int(arguments.months) }
+            let day = arguments.firstPaymentDate.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !day.isEmpty { input["first_payment_date"] = .string(day) }
+            if arguments.alreadyPaidPayments > 0 { input["already_paid_payments"] = .int(arguments.alreadyPaidPayments) }
+            let outcome = AssistantService.execute(
+                toolUse: ClaudeToolUse(id: UUID().uuidString, name: AssistantToolCatalog.createPlanName, input: .object(input)),
+                settings: context.settings,
+                store: context.store
+            )
+            context.receipts.append(contentsOf: outcome.receipts)
+            return outcome.toolOutput
+        }
+    }
+}
+
 /// Runs Tally's cross-app assistant on Apple's on-device Foundation Model with native tool calling.
 @available(iOS 26.0, macOS 26.0, *)
 @MainActor
@@ -433,6 +490,7 @@ public enum AppleAssistantRunner {
             FMSetBudgetTool(context: toolContext),
             FMCreateGoalTool(context: toolContext),
             FMContributeGoalTool(context: toolContext),
+            FMCreatePlanTool(context: toolContext),
         ]
 
         // Keep instructions compact so we stay comfortably inside the on-device context window.
@@ -478,9 +536,18 @@ public enum AppleAssistantRunner {
         let snapshot = store.monthlySnapshot
         let todayKey = DateKey.dayKey(from: Date())
 
-        let spent = MoneyFormat.format(minor: snapshot.spendingMinor, currency: currency, language: lang)
-        let income = MoneyFormat.format(minor: snapshot.incomeMinor, currency: currency, language: lang)
+        let monthLine = BudgetAssistantPrompt.compactMonthLine(
+            snapshot: snapshot,
+            hideSalary: settings.hideSalary,
+            currency: currency,
+            language: lang
+        )
         let goalsSummary = store.activeGoals.prefix(5).map { "\($0.name) (\($0.percent)%)" }.joined(separator: ", ")
+        let plansSummary = store.activePlans.prefix(5).map { plan -> String in
+            let progress = plan.progress(todayKey: todayKey)
+            let monthly = MoneyFormat.format(minor: plan.fullSchedule.first?.amountMinor ?? 0, currency: plan.currency, language: lang)
+            return "\(plan.name) (\(plan.kind.rawValue), \(monthly)/mo, \(progress.paidCount)/\(progress.paymentCount) paid)"
+        }.joined(separator: ", ")
         let budgetsSummary = snapshot.budgets.prefix(6).map {
             "\($0.category.rawValue): \(MoneyFormat.format(minor: $0.limitMinor, currency: currency, language: lang))"
         }.joined(separator: ", ")
@@ -488,15 +555,18 @@ public enum AppleAssistantRunner {
         return """
         You are Tally, a practical household budget assistant.
         \(lang.aiInstruction)
-        Today is \(todayKey). Currency: \(currency.rawValue).
-        This month (\(snapshot.monthKey)): income \(income), spending \(spent).
+        \(AssistantDateContext.lines(todayKey: todayKey).prefix(2).joined(separator: "\n"))
+        Use these dates for "yesterday", "last Friday" and similar; do not work dates out yourself. Currency: \(currency.rawValue).
+        \(monthLine)
         Budgets: \(budgetsSummary.isEmpty ? "none" : budgetsSummary).
         Goals: \(goalsSummary.isEmpty ? "none" : goalsSummary).
+        Installment plans & loans: \(plansSummary.isEmpty ? "none" : plansSummary).
 
         RULES:
         - When the user mentions spending, paying (e.g. PayNow, rent, credit card, meal), or receiving income: ALWAYS call `add_transaction` (call once per item).
         - When the user sets a monthly budget: ALWAYS call `set_budget`.
         - When the user wants to save for a goal: ALWAYS call `create_savings_goal` or `contribute_savings_goal`.
+        - When the user describes a purchase paid in monthly instalments or a loan: call `create_installment_plan`, but only with figures they gave; if the amount, months or first payment date is missing, ask. If the first payment is in the past, ask whether the payments so far are already recorded in Tally.
         - Translate generic transaction/goal names into the app's language (\(lang.resolved.rawValue)) while keeping brand names (FairPrice, Grab, PayNow) unchanged.
         - ALWAYS write a brief, friendly confirmation reply after calling a tool.
         """
