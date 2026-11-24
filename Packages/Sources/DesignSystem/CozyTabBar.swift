@@ -23,7 +23,13 @@ public struct CozyTabIconView: View {
 
     private var strokeColor: Color {
         if isSelected {
-            return colorScheme == .dark ? Color(hex: 0xFFF2E6) : Color(hex: 0x4E382F)
+            return colorScheme == .dark ? Color(hex: 0x653742) : Color(hex: 0x4E382F)
+        }
+        if colorScheme == .dark {
+            switch kind {
+            case .overview, .transactions, .statistics: return Color.textSecondary
+            case .budgets, .settings: break
+            }
         }
         return Color.textSecondary.opacity(0.75)
     }
