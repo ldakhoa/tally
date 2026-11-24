@@ -5,9 +5,6 @@ import TallyCore
 #if canImport(AVFoundation)
 import AVFoundation
 #endif
-#if canImport(NaturalLanguage)
-import NaturalLanguage
-#endif
 #if canImport(Speech)
 import Speech
 #endif
@@ -62,8 +59,7 @@ public enum DictationLanguage: String, CaseIterable, Codable, Identifiable, Hash
 }
 
 /// Real-time auto-detecting voice dictation across Vietnamese, English, and Chinese.
-/// Feeds the live microphone buffer into concurrent speech recognizers and automatically selects
-/// the highest-confidence, language-verified transcript without requiring a manual language toggle.
+/// Feeds the live microphone buffer into concurrent speech recognizers and ranks their transcripts.
 @MainActor
 @Observable
 public final class VoiceDictationManager {
@@ -84,7 +80,7 @@ public final class VoiceDictationManager {
     @ObservationIgnored private var activeRequests: [DictationLanguage: SFSpeechAudioBufferRecognitionRequest] = [:]
     @ObservationIgnored private var activeTasks: [DictationLanguage: SFSpeechRecognitionTask] = [:]
     @ObservationIgnored private var candidates: [DictationLanguage: Candidate] = [:]
-    @ObservationIgnored private var preferredDefault: DictationLanguage = .english
+    @ObservationIgnored private var sessionID: UUID?
     #endif
 
     public init() {}
@@ -143,6 +139,7 @@ public final class VoiceDictationManager {
 
     public func stop() {
         #if canImport(AVFoundation) && canImport(Speech)
+        sessionID = nil
         for request in activeRequests.values {
             request.endAudio()
         }
@@ -178,15 +175,22 @@ public final class VoiceDictationManager {
         onTranscript: @escaping @MainActor (String) -> Void
     ) {
         stop()
-        preferredDefault = DictationLanguage(appLanguage: appLanguage)
+        let preferredDefault = DictationLanguage(appLanguage: appLanguage)
         detectedLanguage = nil
 
+        let supportedLocales = SFSpeechRecognizer.supportedLocales()
+        func localeKey(_ locale: Locale) -> String {
+            locale.language.maximalIdentifier
+        }
         var recognizers: [(DictationLanguage, SFSpeechRecognizer)] = []
         for lang in DictationLanguage.allCases {
-            if let rec = SFSpeechRecognizer(locale: Locale(identifier: lang.rawValue))
-                ?? SFSpeechRecognizer(locale: Locale(identifier: lang.fallbackLocaleIdentifier)),
-               rec.isAvailable {
-                recognizers.append((lang, rec))
+            for identifier in [lang.rawValue, lang.fallbackLocaleIdentifier] {
+                let key = localeKey(Locale(identifier: identifier))
+                guard let locale = supportedLocales.first(where: { localeKey($0) == key }),
+                      let recognizer = SFSpeechRecognizer(locale: locale), recognizer.isAvailable,
+                      localeKey(recognizer.locale) == key else { continue }
+                recognizers.append((lang, recognizer))
+                break
             }
         }
 
@@ -231,7 +235,10 @@ public final class VoiceDictationManager {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
+        let sessionID = UUID()
 
+        self.sessionID = sessionID
+        self.audioEngine = engine
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
             for req in requestsToFeed {
@@ -239,7 +246,7 @@ public final class VoiceDictationManager {
             }
             let level = Self.computeNormalizedPower(buffer: buffer)
             Task { @MainActor [weak self] in
-                guard let self, self.isRecording else { return }
+                guard let self, self.sessionID == sessionID else { return }
                 self.audioLevel = level
             }
         }
@@ -253,7 +260,6 @@ public final class VoiceDictationManager {
             return
         }
 
-        self.audioEngine = engine
         self.transcript = ""
         self.isRecording = true
 
@@ -261,81 +267,44 @@ public final class VoiceDictationManager {
             guard let request = activeRequests[lang] else { continue }
             activeTasks[lang] = recognizer.recognitionTask(with: request) { [weak self] result, error in
                 Task { @MainActor [weak self] in
-                    guard let self, self.isRecording else { return }
-                    if let result {
-                        let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if !text.isEmpty {
-                            let score = self.scoreTranscript(
+                    guard let self, self.sessionID == sessionID, self.activeTasks[lang] != nil else { return }
+                    if let result, error == nil || result.isFinal {
+                        let transcription = result.bestTranscription
+                        let text = transcription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if text.isEmpty {
+                            self.candidates.removeValue(forKey: lang)
+                        } else {
+                            let score = DictationRanking.score(
                                 text: text,
-                                transcription: result.bestTranscription,
-                                recognizerLanguage: lang
+                                language: lang,
+                                confidences: transcription.segments.map { Double($0.confidence) },
+                                isFinal: result.isFinal
                             )
                             self.candidates[lang] = Candidate(text: text, score: score, isFinal: result.isFinal)
-                            if let winner = self.candidates.max(by: { $0.value.score < $1.value.score }) {
-                                self.detectedLanguage = winner.key
-                                self.transcript = winner.value.text
-                                onTranscript(winner.value.text)
-                            }
                         }
                     }
                     if error != nil {
-                        self.activeTasks.removeValue(forKey: lang)
-                        if self.activeTasks.isEmpty && self.isRecording {
-                            self.stop()
+                        if self.candidates[lang]?.isFinal != true {
+                            self.candidates.removeValue(forKey: lang)
                         }
+                        self.activeTasks.removeValue(forKey: lang)
+                    }
+                    let winner = DictationRanking.winner(
+                        scores: self.candidates.mapValues(\.score),
+                        preferred: preferredDefault,
+                        current: self.detectedLanguage
+                    )
+                    self.detectedLanguage = winner
+                    if let winner, let candidate = self.candidates[winner], candidate.text != self.transcript {
+                        self.transcript = candidate.text
+                        onTranscript(candidate.text)
+                    }
+                    if self.activeTasks.isEmpty {
+                        self.stop()
                     }
                 }
             }
         }
-    }
-
-    private func scoreTranscript(
-        text: String,
-        transcription: SFTranscription,
-        recognizerLanguage: DictationLanguage
-    ) -> Double {
-        let segments = transcription.segments
-        let confidences = segments.map { Double($0.confidence) }.filter { $0 > 0 }
-        let avgConfidence = confidences.isEmpty ? 0.55 : (confidences.reduce(0, +) / Double(confidences.count))
-
-        var score = avgConfidence
-
-        // Script & NaturalLanguage verification bonus
-        let hasCJK = text.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) }
-        let vietnameseMarks = CharacterSet(charactersIn: "ăâđêôơưĂÂĐÊÔƠƯáàảãạấầẩẫậắằẳẵặéèẻẽẹếềểễệíìỉĩịóòỏõọốồổỗộớờởỡợúùủũụứừửữựýỳỷỹỵ")
-        let hasVietnameseDiacritics = text.unicodeScalars.contains { vietnameseMarks.contains($0) }
-
-        switch recognizerLanguage {
-        case .chinese:
-            if hasCJK { score += 0.45 } else { score -= 0.35 }
-        case .vietnamese:
-            if hasVietnameseDiacritics { score += 0.45 }
-            if hasCJK { score -= 0.4 }
-        case .english:
-            if hasCJK { score -= 0.4 }
-            if hasVietnameseDiacritics { score -= 0.25 }
-        }
-
-        #if canImport(NaturalLanguage)
-        let nl = NLLanguageRecognizer()
-        nl.processString(text)
-        let hypotheses = nl.languageHypotheses(withMaximum: 3)
-        switch recognizerLanguage {
-        case .vietnamese:
-            score += (hypotheses[.vietnamese] ?? 0) * 0.65
-        case .english:
-            score += (hypotheses[.english] ?? 0) * 0.65
-        case .chinese:
-            let zhProb = max(hypotheses[.simplifiedChinese] ?? 0, hypotheses[.traditionalChinese] ?? 0)
-            score += zhProb * 0.65
-        }
-        #endif
-
-        // Gentle tie-breaker toward the user's app language for very short utterances (1-2 digits/words)
-        if recognizerLanguage == preferredDefault {
-            score += 0.04
-        }
-        return score
     }
 
     private func requestSpeechAuthorization() async -> Bool {
