@@ -827,7 +827,8 @@ public struct OverviewView: View {
                             commitmentStat(
                                 title: L10n.text(lang, en: "Remaining debt", vi: "Dư nợ còn lại", zh: "剩余债务"),
                                 minor: overview.remainingDebtMinor,
-                                lang: lang
+                                lang: lang,
+                                alignment: .trailing
                             )
                         }
 
@@ -870,8 +871,8 @@ public struct OverviewView: View {
         }
     }
 
-    private func commitmentStat(title: String, minor: Int64, lang: AppLanguage) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+    private func commitmentStat(title: String, minor: Int64, lang: AppLanguage, alignment: HorizontalAlignment = .leading) -> some View {
+        VStack(alignment: alignment, spacing: 4) {
             Text(title)
                 .font(.appCaption)
                 .foregroundStyle(Color.textSecondary)
@@ -881,7 +882,7 @@ public struct OverviewView: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: Alignment(horizontal: alignment, vertical: .center))
     }
 
     private func goalsPreviewCard(lang: AppLanguage) -> some View {
