@@ -15,9 +15,19 @@ public enum SettingsCategory: String, CaseIterable, Identifiable, Hashable, Send
     case shortcuts
     case emailInbox
     case cloud
+    case mcp
     case backup
 
     public var id: String { rawValue }
+
+    /// The categories this platform offers. The MCP server runs in the Mac app only.
+    public static var available: [SettingsCategory] {
+        #if os(macOS)
+        return allCases
+        #else
+        return allCases.filter { $0 != .mcp }
+        #endif
+    }
 }
 
 public struct SettingsView: View {
@@ -25,6 +35,7 @@ public struct SettingsView: View {
 
     @Environment(AppSettings.self) private var settings
     @Environment(CloudSync.self) private var cloudSync
+    @Environment(MCPServer.self) private var mcpServer
     @Environment(\.dismiss) private var dismiss
     @Environment(\.tabBarBottomInset) private var tabBarBottomInset
     @Environment(\.tabBarVisibility) private var tabBarVisibility
@@ -81,7 +92,7 @@ public struct SettingsView: View {
         NavigationStack(path: $path) {
             List {
                 Section {
-                    ForEach(SettingsCategory.allCases) { category in
+                    ForEach(SettingsCategory.available) { category in
                         NavigationLink(value: category) {
                             settingsRow(for: category, lang: lang)
                         }
@@ -139,7 +150,7 @@ public struct SettingsView: View {
 
                 ScrollView {
                     VStack(spacing: 4) {
-                        ForEach(SettingsCategory.allCases) { category in
+                        ForEach(SettingsCategory.available) { category in
                             WideSettingsCategoryRow(
                                 meta: categoryMeta(for: category, lang: lang),
                                 isSelected: selectedCategory == category
@@ -226,6 +237,13 @@ public struct SettingsView: View {
                 title: L10n.text(lang, en: "iCloud & Household", vi: "iCloud & Gia đình", zh: "iCloud 与家庭共享"),
                 detail: cloudStatusShort(lang: lang)
             )
+        case .mcp:
+            return CategoryMeta(
+                symbol: "message.fill",
+                tint: mcpTint,
+                title: L10n.text(lang, en: "MCP Server", vi: "Máy chủ MCP", zh: "MCP 服务器"),
+                detail: mcpStatusShort(lang: lang)
+            )
         case .backup:
             return CategoryMeta(
                 symbol: "arrow.up.arrow.down.circle",
@@ -249,6 +267,8 @@ public struct SettingsView: View {
             EmailInboxSettingsPane()
         case .cloud:
             CloudSharingSettingsPane()
+        case .mcp:
+            MCPSettingsPane()
         case .backup:
             BackupSettingsPane()
         }
@@ -264,6 +284,26 @@ public struct SettingsView: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    private var mcpTint: Color {
+        switch mcpServer.state {
+        case .running: return .positive
+        case .failed: return .caution
+        case .stopped, .starting: return .info
+        }
+    }
+
+    private func mcpStatusShort(lang: AppLanguage) -> String {
+        switch mcpServer.state {
+        case .running:
+            return settings.mcpAllowsChanges
+                ? L10n.text(lang, en: "On · can make changes", vi: "Bật · được thay đổi", zh: "已开启 · 可更改")
+                : L10n.text(lang, en: "On · read-only", vi: "Bật · chỉ đọc", zh: "已开启 · 只读")
+        case .starting: return L10n.text(lang, en: "Starting…", vi: "Đang khởi động…", zh: "正在启动…")
+        case .failed: return L10n.text(lang, en: "Not running", vi: "Không chạy", zh: "未运行")
+        case .stopped: return L10n.text(lang, en: "Claude Code, Codex & more", vi: "Claude Code, Codex và hơn nữa", zh: "Claude Code、Codex 等")
+        }
     }
 
     private func cloudStatusShort(lang: AppLanguage) -> String {

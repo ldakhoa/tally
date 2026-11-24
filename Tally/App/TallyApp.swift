@@ -33,6 +33,7 @@ struct TallyApp: App {
     @State private var cloudSync = CloudSync()
     @State private var emailInbox = EmailInboxSync()
     @State private var assistant = AssistantService()
+    @State private var mcpServer = MCPServer()
     @State private var router = TabRouter()
     @Environment(\.scenePhase) private var scenePhase
 
@@ -45,6 +46,7 @@ struct TallyApp: App {
                 .environment(cloudSync)
                 .environment(emailInbox)
                 .environment(assistant)
+                .environment(mcpServer)
                 .environment(\.hideSalary, settings.hideSalary)
                 #if os(macOS)
                 .frame(minWidth: 780, minHeight: 580)
@@ -55,6 +57,11 @@ struct TallyApp: App {
                     store.reconcileMemberIdentities(settings: settings, notifyCloud: true)
                     store.deduplicateExistingTransactions(notifyCloud: true)
                     emailInbox.syncIfConfigured(settings: settings, store: store)
+                    #if os(macOS)
+                    // The MCP server for other assistants runs only in the Mac app, and only when
+                    // the user turned it on in Settings.
+                    mcpServer.apply(settings: settings, store: store)
+                    #endif
                 }
                 .onChange(of: scenePhase) { _, phase in
                     // Re-lock salary when the app leaves the foreground for real. `.inactive`

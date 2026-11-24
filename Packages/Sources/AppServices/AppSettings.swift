@@ -119,6 +119,24 @@ public final class AppSettings {
         didSet { defaults.set(emailInboxURL, forKey: Keys.emailInboxURL) }
     }
 
+    /// The local MCP server (Mac only) that lets assistants such as Claude Code or Codex read
+    /// this household's data. Off until the user turns it on.
+    public var mcpServerEnabled: Bool {
+        didSet { defaults.set(mcpServerEnabled, forKey: Keys.mcpServerEnabled) }
+    }
+
+    /// `true` when MCP clients may also add, change and delete records. Off by default.
+    public var mcpAllowsChanges: Bool {
+        didSet { defaults.set(mcpAllowsChanges, forKey: Keys.mcpAllowsChanges) }
+    }
+
+    /// Loopback TCP port of the MCP server.
+    public var mcpPort: Int {
+        didSet { defaults.set(mcpPort, forKey: Keys.mcpPort) }
+    }
+
+    public static let defaultMCPPort = 47_821
+    public static let mcpPortRange = 1_024...65_535
 
     public private(set) var hasEmailInboxSecret = false
     public var isEmailInboxConfigured: Bool {
@@ -234,6 +252,10 @@ public final class AppSettings {
         self.partnerDisplayName = storedPartner
         self.cloudZoneRole = storedRole
         self.emailInboxURL = defaults.string(forKey: Keys.emailInboxURL) ?? ""
+        self.mcpServerEnabled = defaults.bool(forKey: Keys.mcpServerEnabled)
+        self.mcpAllowsChanges = defaults.bool(forKey: Keys.mcpAllowsChanges)
+        let storedPort = defaults.integer(forKey: Keys.mcpPort)
+        self.mcpPort = Self.mcpPortRange.contains(storedPort) ? storedPort : Self.defaultMCPPort
 
         CozySounds.setEnabled(storedSounds)
         ThemeRuntime.shared.update(theme: storedTheme, appearance: storedAppearance)
@@ -374,5 +396,8 @@ public final class AppSettings {
         static let partnerDisplayName = "tally.partner.name"
         static let cloudZoneRole = "tally.icloud.zoneRole"
         static let emailInboxURL = "tally.emailInbox.url"
+        static let mcpServerEnabled = "tally.mcp.enabled"
+        static let mcpAllowsChanges = "tally.mcp.allowsChanges"
+        static let mcpPort = "tally.mcp.port"
     }
 }

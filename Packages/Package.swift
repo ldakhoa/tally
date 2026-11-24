@@ -7,6 +7,7 @@ let domainModules: [(name: String, dependencies: [String])] = [
     ("TallyCore", []),
     ("ThemeTokens", ["TallyCore"]),
     ("ClaudeKit", ["TallyCore"]),
+    ("MCPKit", ["TallyCore"]),
     ("BudgetKit", ["TallyCore", "ClaudeKit"]),
     ("SyncKit", ["TallyCore", "BudgetKit"]),
 ]
@@ -16,7 +17,7 @@ let platformModules: [(name: String, dependencies: [String])] = [
     ("DesignSystem", ["TallyCore", "ThemeTokens", "BudgetKit"]),
     ("Persistence", ["TallyCore", "BudgetKit"]),
     ("AppServices", [
-        "TallyCore", "ThemeTokens", "ClaudeKit", "BudgetKit", "SyncKit", "DesignSystem", "Persistence",
+        "TallyCore", "ThemeTokens", "ClaudeKit", "MCPKit", "BudgetKit", "SyncKit", "DesignSystem", "Persistence",
     ]),
 ]
 
@@ -43,10 +44,11 @@ let tests: [String: [String]] = [
     "TallyCore": [],
     "ThemeTokens": ["TallyCore"],
     "ClaudeKit": ["TallyCore"],
+    "MCPKit": ["TallyCore"],
     "BudgetKit": ["TallyCore", "ClaudeKit"],
     "SyncKit": ["TallyCore", "BudgetKit"],
     // Store/sync wiring tests run against an in-memory SwiftData container (never the app's store).
-    "AppServices": ["TallyCore", "ClaudeKit", "BudgetKit", "SyncKit", "Persistence"],
+    "AppServices": ["TallyCore", "ClaudeKit", "MCPKit", "BudgetKit", "SyncKit", "Persistence"],
 ]
 
 func makeTargets(_ name: String, dependencies: [String]) -> [Target] {

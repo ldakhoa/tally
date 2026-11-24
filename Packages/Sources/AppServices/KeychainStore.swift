@@ -135,4 +135,44 @@ public enum KeychainStore {
             SecItemDelete(APIKeyKeychain.query(kind, service: inboxService, account: inboxAccount) as CFDictionary)
         }
     }
+
+    // MARK: - MCP access token (this device only: never iCloud Keychain, UserDefaults or CloudKit)
+
+    private static let mcpService = "com.ldakhoa.tally.mcp"
+    private static let mcpAccount = "access-token"
+
+    private static var mcpQuery: [String: Any] {
+        APIKeyKeychain.query(.local, service: mcpService, account: mcpAccount)
+    }
+
+    /// The bearer token MCP clients on this Mac must present, or `nil` before one was created.
+    public static func readMCPToken() -> String? {
+        var q = mcpQuery
+        q[kSecReturnData as String] = true
+        q[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data,
+              let token = String(data: data, encoding: .utf8),
+              !token.isEmpty
+        else { return nil }
+        return token
+    }
+
+    /// Replaces the token with a new random one (clients holding the old one stop working).
+    /// Returns `nil` when the Keychain refused to store it.
+    public static func regenerateMCPToken() -> String? {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { return nil }
+        let token = bytes.map { String(format: "%02x", $0) }.joined()
+        SecItemDelete(mcpQuery as CFDictionary)
+        var q = mcpQuery
+        q[kSecValueData as String] = Data(token.utf8)
+        for (k, v) in APIKeyKeychain.addAttributes(.local) { q[k] = v }
+        return SecItemAdd(q as CFDictionary, nil) == errSecSuccess ? token : nil
+    }
+
+    public static func mcpTokenCreatingIfNeeded() -> String? {
+        readMCPToken() ?? regenerateMCPToken()
+    }
 }
