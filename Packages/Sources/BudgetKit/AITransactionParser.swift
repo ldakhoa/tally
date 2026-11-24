@@ -52,6 +52,8 @@ public enum AITransactionParser {
             You extract a single COMPLETED personal budget transaction from bank alerts, bank emails, e-receipts, Apple Pay alerts, or quick notes in English, Vietnamese, or Chinese.
             CRITICAL FILTERING RULES:
             - Set isTransaction = false (and amount = 0) for ANY promotional/marketing email, voucher/discount offer ("up to 50,000đ", "save $20", "win $1,000", "ưu đãi", "khuyến mãi", "giảm giá", "优惠", "折扣", "促销"), newsletter, OTP/verification code, login alert, card statement summary, or advertisement.
+            - Loan, cash-advance, balance-transfer, credit-limit and card-upgrade OFFERS (e.g. "CashOne", "get cash at 1.9% p.a.", "pre-approved", "apply by ...") are promotional: isTransaction = false, even when they quote amounts or rates.
+            - Never invent a placeholder amount. If no money actually moved, isTransaction = false and amount = 0.
             - Set isTransaction = true ONLY for an actual completed payment, transfer, receipt, debit, credit, salary, or refund.
             - Always report the EXACT original currency stated in the text (e.g. "50,000đ" or "VND" -> currency "VND"; "S$" or "SGD" -> currency "SGD"). Only use default currency \(defaultCurrency.rawValue) if no currency is shown.
             - Today's date is \(todayKey). Use it when no transaction date is present.
@@ -72,6 +74,15 @@ public enum AITransactionParser {
                 // If Claude explicitly determined this is NOT a real transaction, DO NOT fall back to regex!
                 guard wire.isTransaction, wire.amount > 0 else { return nil }
                 if source == .bankEmail && wire.confidence < 0.55 { return nil }
+                // A model can contradict itself: `isTransaction = true` on a result it names
+                // "… Promo (not a transaction)". Its own wording wins over the flag.
+                if LocalTransactionParser.describesNonTransaction(
+                    name: wire.name,
+                    note: wire.note,
+                    strict: source == .bankEmail
+                ) {
+                    return nil
+                }
 
                 let type = TransactionType(rawValue: wire.type) ?? .expense
                 var category = CategoryID(rawValue: wire.category) ?? (type == .income ? .income : .other)

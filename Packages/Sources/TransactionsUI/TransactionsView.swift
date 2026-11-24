@@ -9,8 +9,11 @@ public struct TransactionsView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(BudgetStore.self) private var store
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    @Environment(\.tabBarVisibility) private var tabBarVisibility
 
     @State private var searchText = ""
+    @FocusState private var isSearchFocused: Bool
     @State private var editingTransaction: TransactionRecord?
     @State private var showInlineCalendar = false
     @State private var viewportWidth: CGFloat = 0
@@ -52,6 +55,10 @@ public struct TransactionsView: View {
                         )
                     }
 
+                    if usesInlineSearch {
+                        inlineSearchField(resultCount: groups.reduce(0) { $0 + $1.transactions.count }, lang: lang)
+                    }
+
                     if showInlineCalendar && viewportWidth >= 840 {
                         unifiedFilterBar(lang: lang)
                         MemberFilterBar()
@@ -81,7 +88,15 @@ public struct TransactionsView: View {
             .readViewportWidth($viewportWidth)
             .pageBackground()
             .navigationTitle(L10n.text(lang, en: "Transactions", vi: "Giao dịch", zh: "账单"))
-            .searchable(text: $searchText, prompt: L10n.text(lang, en: "Search merchant, category, note", vi: "Tìm cửa hàng, danh mục, ghi chú", zh: "搜索商户、分类或备注"))
+            .scrollDismissesKeyboard(.immediately)
+            // Typing a search: tuck the floating tab bar and action dock away so results stay visible.
+            .onChange(of: isSearchFocused) { _, focused in
+                tabBarVisibility?.setHidden(focused, for: "transactions")
+            }
+            .onDisappear {
+                tabBarVisibility?.setHidden(false, for: "transactions")
+            }
+            .modifier(ToolbarSearch(isEnabled: !usesInlineSearch, text: $searchText, prompt: searchPrompt(lang)))
             .toolbar { TopToolbarControls() }
             .sheet(item: $editingTransaction) { tx in
                 TransactionEditorSheet(existing: tx)
@@ -90,6 +105,79 @@ public struct TransactionsView: View {
                 if let current = store.activityCategoryFilter, !filterCategories.contains(current) {
                     store.activityCategoryFilter = nil
                 }
+            }
+        }
+    }
+
+    // MARK: - Search
+
+    /// iPhone hides the native tab bar behind the floating one, which also swallows the system
+    /// search field, so compact widths get a search field inside the page instead.
+    private var usesInlineSearch: Bool {
+        #if os(iOS)
+        return horizontalSizeClass == .compact
+        #else
+        return false
+        #endif
+    }
+
+    private func searchPrompt(_ lang: AppLanguage) -> String {
+        L10n.text(lang, en: "Search merchant, category, note", vi: "Tìm cửa hàng, danh mục, ghi chú", zh: "搜索商户、分类或备注")
+    }
+
+    private func inlineSearchField(resultCount: Int, lang: AppLanguage) -> some View {
+        let isSearching = !searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                CozyUIIcon(.search, size: 17, color: isSearchFocused ? Color.accent : Color.textSecondary)
+
+                TextField(searchPrompt(lang), text: $searchText)
+                    .font(.appBody)
+                    .foregroundStyle(Color.textPrimary)
+                    .focused($isSearchFocused)
+                    .submitLabel(.search)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .textInputAutocapitalization(.never)
+                    #endif
+                    .onSubmit { isSearchFocused = false }
+
+                if !searchText.isEmpty {
+                    Button {
+                        CozyHaptics.light()
+                        searchText = ""
+                    } label: {
+                        CozyUIIcon(.xmarkCircle, size: 18, color: Color.textSecondary)
+                            .frame(width: 30, height: 30)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.themedPlain)
+                    .accessibilityLabel(L10n.text(lang, en: "Clear search", vi: "Xoá tìm kiếm", zh: "清除搜索"))
+                }
+            }
+            .padding(.leading, 14)
+            .padding(.trailing, searchText.isEmpty ? 14 : 6)
+            .frame(minHeight: 46)
+            .background(Color.cardBackground, in: Capsule())
+            .overlay {
+                Capsule().strokeBorder(isSearchFocused ? Color.ink : Color.hairlineStrong, lineWidth: isSearchFocused ? 1.6 : 1)
+            }
+            .contentShape(Capsule())
+            .onTapGesture { isSearchFocused = true }
+            .animation(.snappy(duration: 0.16), value: isSearchFocused)
+
+            if isSearching {
+                Text(L10n.text(
+                    lang,
+                    en: "\(resultCount) found in this period",
+                    vi: "Tìm thấy \(resultCount) giao dịch trong kỳ này",
+                    zh: "本期找到 \(resultCount) 笔"
+                ))
+                .font(.appCaption)
+                .foregroundStyle(Color.textSecondary)
+                .padding(.leading, 14)
+                .contentTransition(.numericText())
             }
         }
     }
@@ -294,6 +382,7 @@ public struct TransactionsView: View {
                             }
                         }
                     }
+                    .cozyMenuPill()
 
                     Rectangle()
                         .fill(Color.hairlineStrong)
@@ -382,7 +471,10 @@ public struct TransactionsView: View {
     }
 
     private var filteredGroups: [DailyTransactionGroup] {
-        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let query = searchText
+        let isSearching = !TransactionSearch.tokens(query).isEmpty
+        let currency = settings.currency
+        let lang = settings.language
         let base = store.snapshot.transactions.filter { tx in
             switch store.activityTypeFilter {
             case .all: break
@@ -393,10 +485,30 @@ public struct TransactionsView: View {
             if let cat = store.activityCategoryFilter, tx.category != cat {
                 return false
             }
-            guard !query.isEmpty else { return true }
-            let haystack = "\(tx.name) \(tx.category.title(in: settings.language)) \(tx.note) \(tx.memberName)".lowercased()
-            return haystack.contains(query)
+            guard isSearching else { return true }
+            var fields = [tx.name, tx.category.title(in: lang), tx.note, tx.memberName]
+            // Amounts are searchable unless this is a salary row hidden by the privacy toggle.
+            if !tx.isSalaryMasked(hidden: settings.hideSalary) {
+                fields.append(MoneyFormat.format(minor: tx.amountMinor, currency: currency, language: lang))
+                fields.append(String(format: "%.2f", currency.toMajor(tx.amountMinor)))
+            }
+            return TransactionSearch.matches(query: query, fields: fields)
         }
         return MonthlySnapshot.groupByDay(base)
+    }
+}
+
+/// The system search field, used wherever it is actually reachable (iPad and Mac).
+private struct ToolbarSearch: ViewModifier {
+    let isEnabled: Bool
+    @Binding var text: String
+    let prompt: String
+
+    func body(content: Content) -> some View {
+        if isEnabled {
+            content.searchable(text: $text, prompt: prompt)
+        } else {
+            content
+        }
     }
 }

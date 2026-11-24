@@ -59,19 +59,38 @@ public struct GoalsView: View {
     }
 
     private func content(goals: [SavingsGoalRecord], totalSaved: Int64, totalTarget: Int64, lang: AppLanguage) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            if !goals.isEmpty {
-                Card {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(L10n.text(lang, en: "Total saved", vi: "Tổng đã tiết kiệm", zh: "已累计存款"))
-                                .font(.appCaption)
-                                .foregroundStyle(Color.textSecondary)
-                            Text(MoneyFormat.format(minor: totalSaved, currency: settings.currency, language: lang))
-                                .font(.appMetric)
-                        }
-                        Spacer()
+        let journey = GoalsJourney(goals: goals)
+
+        return VStack(alignment: .leading, spacing: 16) {
+            if goals.isEmpty {
+                EmptyStateCard(
+                    symbol: "target",
+                    title: L10n.text(lang, en: "No savings goals yet", vi: "Chưa có mục tiêu tiết kiệm", zh: "暂无存钱目标"),
+                    message: L10n.text(lang, en: "Create shared goals like an emergency fund, family trip, or home upgrade.", vi: "Tạo mục tiêu chung như quỹ dự phòng, du lịch gia đình hay mua sắm lớn.", zh: "创建共同存钱目标，例如应急基金、家庭旅行或家居升级。"),
+                    actionTitle: embedded ? nil : L10n.text(lang, en: "Create goal", vi: "Tạo mục tiêu", zh: "创建目标")
+                ) {
+                    showingNewGoal = true
+                }
+            } else {
+                HStack(spacing: 8) {
+                    HStack(spacing: 5) {
+                        CozyStarShape()
+                            .fill(Color(hex: 0xF2A92C))
+                            .frame(width: 14, height: 14)
+                        Text(L10n.text(
+                            lang,
+                            en: "\(journey.starsEarned)/\(journey.starsTotal) stars collected",
+                            vi: "Đã gom \(journey.starsEarned)/\(journey.starsTotal) sao",
+                            zh: "已收集 \(journey.starsEarned)/\(journey.starsTotal) 颗星"
+                        ))
+                        .font(.appCaption.weight(.semibold))
+                        .foregroundStyle(Color.textSecondary)
+                        .contentTransition(.numericText())
+                    }
+                    Spacer(minLength: 8)
+                    if !embedded {
                         Button {
+                            CozyHaptics.medium()
                             showingNewGoal = true
                         } label: {
                             HStack(spacing: 6) {
@@ -81,68 +100,294 @@ public struct GoalsView: View {
                         }
                         .pillButton(prominent: true)
                     }
-                    if totalTarget > 0 {
-                        TallyProgressBar(value: Double(totalSaved) / Double(totalTarget), fill: .positive)
-                        Text("\(L10n.text(lang, en: "Target:", vi: "Mục tiêu:", zh: "总目标：")) \(MoneyFormat.format(minor: totalTarget, currency: settings.currency, language: lang))")
-                            .font(.appCaption)
-                            .foregroundStyle(Color.textSecondary)
-                    }
                 }
-            }
 
-            if goals.isEmpty {
-                EmptyStateCard(
-                    symbol: "target",
-                    title: L10n.text(lang, en: "No savings goals yet", vi: "Chưa có mục tiêu tiết kiệm", zh: "暂无存钱目标"),
-                    message: L10n.text(lang, en: "Create shared goals like an emergency fund, family trip, or home upgrade.", vi: "Tạo mục tiêu chung như quỹ dự phòng, du lịch gia đình hay mua sắm lớn.", zh: "创建共同存钱目标，例如应急基金、家庭旅行或家居升级。"),
-                    actionTitle: L10n.text(lang, en: "Create goal", vi: "Tạo mục tiêu", zh: "创建目标")
-                ) {
-                    showingNewGoal = true
-                }
-            } else {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 14)], spacing: 14) {
+                heroCard(journey: journey, lang: lang)
+                    .cozyEntrance(index: 0)
+
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 14, alignment: .top)], spacing: 14) {
                     ForEach(goals) { goal in
-                        Card {
-                            HStack(spacing: 12) {
-                                GoalBadge(icon: goal.icon, size: 42)
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(goal.name).font(.appHeading)
-                                    Text("\(MoneyFormat.format(minor: goal.savedMinor, currency: settings.currency, language: lang)) / \(MoneyFormat.format(minor: goal.targetMinor, currency: settings.currency, language: lang))")
-                                        .font(.appCaption)
-                                        .foregroundStyle(Color.textSecondary)
-                                }
-                                Spacer()
-                                Tag(text: "\(goal.percent)%", color: goal.icon.color)
-                            }
-
-                            TallyProgressBar(value: goal.progress, fill: goal.icon.color)
-
-                            HStack(spacing: 10) {
-                                Button {
-                                    contributingGoal = goal
-                                } label: {
-                                    HStack(spacing: 6) {
-                                        CozyUIIcon(.plus, size: 14, color: Color.onInk)
-                                        Text(L10n.text(lang, en: "Contribute", vi: "Góp thêm", zh: "存入一笔"))
-                                    }
-                                }
-                                .pillButton(prominent: true)
-
-                                Button(L10n.text(lang, en: "Edit", vi: "Sửa", zh: "编辑")) {
-                                    editingGoal = goal
-                                }
-                                .pillButton()
-                            }
-                        }
+                        GoalJourneyCard(
+                            goal: goal,
+                            currency: settings.currency,
+                            language: lang,
+                            onContribute: {
+                                CozyHaptics.medium()
+                                contributingGoal = goal
+                            },
+                            onEdit: { editingGoal = goal }
+                        )
                     }
                 }
             }
         }
     }
+
+    // MARK: - Hero: everything saved so far
+
+    private func heroCard(journey: GoalsJourney, lang: AppLanguage) -> some View {
+        let currency = settings.currency
+        let percent = Int((journey.fraction * 100).rounded(.down))
+
+        return VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .center, spacing: 14) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        CozyCoinView(size: 16)
+                        Text(L10n.text(lang, en: "Total saved", vi: "Tổng đã tiết kiệm", zh: "已累计存款"))
+                            .font(.appControl)
+                            .foregroundStyle(Color.textSecondary)
+                    }
+
+                    CozyCountUpText(value: journey.totalSavedMinor) {
+                        MoneyFormat.format(minor: $0, currency: currency, language: lang)
+                    }
+                    .font(.appMetricHero)
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.6)
+
+                    Text("\(L10n.text(lang, en: "of", vi: "trên", zh: "目标")) \(MoneyFormat.format(minor: journey.totalTargetMinor, currency: currency, language: lang))")
+                        .font(.appCaption)
+                        .foregroundStyle(Color.textSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+
+                Spacer(minLength: 4)
+
+                CozyProgressRing(
+                    value: journey.fraction,
+                    size: 88,
+                    lineWidth: 11,
+                    colors: [Color(hex: 0x9DE0B8), .positive]
+                ) {
+                    VStack(spacing: 0) {
+                        Text("\(percent)%")
+                            .font(.system(size: 19, weight: .heavy, design: .rounded).monospacedDigit())
+                            .foregroundStyle(Color.textPrimary)
+                            .contentTransition(.numericText())
+                        Text(L10n.text(lang, en: "there", vi: "chặng đường", zh: "已完成"))
+                            .font(.system(size: 10.5, weight: .semibold, design: .rounded))
+                            .foregroundStyle(Color.textSecondary)
+                    }
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel(L10n.text(lang, en: "\(percent)% of all goals saved", vi: "Đã tiết kiệm \(percent)% tổng mục tiêu", zh: "已存到全部目标的 \(percent)%"))
+            }
+
+            HStack(alignment: .top, spacing: 8) {
+                CozyStatTile(
+                    value: "\(journey.completedCount)",
+                    label: L10n.text(lang, en: "goals completed", vi: "mục tiêu đã về đích", zh: "已达成目标"),
+                    tint: Color(hex: 0xD6941E)
+                ) {
+                    CozyTrophyView(size: 18)
+                }
+
+                if let closest = journey.closest {
+                    CozyStatTile(
+                        value: MoneyFormat.format(
+                            minor: max(0, closest.targetMinor - closest.savedMinor),
+                            currency: currency,
+                            language: lang,
+                            compact: true
+                        ),
+                        label: L10n.text(
+                            lang,
+                            en: "to finish \(closest.name)",
+                            vi: "nữa là xong \(closest.name)",
+                            zh: "即可完成「\(closest.name)」"
+                        ),
+                        tint: .positive
+                    ) {
+                        CozyGoalIcon(goal: closest.icon, size: 16, style: .watercolor)
+                    }
+                } else {
+                    CozyStatTile(
+                        value: L10n.text(lang, en: "All done", vi: "Xong hết", zh: "全部达成"),
+                        label: L10n.text(lang, en: "time for a new dream", vi: "đặt ước mơ mới thôi", zh: "该定个新梦想了"),
+                        tint: .positive
+                    ) {
+                        CozyUIIcon(.sparkles, size: 15, color: Color.positive)
+                    }
+                }
+            }
+        }
+        .cozyHeroSurface(.mint)
+    }
 }
 
-private struct GoalEditorSheet: View {
+// MARK: - Goal card: ring, milestone stars, celebration
+
+private struct GoalJourneyCard: View {
+    let goal: SavingsGoalRecord
+    let currency: CurrencyCode
+    let language: AppLanguage
+    let onContribute: () -> Void
+    let onEdit: () -> Void
+
+    @State private var burstTrigger = 0
+    @State private var milestoneToast: Int?
+    @State private var toastToken = 0
+
+    var body: some View {
+        let lang = language
+        let milestones = GoalMilestones(goal: goal)
+        let shape = RoundedRectangle(cornerRadius: Radius.card, style: .continuous)
+        let gold = Color(hex: 0xD6941E)
+
+        VStack(alignment: .leading, spacing: 13) {
+            HStack(spacing: 12) {
+                CozyProgressRing(
+                    value: goal.progress,
+                    size: 58,
+                    lineWidth: 5,
+                    colors: milestones.isComplete ? [Color(hex: 0xFFD966), gold] : [goal.icon.color.opacity(0.55), goal.icon.color],
+                    animatesOnAppear: false
+                ) {
+                    GoalBadge(icon: goal.icon, size: 38)
+                        .clipShape(Circle())
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(goal.name)
+                        .font(.appHeading)
+                        .foregroundStyle(Color.textPrimary)
+                        .lineLimit(1)
+                    Text("\(money(goal.savedMinor)) / \(money(goal.targetMinor))")
+                        .font(.appCaption)
+                        .foregroundStyle(Color.textSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                        .contentTransition(.numericText())
+                }
+
+                Spacer(minLength: 8)
+
+                if milestones.isComplete {
+                    CozyTrophyView(size: 34)
+                } else {
+                    Text("\(goal.percent)%")
+                        .font(.system(size: 21, weight: .heavy, design: .rounded).monospacedDigit())
+                        .foregroundStyle(goal.icon.color)
+                        .contentTransition(.numericText())
+                }
+            }
+
+            CozyMilestoneBar(
+                value: goal.progress,
+                fill: milestones.isComplete ? gold : goal.icon.color,
+                milestones: GoalMilestones.steps.map { Double($0) / 100 },
+                height: 12,
+                animatesOnAppear: false
+            )
+
+            Text(statusLine(milestones: milestones, lang: lang))
+                .font(.appCaption.weight(.medium))
+                .foregroundStyle(milestones.isComplete ? gold : Color.textSecondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 10) {
+                if !milestones.isComplete {
+                    Button(action: onContribute) {
+                        HStack(spacing: 6) {
+                            CozyCoinView(size: 15)
+                            Text(L10n.text(lang, en: "Contribute", vi: "Góp thêm", zh: "存入一笔"))
+                        }
+                    }
+                    .pillButton(prominent: true)
+                }
+
+                Button(L10n.text(lang, en: "Edit", vi: "Sửa", zh: "编辑"), action: onEdit)
+                    .pillButton()
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .cardSurface()
+        .overlay {
+            if milestones.isComplete {
+                shape.strokeBorder(Color(hex: 0xF5B959, alpha: 0.75), lineWidth: 1.5)
+            }
+        }
+        .overlay(alignment: .top) {
+            if let milestoneToast {
+                milestoneBanner(percent: milestoneToast, lang: lang)
+                    .offset(y: -14)
+                    .transition(.scale(scale: 0.6).combined(with: .opacity))
+            }
+        }
+        .overlay {
+            CozyCoinBurstOverlay(trigger: burstTrigger, coinCount: 14)
+        }
+        .onChange(of: goal.savedMinor) { oldValue, newValue in
+            guard newValue > oldValue else { return }
+            let before = GoalMilestones.reachedCount(savedMinor: oldValue, targetMinor: goal.targetMinor)
+            let after = GoalMilestones.reachedCount(savedMinor: newValue, targetMinor: goal.targetMinor)
+            // The contribution sheet is still sliding away: celebrate once the card is in view.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                burstTrigger += 1
+                if after > before {
+                    showMilestone(GoalMilestones.steps[after - 1])
+                }
+            }
+        }
+    }
+
+    private func showMilestone(_ percent: Int) {
+        toastToken += 1
+        let token = toastToken
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.55).delay(0.25)) {
+            milestoneToast = percent
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.2) {
+            guard token == toastToken else { return }
+            withAnimation(.easeOut(duration: 0.3)) { milestoneToast = nil }
+        }
+    }
+
+    private func milestoneBanner(percent: Int, lang: AppLanguage) -> some View {
+        HStack(spacing: 6) {
+            CozyStarShape()
+                .fill(Color(hex: 0xFFD966))
+                .frame(width: 15, height: 15)
+            Text(percent >= 100
+                 ? L10n.text(lang, en: "Goal complete!", vi: "Về đích rồi!", zh: "目标达成！")
+                 : L10n.text(lang, en: "\(percent)% milestone reached!", vi: "Chạm mốc \(percent)%!", zh: "达到 \(percent)% 里程碑！"))
+                .font(.appControl)
+                .foregroundStyle(Color.onInk)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+        .background(Color.ink, in: Capsule())
+        .floatingShadow()
+        .accessibilityAddTraits(.isStaticText)
+    }
+
+    private func statusLine(milestones: GoalMilestones, lang: AppLanguage) -> String {
+        guard let next = milestones.nextStepPercent else {
+            return L10n.text(lang, en: "Goal complete. You earned this one!", vi: "Đã về đích. Thành quả của bạn đó!", zh: "目标达成，这是你挣来的！")
+        }
+        let amount = money(milestones.toNextMinor)
+        if next >= 100 {
+            return L10n.text(lang, en: "\(amount) more and it's yours", vi: "Còn \(amount) nữa là về đích", zh: "再存 \(amount) 就达成")
+        }
+        return L10n.text(lang, en: "\(amount) to the \(next)% star", vi: "Còn \(amount) nữa là chạm sao \(next)%", zh: "再存 \(amount) 点亮 \(next)% 星")
+    }
+
+    private func money(_ minor: Int64) -> String {
+        MoneyFormat.format(minor: minor, currency: currency, language: language)
+    }
+}
+
+public struct GoalEditorSheet: View {
     let existing: SavingsGoalRecord?
+
+    public init(existing: SavingsGoalRecord? = nil) {
+        self.existing = existing
+    }
 
     @Environment(AppSettings.self) private var settings
     @Environment(BudgetStore.self) private var store
@@ -160,7 +405,7 @@ private struct GoalEditorSheet: View {
 
     @FocusState private var isNameFocused: Bool
 
-    var body: some View {
+    public var body: some View {
         let lang = settings.language
         let targetMajor = max(0, targetKeypad.evaluatedValue ?? 0)
         let canSave = !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && targetMajor > 0
@@ -289,30 +534,23 @@ private struct GoalEditorSheet: View {
             .animation(.snappy(duration: 0.22), value: isNameFocused)
             .pageBackground()
             .keypadKeyboardInput(engine: activeKeypadBinding, isEnabled: !isNameFocused, isSaveEnabled: canSave, onSave: save)
-            .navigationTitle(existing == nil
+            .cozySheetToolbar(title: existing == nil
                 ? L10n.text(lang, en: "New goal", vi: "Mục tiêu mới", zh: "新建目标")
-                : L10n.text(lang, en: "Edit goal", vi: "Sửa mục tiêu", zh: "编辑目标"))
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    if isNameFocused {
-                        Button(L10n.text(lang, en: "Keypad", vi: "Bàn phím số", zh: "数字键盘")) {
-                            isNameFocused = false
-                        }
-                        .font(.appControl)
-                    } else if existing != nil {
-                        Button(role: .destructive) {
-                            confirmingDelete = true
-                        } label: {
-                            CozyUIIcon(.trash, size: 18, color: Color.negative)
-                        }
-                        .accessibilityLabel(L10n.text(lang, en: "Delete goal", vi: "Xoá mục tiêu", zh: "删除目标"))
+                : L10n.text(lang, en: "Edit goal", vi: "Sửa mục tiêu", zh: "编辑目标")) {
+                Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
+            } trailing: {
+                if isNameFocused {
+                    Button(L10n.text(lang, en: "Keypad", vi: "Bàn phím số", zh: "数字键盘")) {
+                        isNameFocused = false
                     }
+                    .font(.appControl)
+                } else if existing != nil {
+                    Button(role: .destructive) {
+                        confirmingDelete = true
+                    } label: {
+                        CozyUIIcon(.trash, size: 18, color: Color.negative)
+                    }
+                    .accessibilityLabel(L10n.text(lang, en: "Delete goal", vi: "Xoá mục tiêu", zh: "删除目标"))
                 }
             }
             .confirmationDialog(
@@ -469,10 +707,29 @@ private struct ContributionSheet: View {
                                 .foregroundStyle(Color.textSecondary)
                         }
                         Spacer()
-                        Tag(text: "\(goal.percent)%", color: goal.icon.color)
+                        Text("\(projectedPercent(amountMajor: amountMajor))%")
+                            .font(.system(size: 19, weight: .heavy, design: .rounded).monospacedDigit())
+                            .foregroundStyle(goal.icon.color)
+                            .contentTransition(.numericText())
+                            .animation(.snappy(duration: 0.2), value: amountMajor)
                     }
                     .padding(14)
                     .cardSurface(cornerRadius: 18)
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        CozyMilestoneBar(
+                            value: projectedProgress(amountMajor: amountMajor),
+                            fill: goal.icon.color,
+                            milestones: GoalMilestones.steps.map { Double($0) / 100 },
+                            height: 12
+                        )
+                        Text(previewLine(amountMajor: amountMajor, lang: lang))
+                            .font(.appCaption.weight(.medium))
+                            .foregroundStyle(Color.textSecondary)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.horizontal, 4)
 
                     Spacer(minLength: 8)
 
@@ -552,14 +809,8 @@ private struct ContributionSheet: View {
                     dismiss()
                 }
             }
-            .navigationTitle(L10n.text(lang, en: "Contribute", vi: "Góp tiết kiệm", zh: "存钱入账"))
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
-                }
+            .cozySheetToolbar(title: L10n.text(lang, en: "Contribute", vi: "Góp tiết kiệm", zh: "存钱入账")) {
+                Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
             }
             .onAppear {
                 keypad = AmountKeypadEngine(initialAmountMajor: nil, maxFractionDigits: settings.currency.fractionDigits)
@@ -567,5 +818,36 @@ private struct ContributionSheet: View {
         }
         .presentationDetents([.large])
         .cozySheetFrame(minWidth: 420, idealWidth: 460, minHeight: 520, idealHeight: 600)
+    }
+
+    // MARK: Live preview of where this contribution lands
+
+    private func projectedSavedMinor(amountMajor: Double) -> Int64 {
+        goal.savedMinor + settings.currency.toStorageMinor(amountMajor)
+    }
+
+    private func projectedProgress(amountMajor: Double) -> Double {
+        guard goal.targetMinor > 0 else { return 0 }
+        return min(1, max(0, Double(projectedSavedMinor(amountMajor: amountMajor)) / Double(goal.targetMinor)))
+    }
+
+    private func projectedPercent(amountMajor: Double) -> Int {
+        guard goal.targetMinor > 0 else { return 0 }
+        return Int((Double(projectedSavedMinor(amountMajor: amountMajor)) * 100 / Double(goal.targetMinor)).rounded(.down))
+    }
+
+    private func previewLine(amountMajor: Double, lang: AppLanguage) -> String {
+        let projected = GoalMilestones(savedMinor: projectedSavedMinor(amountMajor: amountMajor), targetMinor: goal.targetMinor)
+        let current = GoalMilestones(goal: goal)
+        if amountMajor > 0, projected.reachedCount > current.reachedCount, let reached = projected.lastReachedPercent {
+            return reached >= 100
+                ? L10n.text(lang, en: "This one finishes the goal!", vi: "Khoản này đưa bạn về đích luôn!", zh: "这一笔就能达成目标！")
+                : L10n.text(lang, en: "This one lights up the \(reached)% star", vi: "Khoản này thắp sáng sao \(reached)%", zh: "这一笔会点亮 \(reached)% 星")
+        }
+        guard let next = projected.nextStepPercent else {
+            return L10n.text(lang, en: "Goal complete", vi: "Đã về đích", zh: "目标已达成")
+        }
+        let amount = MoneyFormat.format(minor: projected.toNextMinor, currency: settings.currency, language: lang)
+        return L10n.text(lang, en: "\(amount) to the \(next)% star", vi: "Còn \(amount) nữa là chạm sao \(next)%", zh: "再存 \(amount) 点亮 \(next)% 星")
     }
 }

@@ -80,6 +80,7 @@ public final class BudgetStore {
     @ObservationIgnored private var _pendingReviewTransactions: [TransactionRecord]?
     @ObservationIgnored private var _snapshot: MonthlySnapshot?
     @ObservationIgnored private var _monthlySnapshot: MonthlySnapshot?
+    @ObservationIgnored private var _underBudgetMonthStreak: Int?
     @ObservationIgnored private var _statisticsSnapshot: StatisticsSnapshot?
     @ObservationIgnored private var _dailyCalendarTotals: [String: DailyCalendarTotal]?
 
@@ -89,6 +90,7 @@ public final class BudgetStore {
         _pendingReviewTransactions = nil
         _snapshot = nil
         _monthlySnapshot = nil
+        _underBudgetMonthStreak = nil
         _statisticsSnapshot = nil
         _dailyCalendarTotals = nil
     }
@@ -96,12 +98,14 @@ public final class BudgetStore {
     private func invalidatePeriodCaches() {
         _snapshot = nil
         _monthlySnapshot = nil
+        _underBudgetMonthStreak = nil
         _statisticsSnapshot = nil
     }
 
     private func invalidateMemberCaches() {
         _snapshot = nil
         _monthlySnapshot = nil
+        _underBudgetMonthStreak = nil
         _statisticsSnapshot = nil
         _dailyCalendarTotals = nil
     }
@@ -211,6 +215,20 @@ public final class BudgetStore {
             memberFilter: selectedMemberID
         )
         _monthlySnapshot = computed
+        return computed
+    }
+
+    /// Consecutive months right before the selected month that closed at or under budget.
+    public var underBudgetMonthStreak: Int {
+        _ = transactions; _ = budgets; _ = selectedPeriod; _ = selectedMemberID
+        if let cached = _underBudgetMonthStreak { return cached }
+        let computed = BudgetMomentum.underBudgetMonthStreak(
+            before: selectedPeriod.primaryMonthKey,
+            allTransactions: transactions,
+            allBudgets: budgets,
+            memberFilter: selectedMemberID
+        )
+        _underBudgetMonthStreak = computed
         return computed
     }
 

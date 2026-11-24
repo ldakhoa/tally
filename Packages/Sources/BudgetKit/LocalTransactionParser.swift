@@ -58,9 +58,36 @@ public enum LocalTransactionParser {
             "win up to", "stand a chance", "redeem now", "apply now", "refer a friend",
             "khuyen mai", "uu dai", "giam gia", "giam ngay", "ma giam", "tang ngay",
             "co hoi trung", "dua ca nha di choi", "moi ban be", "one-time password", "otp is",
-            "verification code", "do not share this code", "statement is ready"
+            "verification code", "do not share this code", "statement is ready",
+            // Loan, cash-advance and card-upsell offers (e.g. "CashOne", balance transfer mailers).
+            "pre-approved", "preapproved", "pre-qualified", "personal loan offer",
+            "interest rate", "% p.a", "offer ends", "offer valid", "valid till", "valid until",
+            "t&cs apply", "terms and conditions apply", "sign up now", "cash rebate when"
         ]
         return containsAny(folded, promoSignals)
+    }
+
+    /// `true` when a parsed result describes itself as something other than a real transaction,
+    /// e.g. a model that answered "SC CashOne Promo (not a transaction)" while still marking it as
+    /// one. `strict` adds promotional wording and is meant for auto-captured bank emails only, so a
+    /// typed note like "promo lunch 12" still parses.
+    public static func describesNonTransaction(name: String, note: String, strict: Bool) -> Bool {
+        let folded = "\(name) \(note)".folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+        let denials = [
+            "not a transaction", "not an actual transaction", "not a real transaction", "non-transaction",
+            "no actual transaction", "no transaction", "no real transaction", "no completed transaction",
+            "khong phai giao dich", "khong co giao dich", "不是交易", "非交易", "没有实际交易", "無實際交易"
+        ]
+        if containsAny(folded, denials) { return true }
+        guard strict else { return false }
+        // Words a model uses to describe the email itself, not a discount on a real receipt
+        // ("promo code applied" on an e-receipt must still parse).
+        let promotional = [
+            "promotional", "promo email", "promo mail", "marketing", "advertis", "newsletter",
+            "offer email", "loan offer", "email khuyen mai", "thu khuyen mai", "quang cao", "tiep thi",
+            "促销邮件", "推广邮件", "广告", "營銷", "营销"
+        ]
+        return containsAny(folded, promotional)
     }
 
     public static func parse(

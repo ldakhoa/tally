@@ -6,9 +6,14 @@ import SwiftUI
 import TallyCore
 
 /// Create / edit sheet for installment plans and loans.
-struct InstallmentPlanEditorSheet: View {
+public struct InstallmentPlanEditorSheet: View {
     let existing: InstallmentPlanRecord?
-    var initialKind: InstallmentKind = .installment
+    let initialKind: InstallmentKind
+
+    public init(existing: InstallmentPlanRecord? = nil, initialKind: InstallmentKind = .installment) {
+        self.existing = existing
+        self.initialKind = initialKind
+    }
 
     @Environment(AppSettings.self) private var settings
     @Environment(BudgetStore.self) private var store
@@ -71,7 +76,7 @@ struct InstallmentPlanEditorSheet: View {
 
     // MARK: Body
 
-    var body: some View {
+    public var body: some View {
         let lang = settings.language
         let draft = draft
         let canSave = draft.isValid
@@ -119,21 +124,14 @@ struct InstallmentPlanEditorSheet: View {
             .animation(.snappy(duration: 0.22), value: isTextEditing)
             .pageBackground()
             .keypadKeyboardInput(engine: activeKeypadBinding, isEnabled: !isTextEditing, isSaveEnabled: canSave, onSave: save)
-            .navigationTitle(navigationTitle(lang: lang))
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
-                }
-                ToolbarItem(placement: .primaryAction) {
-                    if isTextEditing {
-                        Button(L10n.text(lang, en: "Keypad", vi: "Bàn phím số", zh: "数字键盘")) {
-                            endTextEditing()
-                        }
-                        .font(.appControl)
+            .cozySheetToolbar(title: navigationTitle(lang: lang)) {
+                Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
+            } trailing: {
+                if isTextEditing {
+                    Button(L10n.text(lang, en: "Keypad", vi: "Bàn phím số", zh: "数字键盘")) {
+                        endTextEditing()
                     }
+                    .font(.appControl)
                 }
             }
             .sheet(isPresented: $showingDatePicker) {
@@ -477,6 +475,7 @@ struct InstallmentPlanEditorSheet: View {
                         .background(Color.cardBackground, in: Capsule())
                         .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1))
                     }
+                    .cozyMenuPill()
                     Spacer(minLength: 0)
                 }
             }

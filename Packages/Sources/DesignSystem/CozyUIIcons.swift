@@ -59,6 +59,7 @@ public enum CozyUIIconKind: String, CaseIterable, Hashable, Sendable {
     case leaf
     case flame
     case photo
+    case search
 
     /// Maps legacy SF Symbol names used across `SettingsIconTile` and `Card` to hand-drawn cozy icons.
     public init?(sfSymbol: String) {
@@ -107,6 +108,7 @@ public enum CozyUIIconKind: String, CaseIterable, Hashable, Sendable {
         case "bell.badge.fill": self = .bell
         case "message.fill": self = .message
         case "pencil": self = .pencil
+        case "magnifyingglass": self = .search
         case "leaf.fill": self = .leaf
         case "flame.fill": self = .flame
         default: return nil
@@ -256,6 +258,8 @@ public struct CozyUIIcon: View {
                 flameIcon(s: s, style: style)
             case .photo:
                 photoIcon(s: s, style: style)
+            case .search:
+                searchIcon(s: s, style: style)
             }
         }
         .frame(width: size, height: size)
@@ -1044,6 +1048,22 @@ public struct CozyUIIcon: View {
                 p.addLine(to: CGPoint(x: 20 * s, y: 7.5 * s))
                 p.addLine(to: CGPoint(x: 10.5 * s, y: 17 * s))
                 p.closeSubpath()
+            }
+            .stroke(strokeColor, style: style)
+        }
+    }
+
+    /// Plump magnifying glass with a short felt-tip handle.
+    @ViewBuilder
+    private func searchIcon(s: CGFloat, style: StrokeStyle) -> some View {
+        ZStack {
+            Circle()
+                .stroke(strokeColor, style: style)
+                .frame(width: 11.5 * s, height: 11.5 * s)
+                .position(x: 10.5 * s, y: 10.5 * s)
+            Path { p in
+                p.move(to: CGPoint(x: 15 * s, y: 15 * s))
+                p.addLine(to: CGPoint(x: 19.5 * s, y: 19.5 * s))
             }
             .stroke(strokeColor, style: style)
         }

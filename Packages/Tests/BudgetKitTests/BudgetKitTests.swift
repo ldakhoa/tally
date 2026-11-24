@@ -362,4 +362,56 @@ final class BudgetKitTests: XCTestCase {
         XCTAssertEqual(GoalIcon.plane.title(in: .chinese), "旅行")
         XCTAssertEqual(BudgetAssistantPrompt.suggestedPrompts(in: .chinese).count, 4)
     }
+
+    // MARK: Promotional email filtering
+
+    func testSelfContradictingModelResultIsRejected() async {
+        // The model flags a loan-offer mailer as a transaction while naming it "not a transaction".
+        let json = """
+        {"isTransaction":true,"name":"SC CashOne Promo (not a transaction)","amount":1,"currency":"SGD","type":"expense","category":"other","date":"2026-11-23","note":"Promotional email from Standard Chartered; no actual transaction.","confidence":0.6}
+        """
+        let draft = await AITransactionParser.parse(
+            text: "Standard Chartered: Get cash with CashOne today. Enjoy low rates on your personal loan.",
+            source: .bankEmail,
+            defaultCurrency: .sgd,
+            language: .english,
+            client: MockAIClient(responseJSON: json)
+        )
+        XCTAssertNil(draft)
+    }
+
+    func testPromotionalWordingOnlyRejectsBankEmails() async {
+        let json = """
+        {"isTransaction":true,"name":"Bank newsletter","amount":5,"currency":"SGD","type":"expense","category":"other","date":"2026-11-23","note":"Marketing email","confidence":0.9}
+        """
+        let email = await AITransactionParser.parse(
+            text: "Your monthly update from the bank", source: .bankEmail,
+            defaultCurrency: .sgd, language: .english, client: MockAIClient(responseJSON: json)
+        )
+        XCTAssertNil(email)
+
+        // A real receipt that mentions a promo code is still a transaction.
+        let receiptJSON = """
+        {"isTransaction":true,"name":"GrabFood","amount":12.5,"currency":"SGD","type":"expense","category":"food","date":"2026-11-23","note":"Promo code applied","confidence":0.95}
+        """
+        let receipt = await AITransactionParser.parse(
+            text: "Your Grab E-Receipt. Total paid SGD 12.50", source: .bankEmail,
+            defaultCurrency: .sgd, language: .english, client: MockAIClient(responseJSON: receiptJSON)
+        )
+        XCTAssertEqual(receipt?.amountMajor, 12.5)
+    }
+
+    func testDescribesNonTransaction() {
+        XCTAssertTrue(LocalTransactionParser.describesNonTransaction(name: "SC CashOne Promo (not a transaction)", note: "", strict: false))
+        XCTAssertTrue(LocalTransactionParser.describesNonTransaction(name: "Thông báo", note: "Không phải giao dịch", strict: false))
+        XCTAssertFalse(LocalTransactionParser.describesNonTransaction(name: "Promo lunch", note: "", strict: false))
+        XCTAssertFalse(LocalTransactionParser.describesNonTransaction(name: "FairPrice", note: "DBS card 1234", strict: true))
+        XCTAssertTrue(LocalTransactionParser.describesNonTransaction(name: "Offer", note: "Email quảng cáo", strict: true))
+    }
+
+    func testLoanOfferMailersAreLikelyPromotional() {
+        XCTAssertTrue(LocalTransactionParser.isLikelyPromotional("You are pre-approved for CashOne. Rates from 1.9% p.a. T&Cs apply."))
+        XCTAssertTrue(LocalTransactionParser.isLikelyPromotional("Balance transfer offer valid till 31 Dec"))
+        XCTAssertFalse(LocalTransactionParser.isLikelyPromotional("Transaction alert: SGD 42.00 at NTUC. T&Cs apply."))
+    }
 }

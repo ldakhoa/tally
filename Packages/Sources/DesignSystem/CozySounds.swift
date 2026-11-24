@@ -6,6 +6,8 @@ public enum CozySoundKind: CaseIterable, Hashable, Sendable {
     case pop
     case love
     case success
+    /// Bright two-note "cha-ching" for money landing in a goal or a milestone reached.
+    case coin
 
     var volume: Float {
         switch self {
@@ -13,6 +15,7 @@ public enum CozySoundKind: CaseIterable, Hashable, Sendable {
         case .pop: return 0.24
         case .love: return 0.24
         case .success: return 0.22
+        case .coin: return 0.22
         }
     }
 
@@ -22,6 +25,7 @@ public enum CozySoundKind: CaseIterable, Hashable, Sendable {
         case .pop: return 0.048
         case .love: return 0.135
         case .success: return 0.22
+        case .coin: return 0.34
         }
     }
 }
@@ -178,6 +182,20 @@ public enum CozySounds {
                     phase2 += 2.0 * .pi * 1318.5 * dt
                     let env2 = min(1.0, t2 / 0.003) * exp(-t2 * 18.0)
                     mix += (sin(phase2) + 0.12 * sin(phase2 * 2.0)) * env2 * 0.56
+                }
+                value = mix
+
+            case .coin:
+                // Coin "cha-ching": B5 (987.8 Hz) flicks up to a ringing E6 (1318.5 Hz) with a shimmer partial.
+                phase1 += 2.0 * .pi * 987.8 * dt
+                let env1 = min(1.0, t / 0.002) * exp(-t * 46.0)
+                var mix = (sin(phase1) + 0.2 * sin(phase1 * 2.0)) * env1 * 0.46
+
+                let t2 = t - 0.07
+                if t2 >= 0 {
+                    phase2 += 2.0 * .pi * 1318.5 * dt
+                    let env2 = min(1.0, t2 / 0.002) * exp(-t2 * 13.0)
+                    mix += (sin(phase2) + 0.22 * sin(phase2 * 3.0)) * env2 * 0.5
                 }
                 value = mix
             }

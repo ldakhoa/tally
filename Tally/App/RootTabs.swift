@@ -54,6 +54,14 @@ enum PlanSegment: String, CaseIterable, Identifiable {
         }
     }
 
+    func addTitle(in language: AppLanguage) -> String {
+        switch self {
+        case .budgets: return L10n.text(language, en: "Set budget limit", vi: "Đặt hạn mức ngân sách", zh: "设置预算")
+        case .goals: return L10n.text(language, en: "New goal", vi: "Thêm mục tiêu", zh: "新建目标")
+        case .commitments: return L10n.text(language, en: "Add installment or loan", vi: "Thêm trả góp hoặc khoản vay", zh: "添加分期或贷款")
+        }
+    }
+
     /// Short label for the segmented control: three segments with icons must fit on the narrowest
     /// iPhone, and "Commitments" / "Khoản cam kết" / "分期与贷款" are too long for one third.
     func segmentTitle(in language: AppLanguage) -> String {
@@ -248,6 +256,7 @@ struct RootTabs: View {
 
     @State private var tabBarVisibility = TabBarVisibility()
     @State private var loadedTabs: Set<TallyTab> = [.overview]
+    @State private var planToCreate: PlanSegment?
     @State private var celebrationTrigger = 0
     @State private var lastTransactionCount = -1
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
@@ -303,6 +312,13 @@ struct RootTabs: View {
             }
             lastTransactionCount = newCount
         }
+        .sheet(item: $planToCreate) { segment in
+            switch segment {
+            case .budgets: BudgetEditorSheet()
+            case .goals: GoalEditorSheet()
+            case .commitments: InstallmentPlanEditorSheet()
+            }
+        }
         .sheet(isPresented: $settings.isShowingQuickAdd) {
             TransactionEditorSheet()
         }
@@ -342,6 +358,7 @@ struct RootTabs: View {
     // MARK: - iPhone Compact Tab Bar Shell
 
     private func compactTabShell(lang: AppLanguage) -> some View {
+        let activePlan = router.selectedTab == .budgets ? router.planSegment : nil
         let hidesTabBar = tabBarVisibility.isHidden(for: router.selectedTab.rawValue)
         let tabItems = TallyTab.allCases.map { tab in
             CozyTabBarItem(
@@ -374,8 +391,15 @@ struct RootTabs: View {
                     FloatingTallyActionDock(
                         language: lang,
                         onAskTally: { settings.isShowingAskTally = true },
-                        onQuickAdd: { settings.isShowingQuickAdd = true },
-                        onSmartPaste: { settings.isShowingSmartCapture = true }
+                        addTitle: activePlan?.addTitle(in: lang) ?? L10n.text(lang, en: "Add transaction", vi: "Thêm giao dịch", zh: "记一笔"),
+                        onQuickAdd: {
+                            if let activePlan {
+                                planToCreate = activePlan
+                            } else {
+                                settings.isShowingQuickAdd = true
+                            }
+                        },
+                        onSmartPaste: activePlan == nil ? { settings.isShowingSmartCapture = true } : nil
                     )
                     .padding(.trailing, 16)
                     .padding(.bottom, 84)
@@ -902,8 +926,9 @@ private struct PlanTabView: View {
 private struct FloatingTallyActionDock: View {
     let language: AppLanguage
     let onAskTally: () -> Void
+    let addTitle: String
     let onQuickAdd: () -> Void
-    let onSmartPaste: () -> Void
+    let onSmartPaste: (() -> Void)?
 
     @Environment(\.colorScheme) private var colorScheme
     @State private var petBounce = false
@@ -986,14 +1011,16 @@ private struct FloatingTallyActionDock: View {
             }
             .buttonStyle(.plain)
             .simultaneousGesture(
-                LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                    #if os(iOS)
-                    UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
-                    #endif
-                    onSmartPaste()
+                onSmartPaste.map { paste in
+                    LongPressGesture(minimumDuration: 0.45).onEnded { _ in
+                        #if os(iOS)
+                        UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
+                        #endif
+                        paste()
+                    }
                 }
             )
-            .accessibilityLabel(L10n.text(language, en: "Add transaction", vi: "Thêm giao dịch", zh: "记一笔"))
+            .accessibilityLabel(addTitle)
         }
     }
 }
