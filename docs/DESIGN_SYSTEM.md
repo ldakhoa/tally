@@ -132,3 +132,23 @@ Defined in `Packages/Sources/DesignSystem/CozyAnimations.swift`.
    - Petting companions → `CozyHaptics.soft()`
    - Primary `+` add / voice toggle → `CozyHaptics.medium()`
    - Transaction logged / AI action confirmed → `CozyHaptics.success()` + `CozyCelebrationOverlay`
+
+---
+
+## 7. Motivation & Reward Loops (Budgets · Goals · Commitments)
+
+The three plan screens are built to make progress feel good, so opening them pulls toward earning and keeping more. Components live in `Packages/Sources/DesignSystem/CozyMotivation.swift`; every figure they show is computed in `Packages/Sources/BudgetKit/MotivationMetrics.swift` (unit-tested), never in the view.
+
+| Screen | Hero (`cozyHeroSurface`) | Reward loop |
+|---|---|---|
+| **Budgets** (mint / honey / peach by pace) | Money left, `CozyProgressRing` of budget remaining, pace pill, pets reacting | Spend-per-day allowance, under-budget month streak (`CozyStreakFlame`), "Kept this month" level ladder with the exact amount to earn or cut for the next level |
+| **Goals** (mint) | Total saved, overall ring, trophies, the goal closest to done | 25 / 50 / 75 / 100% stars on `CozyMilestoneBar`, coin burst and milestone banner on every contribution, live preview in the contribution sheet |
+| **Commitments** (honey) | Paid so far, debt-free ring, debt-free month | One `CozyPaymentDots` segment per payment, "back every month once done", trophies on finished plans |
+
+Rules:
+1. **Celebrate real events only.** `CozyCoinBurstOverlay` + `CozySounds.play(.coin)` fire when money actually moves (a contribution, a milestone), never on simply opening a screen.
+2. **Numbers arrive, they don't just appear.** Hero figures use `CozyCountUpText`; rings and bars sweep in from zero once.
+3. **Always show the next step.** Each card names the nearest reachable target and its exact amount ("S$1,500 to the 75% star").
+4. **Kind when behind.** Over-budget states use berry coral and a gentle pet note, never alarms or shaming copy.
+5. **Reduce Motion** settles every ring, bar, count-up and burst instantly.
+6. **Salary privacy.** The "Kept this month" level is derived from income, so it is masked whenever the month's income is (`isSalaryMasked`).
