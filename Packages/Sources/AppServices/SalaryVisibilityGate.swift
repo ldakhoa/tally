@@ -184,16 +184,24 @@ public final class SalaryVisibilityGate {
 
     /// Shows salary, authenticating first when the requirement is on. Returns `true` when salary
     /// is visible afterwards.
+    ///
+    /// `alwaysAuthenticate` is for reveals the user did not start with the eye control (the
+    /// assistant asking in chat): it authenticates even when the requirement is off. A device with
+    /// nothing to authenticate with then reveals without a prompt, as there is nothing to check.
     @discardableResult
-    public func reveal(reason: String) async -> Bool {
+    public func reveal(reason: String, alwaysAuthenticate: Bool = false) async -> Bool {
         guard isHidden else { return true }
-        guard requiresAuthentication else {
+        guard requiresAuthentication || alwaysAuthenticate else {
             setHidden(false)
             return true
         }
         guard !isAuthenticating else { return false }
         refreshAvailability()
         guard authKind.isAvailable else {
+            guard requiresAuthentication else {
+                setHidden(false)
+                return true
+            }
             notice = .passcodeRequired
             return false
         }

@@ -490,6 +490,14 @@ public struct AskTallyView: View {
                     }
                 }
 
+                // Still working after a card (e.g. salary access was just allowed): keep a sign of life.
+                if isLastAssistant, assistant.isStreaming, entry.text.isEmpty, !isThinking,
+                   assistant.salaryAccess.pending == nil {
+                    TypingDotsView()
+                        .padding(.leading, 6)
+                        .padding(.vertical, 4)
+                }
+
                 // Cozy card-framed assistant Markdown response
                 if !entry.text.isEmpty {
                     formattedMessageText(entry.text, isUser: false)

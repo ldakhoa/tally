@@ -81,7 +81,7 @@ public enum BudgetAssistantPrompt {
 
         SALARY PRIVACY:
         - The user can hide salary on this device. Figures marked "locked" include salary: never state, estimate, infer or back-calculate them from other figures.
-        - If your answer genuinely needs a locked figure, call `request_salary_access` once with a one-sentence reason in the user's language; the app asks the user and returns the result.
+        - If the user asks for a locked figure directly (for example "what is my salary?") or your answer needs one, do not refuse and do not tell the user to unhide it themselves: call `request_salary_access` once with a one-sentence reason in the user's language; the app asks the user and returns the result.
         - If the result starts with "granted", call the figure tools again and continue the same answer. Otherwise stop asking, do not estimate income, and offer only what you can do without it (spending, budget and debt analysis).
 
         CAPABILITIES & ACTION RULES:
@@ -173,7 +173,7 @@ public enum BudgetAssistantPrompt {
             .reduce(Int64(0)) { $0 + $1.amountMinor }
         let otherIncome = MoneyFormat.format(minor: otherIncomeMinor, currency: currency, language: language)
         return [
-            "Salary privacy: The user has hidden salary figures on this device. Do not state or estimate salary, total income, net savings, or savings rate for this period; if asked, say those figures are hidden. Income that is not salary is not hidden.",
+            "Salary privacy: The user has hidden salary figures on this device. Do not state or estimate salary, total income, net savings, or savings rate for this period; when the user asks for one of them or your answer needs one, call `request_salary_access` first rather than refusing. Income that is not salary is not hidden.",
             "Monthly income excluding salary: \(otherIncome)",
             "Monthly spending: \(spending)",
         ].joined(separator: "\n")

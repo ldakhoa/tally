@@ -46,7 +46,7 @@ final class SalaryAccessBrokerTests: XCTestCase {
         var statuses: [SalaryConsentRecord.Status] { records.map(\.status) }
     }
 
-    func testAllowWithoutRequirementUnlocksWithoutAuthentication() async throws {
+    func testAllowWithoutRequirementStillAuthenticates() async throws {
         let auth = FakeAuthenticator()
         let gate = makeGate(auth: auth)
         let broker = SalaryAccessBroker()
@@ -60,10 +60,39 @@ final class SalaryAccessBrokerTests: XCTestCase {
 
         XCTAssertEqual(outcome, .granted)
         XCTAssertFalse(gate.isHidden)
-        XCTAssertTrue(auth.prompts.isEmpty, "consent alone unlocks when Face ID is not required")
+        XCTAssertEqual(auth.prompts, [SalaryAuthPrompt.reveal(in: .english)], "Allow in chat always authenticates")
         XCTAssertNil(broker.pending)
         XCTAssertEqual(cards.statuses, [.pending, .allowed])
         XCTAssertEqual(Set(cards.records.map(\.id)).count, 1, "one card, updated in place")
+    }
+
+    func testAllowWithoutRequirementFailsWhenAuthenticationFails() async throws {
+        let auth = FakeAuthenticator()
+        auth.result = false
+        let gate = makeGate(auth: auth)
+        let broker = SalaryAccessBroker()
+        let task = try await start(broker, gate: gate, cards: CardLog())
+
+        broker.allow(try XCTUnwrap(broker.pending?.id))
+        let outcome = await task.value
+
+        XCTAssertEqual(outcome, .authFailed)
+        XCTAssertTrue(gate.isHidden)
+    }
+
+    func testAllowOnDeviceWithNoPasscodeUnlocksDirectly() async throws {
+        let auth = FakeAuthenticator()
+        auth.kind = .none
+        let gate = makeGate(auth: auth)
+        let broker = SalaryAccessBroker()
+        let task = try await start(broker, gate: gate, cards: CardLog())
+
+        broker.allow(try XCTUnwrap(broker.pending?.id))
+        let outcome = await task.value
+
+        XCTAssertEqual(outcome, .granted)
+        XCTAssertTrue(auth.prompts.isEmpty)
+        XCTAssertFalse(gate.isHidden)
     }
 
     func testAllowWithRequirementAuthenticatesThroughTheGate() async throws {

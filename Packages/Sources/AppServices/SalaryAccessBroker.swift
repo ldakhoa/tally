@@ -5,7 +5,8 @@ import TallyCore
 
 /// Runs a `request_salary_access` tool call: shows the consent card (through `pending`), suspends
 /// the tool loop until the user answers, and on Allow unlocks through the same gate as the eye
-/// button (so Face ID / passcode and re-locking follow the gate's rules).
+/// button. Allow always asks for Face ID / passcode, even when the Settings requirement is off
+/// (a device with neither unlocks directly); re-locking follows the gate's rules.
 ///
 /// - At most one request per turn (`turnID`, one user message); a repeat returns
 ///   `.alreadyRequested` without asking.
@@ -75,7 +76,7 @@ public final class SalaryAccessBroker {
             if Task.isCancelled {
                 outcome = .cancelled
             } else {
-                let revealed = await gate.reveal(reason: SalaryAuthPrompt.reveal(in: language))
+                let revealed = await gate.reveal(reason: SalaryAuthPrompt.reveal(in: language), alwaysAuthenticate: true)
                 outcome = revealed ? .granted : .authFailed
             }
         }
