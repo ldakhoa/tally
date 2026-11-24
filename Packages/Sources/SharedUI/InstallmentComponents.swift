@@ -161,14 +161,8 @@ public struct InstallmentDatePickerSheet: View {
                 dismiss()
             }
             .pageBackground()
-            .navigationTitle(title)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Done", vi: "Xong", zh: "完成")) { dismiss() }
-                }
+            .cozySheetToolbar(title: title) {
+                Button(L10n.text(lang, en: "Done", vi: "Xong", zh: "完成")) { dismiss() }
             }
         }
         .presentationDetents([.large])
@@ -313,14 +307,8 @@ public struct ConvertToInstallmentSheet: View {
             }
             .scrollDismissesKeyboard(.interactively)
             .pageBackground()
-            .navigationTitle(L10n.text(lang, en: "Convert to installment", vi: "Chuyển thành trả góp", zh: "转为分期"))
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
-                }
+            .cozySheetToolbar(title: L10n.text(lang, en: "Convert to installment", vi: "Chuyển thành trả góp", zh: "转为分期")) {
+                Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
             }
             .sheet(isPresented: $showingDatePicker) {
                 InstallmentDatePickerSheet(

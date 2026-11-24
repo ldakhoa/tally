@@ -114,33 +114,24 @@ public struct TransactionEditorSheet: View {
             .animation(.snappy(duration: 0.22), value: focusedField == nil)
             .pageBackground()
             .keypadKeyboardInput(engine: $keypad, isEnabled: focusedField == nil, isSaveEnabled: canSave, onSave: save)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
-                }
-
-                ToolbarItem(placement: .principal) {
-                    typeSegmentedPill(lang: lang)
-                        .fixedSize()
-                }
-
-                ToolbarItem(placement: .primaryAction) {
-                    if focusedField != nil {
-                        Button(L10n.text(lang, en: "Keypad", vi: "Bàn phím số", zh: "数字键盘")) {
-                            focusedField = nil
-                        }
-                        .font(.appControl)
-                    } else if existing != nil {
-                        Button(role: .destructive) {
-                            confirmingDelete = true
-                        } label: {
-                            CozyUIIcon(.trash, size: 18, color: Color.negative)
-                        }
-                        .accessibilityLabel(L10n.text(lang, en: "Delete transaction", vi: "Xoá giao dịch", zh: "删除账单"))
+            .cozySheetToolbar {
+                Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
+            } principal: {
+                typeSegmentedPill(lang: lang)
+                    .fixedSize()
+            } trailing: {
+                if focusedField != nil {
+                    Button(L10n.text(lang, en: "Keypad", vi: "Bàn phím số", zh: "数字键盘")) {
+                        focusedField = nil
                     }
+                    .font(.appControl)
+                } else if existing != nil {
+                    Button(role: .destructive) {
+                        confirmingDelete = true
+                    } label: {
+                        CozyUIIcon(.trash, size: 18, color: Color.negative)
+                    }
+                    .accessibilityLabel(L10n.text(lang, en: "Delete transaction", vi: "Xoá giao dịch", zh: "删除账单"))
                 }
             }
             .confirmationDialog(
@@ -173,15 +164,9 @@ public struct TransactionEditorSheet: View {
                         showingDatePicker = false
                     }
                     .pageBackground()
-                    .navigationTitle(L10n.text(lang, en: "Select date", vi: "Chọn ngày", zh: "选择日期"))
-                    #if os(iOS)
-                    .navigationBarTitleDisplayMode(.inline)
-                    #endif
-                    .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button(L10n.text(lang, en: "Done", vi: "Xong", zh: "完成")) {
-                                showingDatePicker = false
-                            }
+                    .cozySheetToolbar(title: L10n.text(lang, en: "Select date", vi: "Chọn ngày", zh: "选择日期")) {
+                        Button(L10n.text(lang, en: "Done", vi: "Xong", zh: "完成")) {
+                            showingDatePicker = false
                         }
                     }
                 }
@@ -458,6 +443,7 @@ public struct TransactionEditorSheet: View {
                         .background(Color.cardBackground, in: Capsule())
                         .overlay(Capsule().strokeBorder(Color.hairline, lineWidth: 1))
                     }
+                    .cozyMenuPill()
                 }
 
                 // Note toggle pill

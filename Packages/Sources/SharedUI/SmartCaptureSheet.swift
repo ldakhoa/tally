@@ -141,14 +141,8 @@ public struct SmartCaptureSheet: View {
                 .documentColumn()
             }
             .pageBackground()
-            .navigationTitle(L10n.text(lang, en: "Smart capture", vi: "Nhập nhanh thông minh", zh: "智能记账"))
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Close", vi: "Đóng", zh: "关闭")) { dismiss() }
-                }
+            .cozySheetToolbar(title: L10n.text(lang, en: "Smart capture", vi: "Nhập nhanh thông minh", zh: "智能记账")) {
+                Button(L10n.text(lang, en: "Close", vi: "Đóng", zh: "关闭")) { dismiss() }
             }
             .sheet(isPresented: $showingEditor, onDismiss: { dismiss() }) {
                 TransactionEditorSheet(

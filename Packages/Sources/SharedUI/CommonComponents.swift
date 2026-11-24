@@ -204,14 +204,8 @@ public struct PeriodPickerSheet: View {
                 .background(Color.cardBackground)
             }
             .pageBackground()
-            .navigationTitle(L10n.text(lang, en: "Select dates", vi: "Chọn ngày", zh: "选择日期"))
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
-                }
+            .cozySheetToolbar(title: L10n.text(lang, en: "Select dates", vi: "Chọn ngày", zh: "选择日期")) {
+                Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
             }
         }
         .presentationDetents([.large])

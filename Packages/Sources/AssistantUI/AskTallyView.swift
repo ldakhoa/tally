@@ -140,41 +140,34 @@ public struct AskTallyView: View {
             .onAppear { assistant.chatScreenDidAppear() }
             // A consent card still waiting when the chat goes away counts as Not now.
             .onDisappear { assistant.chatScreenDidDisappear() }
-            .navigationTitle(L10n.text(lang, en: "Ask Tally", vi: "Trợ lý Tally AI", zh: "Tally AI 助手"))
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Close", vi: "Đóng", zh: "关闭")) {
-                        dictation.stop()
-                        dismiss()
-                    }
+            .cozySheetToolbar(title: L10n.text(lang, en: "Ask Tally", vi: "Trợ lý Tally AI", zh: "Tally AI 助手")) {
+                Button(L10n.text(lang, en: "Close", vi: "Đóng", zh: "关闭")) {
+                    dictation.stop()
+                    dismiss()
                 }
+            } trailing: {
                 if !assistant.sessions.isEmpty || !assistant.messages.isEmpty {
-                    ToolbarItemGroup(placement: .primaryAction) {
-                        if !assistant.sessions.isEmpty {
-                            Button {
-                                CozyHaptics.light()
-                                isComposerFocused = false
-                                isShowingHistory = true
-                            } label: {
-                                Image(systemName: "clock.arrow.circlepath")
-                                    .font(.appControl)
-                            }
-                            .accessibilityLabel(L10n.text(lang, en: "Chat history", vi: "Lịch sử chat", zh: "历史对话"))
+                    if !assistant.sessions.isEmpty {
+                        Button {
+                            CozyHaptics.light()
+                            isComposerFocused = false
+                            isShowingHistory = true
+                        } label: {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .font(.appControl)
                         }
+                        .accessibilityLabel(L10n.text(lang, en: "Chat history", vi: "Lịch sử chat", zh: "历史对话"))
+                    }
 
-                        if !assistant.messages.isEmpty {
-                            Button {
-                                CozyHaptics.light()
-                                dictation.stop()
-                                assistant.startNewChat()
-                            } label: {
-                                CozyUIIcon(.compose, size: 18, color: Color.textPrimary)
-                            }
-                            .accessibilityLabel(L10n.text(lang, en: "New chat", vi: "Chat mới", zh: "新对话"))
+                    if !assistant.messages.isEmpty {
+                        Button {
+                            CozyHaptics.light()
+                            dictation.stop()
+                            assistant.startNewChat()
+                        } label: {
+                            CozyUIIcon(.compose, size: 18, color: Color.textPrimary)
                         }
+                        .accessibilityLabel(L10n.text(lang, en: "New chat", vi: "Chat mới", zh: "新对话"))
                     }
                 }
             }
@@ -1369,15 +1362,9 @@ private struct ChatHistorySheet: View {
                 .documentColumn()
             }
             .pageBackground()
-            .navigationTitle(L10n.text(language, en: "Chat History", vi: "Lịch sử Tally", zh: "对话记录"))
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(language, en: "Done", vi: "Xong", zh: "完成")) {
-                        dismiss()
-                    }
+            .cozySheetToolbar(title: L10n.text(language, en: "Chat History", vi: "Lịch sử Tally", zh: "对话记录")) {
+                Button(L10n.text(language, en: "Done", vi: "Xong", zh: "完成")) {
+                    dismiss()
                 }
             }
         }

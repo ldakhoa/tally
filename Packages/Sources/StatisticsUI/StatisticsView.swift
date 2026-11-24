@@ -1235,15 +1235,9 @@ public struct StatisticsView: View {
                 .documentColumn()
             }
             .pageBackground()
-            .navigationTitle(title)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Done", vi: "Xong", zh: "完成")) {
-                        activeKPISheet = nil
-                    }
+            .cozySheetToolbar(title: title) {
+                Button(L10n.text(lang, en: "Done", vi: "Xong", zh: "完成")) {
+                    activeKPISheet = nil
                 }
             }
         }

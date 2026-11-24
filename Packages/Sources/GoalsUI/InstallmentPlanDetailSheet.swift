@@ -31,14 +31,8 @@ struct InstallmentPlanDetailSheet: View {
                 }
             }
             .pageBackground()
-            .navigationTitle(L10n.text(lang, en: "Plan details", vi: "Chi tiết kế hoạch", zh: "计划详情"))
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Done", vi: "Xong", zh: "完成")) { dismiss() }
-                }
+            .cozySheetToolbar(title: L10n.text(lang, en: "Plan details", vi: "Chi tiết kế hoạch", zh: "计划详情")) {
+                Button(L10n.text(lang, en: "Done", vi: "Xong", zh: "完成")) { dismiss() }
             }
         }
         .presentationDetents([.large])
@@ -460,14 +454,8 @@ struct InstallmentSettleSheet: View {
                 }
             }
             .pageBackground()
-            .navigationTitle(L10n.text(lang, en: "Settle early", vi: "Tất toán sớm", zh: "提前结清"))
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
-                }
+            .cozySheetToolbar(title: L10n.text(lang, en: "Settle early", vi: "Tất toán sớm", zh: "提前结清")) {
+                Button(L10n.text(lang, en: "Cancel", vi: "Huỷ", zh: "取消")) { dismiss() }
             }
             .sheet(isPresented: $showingDatePicker) {
                 InstallmentDatePickerSheet(
