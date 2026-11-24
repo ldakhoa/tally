@@ -437,6 +437,8 @@ public final class CloudSync: CKSyncEngineDelegate {
             // Newly created payments are queued through `onLocalChanges` -> `sendSoon()`
             // (detached task); the engine is never driven from inside this callback.
             store?.applyRemotePlans(plans)
+            // Records from this person's other device may carry that device's member ID.
+            if let store, let settings { store.reconcileMemberIdentities(settings: settings, notifyCloud: true) }
             for deletion in changes.deletions where CloudSyncPolicy.isInActiveZone(deletion.recordID, activeZoneID: zone) {
                 systemFields.forget(deletion.recordID)
             }

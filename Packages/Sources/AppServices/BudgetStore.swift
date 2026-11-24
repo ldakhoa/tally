@@ -421,11 +421,37 @@ public final class BudgetStore {
         let trimmedMyName = settings.myDisplayName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedMyName.isEmpty else { return 0 }
 
+        // The same person on another device (iPhone + Mac) starts with a different random ID.
+        // Every device adopts the same one of them, so they stop claiming records from each other.
+        let canonicalID = MemberIdentity.canonicalID(
+            currentID: settings.myMemberID,
+            name: trimmedMyName,
+            records: activeTransactions.map { ($0.memberID, $0.memberName) }
+                + activePlans.map { ($0.memberID, $0.memberName) }
+        )
+        let previousMemberID = settings.myMemberID
+        if canonicalID != previousMemberID {
+            settings.myMemberID = canonicalID
+            if selectedMemberID == previousMemberID { selectedMemberID = canonicalID }
+        }
+
         let me = settings.currentMember
         let syntheticMeID = "member-\(trimmedMyName.lowercased())"
         let now = Date()
         var changed: [ChangedSyncRecord] = []
         var mergedAwayIDs: Set<String> = []
+
+        // Plans first: saving a plan rewrites its booked payments to the plan's member.
+        var mergedPlanCount = 0
+        for var plan in activePlans where plan.memberID != me.id {
+            guard plan.memberID == syntheticMeID
+                    || plan.memberName.caseInsensitiveCompare(me.name) == .orderedSame
+            else { continue }
+            mergedAwayIDs.insert(plan.memberID)
+            plan.memberID = me.id
+            plan.memberName = me.name
+            if savePlan(plan, notifyCloud: notifyCloud) { mergedPlanCount += 1 }
+        }
 
         for var tx in activeTransactions {
             if tx.memberID == me.id {
@@ -444,16 +470,16 @@ public final class BudgetStore {
             }
         }
 
-        guard !changed.isEmpty else { return 0 }
         if let selected = selectedMemberID, mergedAwayIDs.contains(selected) {
             selectedMemberID = me.id
         }
+        guard !changed.isEmpty else { return mergedPlanCount }
         try? context.save()
         reload()
         if notifyCloud {
             onLocalChanges?(changed)
         }
-        return changed.count
+        return changed.count + mergedPlanCount
     }
 
     public func deleteTransaction(id: String) {
