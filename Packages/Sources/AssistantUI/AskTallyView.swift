@@ -20,6 +20,7 @@ public struct AskTallyView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.colorScheme) private var colorScheme
 
+    @AppStorage("tally.dictation.language") private var dictationLanguageID = ""
     @State private var draft = ""
     @State private var draftBeforeDictation = ""
     @State private var dictation = VoiceDictationManager()
@@ -816,23 +817,24 @@ public struct AskTallyView: View {
         .background(Color.negative.opacity(0.1), in: RoundedRectangle(cornerRadius: Radius.field, style: .continuous))
     }
 
-    // MARK: - Live Voice Dictation Banner (Auto-detects VI / EN / ZH)
+    // MARK: - Live Voice Dictation Banner
+
+    private var dictationLanguage: DictationLanguage? {
+        DictationLanguage(rawValue: dictationLanguageID)
+    }
 
     private func liveDictationBanner(lang: AppLanguage) -> some View {
         HStack(spacing: 10) {
             LiveAudioWaveformView(level: dictation.audioLevel)
                 .frame(width: 28, height: 18)
 
-            Text(L10n.text(
-                lang,
-                en: "Listening…",
-                vi: "Đang nghe…",
-                zh: "正在聆听…"
-            ))
+            Text(dictation.isFinishing
+                ? L10n.text(lang, en: "Transcribing…", vi: "Đang chép lời…", zh: "正在转写…")
+                : L10n.text(lang, en: "Listening…", vi: "Đang nghe…", zh: "正在聆听…"))
             .font(.appCaption.weight(.semibold))
             .foregroundStyle(Color.accent)
 
-            if let detected = dictation.detectedLanguage {
+            if let detected = dictationLanguage ?? dictation.detectedLanguage {
                 Tag(text: "\(detected.flag) \(detected.nativeName)", color: .accent)
             } else {
                 Text("VI · EN · 中文")
@@ -844,8 +846,9 @@ public struct AskTallyView: View {
 
             Button(L10n.text(lang, en: "Done", vi: "Xong", zh: "完成")) {
                 haptic(.light)
-                dictation.stop()
+                dictation.finish()
             }
+            .disabled(dictation.isFinishing)
             .font(.appCaption.weight(.semibold))
             .foregroundStyle(Color.ink)
             .padding(.horizontal, 10)
@@ -858,11 +861,36 @@ public struct AskTallyView: View {
         .overlay(alignment: .top) { Divider().overlay(Color.hairline) }
     }
 
+    private func dictationLanguageMenu(lang: AppLanguage) -> some View {
+        let title = L10n.text(lang, en: "Dictation language", vi: "Ngôn ngữ đọc chính tả", zh: "语音输入语言")
+        let automatic = L10n.text(lang, en: "Auto", vi: "Tự động", zh: "自动")
+        return Menu {
+            Picker(title, selection: $dictationLanguageID) {
+                Text(automatic).tag("")
+                ForEach(DictationLanguage.allCases) { language in
+                    Text(language.nativeName).tag(language.rawValue)
+                }
+            }
+        } label: {
+            Text(dictationLanguage?.shortLabel ?? automatic)
+                .font(.appCaption.weight(.semibold))
+                .foregroundStyle(Color.textSecondary)
+                .frame(minWidth: 36, minHeight: 34)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.borderlessButton)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel(title)
+        .accessibilityValue(dictationLanguage?.nativeName ?? automatic)
+        .disabled(dictation.isRecording || assistant.isStreaming || !settings.isAIReady)
+    }
+
     // MARK: - Pro Floating Composer Bar (Mic inside input box, swipe down to dismiss keyboard)
 
     private func composerBar(lang: AppLanguage) -> some View {
         let hasContent = !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !pendingImages.isEmpty
-        let canSend = settings.isAIReady && hasContent && preparingCount == 0
+        let canSend = settings.isAIReady && hasContent && preparingCount == 0 && !dictation.isRecording
 
         return VStack(spacing: 0) {
             Divider().overlay(Color.hairline)
@@ -918,24 +946,11 @@ public struct AskTallyView: View {
                     .padding(.vertical, 12)
                     .disabled(!settings.isAIReady)
 
-                    Button {
-                        toggleDictation(lang: lang)
-                    } label: {
-                        CozyUIIcon(
-                            dictation.isRecording ? .stop : .mic,
-                            size: dictation.isRecording ? 18 : 20,
-                            color: dictation.isRecording ? Color.accent : Color.textSecondary
-                        )
-                        .frame(width: 34, height: 34)
+                    HStack(spacing: 2) {
+                        dictationLanguageMenu(lang: lang)
+                        dictationButton(lang: lang)
                     }
-                    .buttonStyle(.themedPlain)
                     .padding(.bottom, 5)
-                    .disabled(!settings.isAIReady || assistant.isStreaming)
-                    .accessibilityLabel(
-                        dictation.isRecording
-                            ? L10n.text(lang, en: "Stop dictation", vi: "Dừng ghi âm", zh: "停止语音输入")
-                            : L10n.text(lang, en: "Dictate in Vietnamese, English, or Chinese", vi: "Nói tiếng Việt, Anh hoặc Trung", zh: "语音输入（自动识别中英越）")
-                    )
                 }
                 .padding(.leading, 6)
                 .padding(.trailing, 8)
@@ -997,14 +1012,32 @@ public struct AskTallyView: View {
 
     // MARK: - Actions & Helpers
 
+    private func dictationButton(lang: AppLanguage) -> some View {
+        Button {
+            toggleDictation(lang: lang)
+        } label: {
+            CozyUIIcon(
+                dictation.isRecording ? .stop : .mic,
+                size: dictation.isRecording ? 18 : 20,
+                color: dictation.isRecording ? Color.accent : Color.textSecondary
+            )
+            .frame(width: 34, height: 34)
+        }
+        .buttonStyle(.themedPlain)
+        .disabled(!settings.isAIReady || assistant.isStreaming || dictation.isFinishing)
+        .accessibilityLabel(dictation.isRecording
+            ? L10n.text(lang, en: "Stop dictation", vi: "Dừng ghi âm", zh: "停止语音输入")
+            : L10n.text(lang, en: "Start dictation", vi: "Bắt đầu đọc chính tả", zh: "开始语音输入"))
+    }
+
     private func toggleDictation(lang: AppLanguage) {
         haptic(.medium)
         if dictation.isRecording {
-            dictation.stop()
+            dictation.finish()
         } else {
             isComposerFocused = false
             draftBeforeDictation = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-            dictation.start(appLanguage: lang) { spoken in
+            dictation.start(appLanguage: lang, language: dictationLanguage) { spoken in
                 applyDictatedText(spoken)
             }
         }

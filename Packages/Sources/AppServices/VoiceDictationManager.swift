@@ -65,6 +65,7 @@ public enum DictationLanguage: String, CaseIterable, Codable, Identifiable, Hash
 public final class VoiceDictationManager {
     public private(set) var detectedLanguage: DictationLanguage?
     public private(set) var isRecording = false
+    public private(set) var isFinishing = false
     public private(set) var transcript = ""
     public private(set) var audioLevel: Float = 0
     public private(set) var errorMessage: String?
@@ -81,6 +82,7 @@ public final class VoiceDictationManager {
     @ObservationIgnored private var activeTasks: [DictationLanguage: SFSpeechRecognitionTask] = [:]
     @ObservationIgnored private var candidates: [DictationLanguage: Candidate] = [:]
     @ObservationIgnored private var sessionID: UUID?
+    @ObservationIgnored private var finishTimeout: Task<Void, Never>?
     #endif
 
     public init() {}
@@ -90,7 +92,7 @@ public final class VoiceDictationManager {
         onTranscript: @escaping @MainActor (String) -> Void
     ) {
         if isRecording {
-            stop()
+            finish()
         } else {
             start(appLanguage: appLanguage, onTranscript: onTranscript)
         }
@@ -98,13 +100,19 @@ public final class VoiceDictationManager {
 
     public func start(
         appLanguage: AppLanguage,
+        language: DictationLanguage? = nil,
         onTranscript: @escaping @MainActor (String) -> Void
     ) {
         errorMessage = nil
         #if canImport(AVFoundation) && canImport(Speech)
+        guard sessionID == nil else { return }
+        let sessionID = UUID()
+        self.sessionID = sessionID
         Task {
             let speechOK = await requestSpeechAuthorization()
+            guard self.sessionID == sessionID else { return }
             guard speechOK else {
+                self.stop()
                 self.errorMessage = L10n.text(
                     appLanguage,
                     en: "Enable Speech Recognition for Tally in iOS Settings.",
@@ -115,7 +123,9 @@ public final class VoiceDictationManager {
             }
 
             let micOK = await requestMicrophonePermission()
+            guard self.sessionID == sessionID else { return }
             guard micOK else {
+                self.stop()
                 self.errorMessage = L10n.text(
                     appLanguage,
                     en: "Enable Microphone access for Tally in iOS Settings.",
@@ -125,7 +135,7 @@ public final class VoiceDictationManager {
                 return
             }
 
-            self.beginAutoDetectSession(appLanguage: appLanguage, onTranscript: onTranscript)
+            self.beginSession(appLanguage: appLanguage, language: language, sessionID: sessionID, onTranscript: onTranscript)
         }
         #else
         errorMessage = L10n.text(
@@ -137,12 +147,33 @@ public final class VoiceDictationManager {
         #endif
     }
 
-    public func stop() {
+    public func finish() {
         #if canImport(AVFoundation) && canImport(Speech)
-        sessionID = nil
+        guard let sessionID, isRecording, !isFinishing else { return }
+        isFinishing = true
+        stopAudioCapture()
         for request in activeRequests.values {
             request.endAudio()
         }
+        finishTimeout = Task { [weak self] in
+            do {
+                try await Task.sleep(for: .seconds(2))
+            } catch {
+                return
+            }
+            guard let self, self.sessionID == sessionID else { return }
+            self.stop()
+        }
+        #endif
+    }
+
+    public func stop() {
+        #if canImport(AVFoundation) && canImport(Speech)
+        let hadAudioSession = isRecording || audioEngine != nil
+        sessionID = nil
+        finishTimeout?.cancel()
+        finishTimeout = nil
+        stopAudioCapture()
         for task in activeTasks.values {
             task.cancel()
         }
@@ -150,31 +181,35 @@ public final class VoiceDictationManager {
         activeRequests.removeAll()
         candidates.removeAll()
 
-        if let engine = audioEngine {
-            if engine.isRunning {
-                engine.stop()
-            }
-            engine.inputNode.removeTap(onBus: 0)
-        }
-        audioEngine = nil
-
         #if os(iOS)
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if hadAudioSession {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        }
         #endif
         #endif
 
         isRecording = false
+        isFinishing = false
         audioLevel = 0
     }
 
     // MARK: - Concurrent Multi-Locale Speech Recognition
 
     #if canImport(AVFoundation) && canImport(Speech)
-    private func beginAutoDetectSession(
+    private func stopAudioCapture() {
+        guard let audioEngine else { return }
+        audioEngine.stop()
+        audioEngine.inputNode.removeTap(onBus: 0)
+        self.audioEngine = nil
+        audioLevel = 0
+    }
+
+    private func beginSession(
         appLanguage: AppLanguage,
+        language: DictationLanguage?,
+        sessionID: UUID,
         onTranscript: @escaping @MainActor (String) -> Void
     ) {
-        stop()
         let preferredDefault = DictationLanguage(appLanguage: appLanguage)
         detectedLanguage = nil
 
@@ -183,7 +218,7 @@ public final class VoiceDictationManager {
             locale.language.maximalIdentifier
         }
         var recognizers: [(DictationLanguage, SFSpeechRecognizer)] = []
-        for lang in DictationLanguage.allCases {
+        for lang in language.map({ [$0] }) ?? DictationLanguage.allCases {
             for identifier in [lang.rawValue, lang.fallbackLocaleIdentifier] {
                 let key = localeKey(Locale(identifier: identifier))
                 guard let locale = supportedLocales.first(where: { localeKey($0) == key }),
@@ -195,6 +230,7 @@ public final class VoiceDictationManager {
         }
 
         guard !recognizers.isEmpty else {
+            stop()
             errorMessage = L10n.text(
                 appLanguage,
                 en: "Speech recognition is temporarily unavailable.",
@@ -210,6 +246,7 @@ public final class VoiceDictationManager {
             try session.setCategory(.playAndRecord, mode: .measurement, options: [.duckOthers, .defaultToSpeaker])
             try session.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {
+            stop()
             errorMessage = error.localizedDescription
             return
         }
@@ -235,9 +272,6 @@ public final class VoiceDictationManager {
         let engine = AVAudioEngine()
         let inputNode = engine.inputNode
         let format = inputNode.outputFormat(forBus: 0)
-        let sessionID = UUID()
-
-        self.sessionID = sessionID
         self.audioEngine = engine
         inputNode.removeTap(onBus: 0)
         inputNode.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buffer, _ in
@@ -246,7 +280,7 @@ public final class VoiceDictationManager {
             }
             let level = Self.computeNormalizedPower(buffer: buffer)
             Task { @MainActor [weak self] in
-                guard let self, self.sessionID == sessionID else { return }
+                guard let self, self.sessionID == sessionID, !self.isFinishing else { return }
                 self.audioLevel = level
             }
         }
@@ -283,7 +317,7 @@ public final class VoiceDictationManager {
                             self.candidates[lang] = Candidate(text: text, score: score, isFinal: result.isFinal)
                         }
                     }
-                    if error != nil {
+                    if error != nil || result?.isFinal == true {
                         if self.candidates[lang]?.isFinal != true {
                             self.candidates.removeValue(forKey: lang)
                         }
