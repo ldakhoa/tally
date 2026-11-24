@@ -148,6 +148,39 @@ public struct AmountKeypadEngine: Equatable, Hashable, Sendable {
         }
     }
 
+    /// Processes a single character from a hardware keyboard (Mac or iPad keyboard).
+    /// Returns `true` when the character maps to a keypad digit, decimal separator, operator, or `=`.
+    @discardableResult
+    public mutating func handleKeyCharacter(_ character: String) -> Bool {
+        guard character.count == 1 else { return false }
+        switch character {
+        case "0", "1", "2", "3", "4", "5", "6", "7", "8", "9":
+            tapDigit(character)
+            return true
+        case ".", ",":
+            guard maxFractionDigits > 0 else { return false }
+            tapDecimal()
+            return true
+        case "+":
+            tapOperator(.add)
+            return true
+        case "-", "−":
+            tapOperator(.subtract)
+            return true
+        case "*", "x", "X", "×":
+            tapOperator(.multiply)
+            return true
+        case "/", "÷":
+            tapOperator(.divide)
+            return true
+        case "=":
+            commitEvaluation()
+            return true
+        default:
+            return false
+        }
+    }
+
     // MARK: - Private Helpers
 
     private func currentOperand() -> String {

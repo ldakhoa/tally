@@ -214,6 +214,7 @@ public struct PeriodPickerSheet: View {
             }
         }
         .presentationDetents([.large])
+        .cozySheetFrame(minWidth: 440, idealWidth: 460, minHeight: 540, idealHeight: 600)
     }
 
     private func selectionHint(for period: DatePeriod, language: AppLanguage) -> String {
@@ -365,6 +366,7 @@ public struct TransactionRow: View {
     public var onTap: (() -> Void)?
 
     @Environment(AppSettings.self) private var settings
+    @State private var isHovering = false
 
     public init(transaction: TransactionRecord, showDate: Bool = true, onTap: (() -> Void)? = nil) {
         self.transaction = transaction
@@ -412,11 +414,19 @@ public struct TransactionRow: View {
                 .fixedSize(horizontal: true, vertical: false)
         }
         .padding(.vertical, 6)
+        .padding(.horizontal, 6)
+        .background {
+            if onTap != nil && isHovering {
+                RoundedRectangle(cornerRadius: Radius.row, style: .continuous)
+                    .fill(Color.rowHover)
+            }
+        }
         .contentShape(Rectangle())
 
         if let onTap {
             Button(action: onTap) { row }
                 .buttonStyle(.themedPlain)
+                .onHover { isHovering = $0 }
         } else {
             row
         }

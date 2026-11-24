@@ -221,3 +221,78 @@ private struct KeypadButtonStyle: ButtonStyle {
             .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
     }
 }
+
+private struct KeypadKeyboardInputModifier: ViewModifier {
+    @Binding var engine: AmountKeypadEngine
+    let isEnabled: Bool
+    let isSaveEnabled: Bool
+    let onSave: () -> Void
+
+    @FocusState private var isKeypadFocused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .focusable(isEnabled)
+            .focusEffectDisabled()
+            .focused($isKeypadFocused)
+            #if os(macOS)
+            .onAppear {
+                if isEnabled {
+                    DispatchQueue.main.async {
+                        if isEnabled { isKeypadFocused = true }
+                    }
+                }
+            }
+            #endif
+            .onChange(of: isEnabled) { _, enabled in
+                #if os(macOS)
+                if enabled {
+                    isKeypadFocused = true
+                }
+                #endif
+            }
+            .onKeyPress { press in
+                guard isEnabled else { return .ignored }
+                if press.key == .escape { return .ignored }
+                if press.key == .delete {
+                    engine.tapBackspace()
+                    return .handled
+                }
+                if press.key == .return {
+                    if engine.hasOperator {
+                        withAnimation(.snappy(duration: 0.16)) {
+                            engine.commitEvaluation()
+                        }
+                        return .handled
+                    }
+                    if isSaveEnabled {
+                        onSave()
+                        return .handled
+                    }
+                    return .ignored
+                }
+                if engine.handleKeyCharacter(press.characters) {
+                    return .handled
+                }
+                return .ignored
+            }
+    }
+}
+
+extension View {
+    /// Captures hardware keyboard digits, operators, Backspace, and Return for `AmountKeypadEngine`
+    /// whenever no text field is currently active.
+    public func keypadKeyboardInput(
+        engine: Binding<AmountKeypadEngine>,
+        isEnabled: Bool,
+        isSaveEnabled: Bool = true,
+        onSave: @escaping () -> Void
+    ) -> some View {
+        modifier(KeypadKeyboardInputModifier(
+            engine: engine,
+            isEnabled: isEnabled,
+            isSaveEnabled: isSaveEnabled,
+            onSave: onSave
+        ))
+    }
+}

@@ -1,14 +1,16 @@
-# Tally (iOS + Web)
+# Tally (iOS, iPadOS, macOS + Web)
 
-Personal & household budget tracker for iPhone and iPad (iOS 17+), styled with the **Paws & Cream** cozy hand-drawn design system and **SF Pro Rounded** typography (see `docs/DESIGN_SYSTEM.md`).
+Personal & household budget tracker for iPhone (iOS 17+), iPad (iPadOS 17+), and Mac (macOS 14+), styled with the **Paws & Cream** cozy hand-drawn design system and **SF Pro Rounded** typography (see `docs/DESIGN_SYSTEM.md`).
 
 ## Where things are
 
-- `Tally/`: thin iOS app target (`App/` composition + `AppIntents/` for Apple Shortcuts + `Assets.xcassets`). File-system-synchronized (`PBXFileSystemSynchronizedRootGroup`): adding a file under `Tally/` adds it to the build automatically.
+- `Tally/`: thin multiplatform app target (`App/` composition + `AppIntents/` for Apple Shortcuts + `Assets.xcassets`). File-system-synchronized (`PBXFileSystemSynchronizedRootGroup`): adding a file under `Tally/` adds it to the build automatically.
+- `Tally-iOS.entitlements` / `Tally-macOS.entitlements`: platform entitlements sharing CloudKit container `iCloud.com.ldakhoa.tally` and bundle ID `com.ldakhoa.tally` so iPhone, iPad, and Mac stay synced via iCloud + iCloud Keychain.
 - `Packages/`: local Swift package `Tally` holding all domain logic, design system, persistence, services, and feature screens in strict downward-only layers (see `docs/ARCHITECTURE.md`).
 - `Packages/Sources/DesignSystem/Resources/`: bundled hand-painted Japanese watercolor PNGs (`chibi_*`, `icon_*`, `cat_*`, `goal_*`, `settings_*`, `kpi_*`), loaded once via in-memory cache (`CozyWatercolorAsset`, with automatic SwiftUI vector fallback if a PNG asset is absent).
 - `tools/install-device`: Release build & install onto a paired iPhone/iPad (without uninstalling or losing data).
-- `dist/`: original Tally static web prototype (its JSON backups are 100% importable/exportable in the iOS app).
+- `tools/install-mac`: Release build & install into `/Applications/Tally.app` (without losing data or iCloud state).
+- `dist/`: original Tally static web prototype (its JSON backups are 100% importable/exportable in the native app).
 
 ## Design & Icon Rules (Hybrid Architecture)
 

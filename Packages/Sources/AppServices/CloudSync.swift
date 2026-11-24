@@ -40,8 +40,21 @@ public final class CloudSync: CKSyncEngineDelegate {
     @ObservationIgnored private var sendKick: Task<Void, Never>?
     @ObservationIgnored private var accountObserver: NSObjectProtocol?
     @ObservationIgnored private var hasStarted = false
+    private static var pendingShareMetadata: CKShare.Metadata?
 
     public init() {}
+
+    /// Safely accepts a CloudKit share even if the OS delivers `CKShare.Metadata` on cold launch
+    /// before `CloudSync.start(...)` has connected `CloudSync.current`.
+    public static func acceptShareWhenReady(_ metadata: CKShare.Metadata) {
+        if let current {
+            Task { @MainActor in
+                await current.acceptShare(metadata: metadata)
+            }
+        } else {
+            pendingShareMetadata = metadata
+        }
+    }
 
     public static var containerIdentifier: String? {
         let id = Bundle.main.object(forInfoDictionaryKey: "TallyCloudContainer") as? String
@@ -75,6 +88,13 @@ public final class CloudSync: CKSyncEngineDelegate {
         }
 
         reconcile()
+
+        if let pending = Self.pendingShareMetadata {
+            Self.pendingShareMetadata = nil
+            Task { @MainActor [weak self] in
+                await self?.acceptShare(metadata: pending)
+            }
+        }
     }
 
     public func reconcile() {

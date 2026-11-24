@@ -40,7 +40,7 @@ public struct GoalsView: View {
             NavigationStack {
                 ScrollView {
                     content(goals: goals, totalSaved: totalSaved, totalTarget: totalTarget, lang: lang)
-                        .documentColumn()
+                        .documentColumn(maxWidth: 1020)
                 }
                 .pageBackground()
                 .navigationTitle(L10n.text(lang, en: "Goals", vi: "Mục tiêu", zh: "存钱目标"))
@@ -100,7 +100,7 @@ public struct GoalsView: View {
                     showingNewGoal = true
                 }
             } else {
-                VStack(spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 14)], spacing: 14) {
                     ForEach(goals) { goal in
                         Card {
                             HStack(spacing: 12) {
@@ -288,6 +288,7 @@ private struct GoalEditorSheet: View {
             }
             .animation(.snappy(duration: 0.22), value: isNameFocused)
             .pageBackground()
+            .keypadKeyboardInput(engine: activeKeypadBinding, isEnabled: !isNameFocused, isSaveEnabled: canSave, onSave: save)
             .navigationTitle(existing == nil
                 ? L10n.text(lang, en: "New goal", vi: "Mục tiêu mới", zh: "新建目标")
                 : L10n.text(lang, en: "Edit goal", vi: "Sửa mục tiêu", zh: "编辑目标"))
@@ -338,6 +339,7 @@ private struct GoalEditorSheet: View {
                 }
             }
         }
+        .cozySheetFrame(minWidth: 440, idealWidth: 480, minHeight: 560, idealHeight: 640)
     }
 
     private var activeKeypadBinding: Binding<AmountKeypadEngine> {
@@ -544,6 +546,12 @@ private struct ContributionSheet: View {
                 }
             }
             .pageBackground()
+            .keypadKeyboardInput(engine: $keypad, isEnabled: true, isSaveEnabled: canSave) {
+                if amountMajor > 0 {
+                    store.addContribution(goalID: goal.id, amountMinor: currency.toStorageMinor(amountMajor))
+                    dismiss()
+                }
+            }
             .navigationTitle(L10n.text(lang, en: "Contribute", vi: "Góp tiết kiệm", zh: "存钱入账"))
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
@@ -558,5 +566,6 @@ private struct ContributionSheet: View {
             }
         }
         .presentationDetents([.large])
+        .cozySheetFrame(minWidth: 420, idealWidth: 460, minHeight: 520, idealHeight: 600)
     }
 }

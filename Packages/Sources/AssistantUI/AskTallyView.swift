@@ -7,6 +7,8 @@ import SwiftUI
 import TallyCore
 #if os(iOS)
 import UIKit
+#else
+import AppKit
 #endif
 
 public struct AskTallyView: View {
@@ -191,6 +193,7 @@ public struct AskTallyView: View {
                 dictation.stop()
             }
         }
+        .cozySheetFrame(minWidth: 540, idealWidth: 640, minHeight: 600, idealHeight: 700)
     }
 
     // MARK: - Empty States
@@ -741,6 +744,9 @@ public struct AskTallyView: View {
         CozySounds.play(.tick)
         #if os(iOS)
         UIPasteboard.general.string = text
+        #else
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
         #endif
         withAnimation(.snappy(duration: 0.16)) {
             copiedMessageID = id
@@ -931,5 +937,6 @@ private struct ChatHistorySheet: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .cozySheetFrame(minWidth: 420, idealWidth: 460, minHeight: 420, idealHeight: 500)
     }
 }

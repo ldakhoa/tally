@@ -212,8 +212,7 @@ struct EmailInboxSettingsPane: View {
                 formSectionHeader(L10n.text(lang, en: "Setup Guide", vi: "Hướng dẫn thiết lập", zh: "设置指南"))
             }
         }
-        .scrollContentBackground(.hidden)
-        .pageBackground()
+        .cozyGroupedForm()
         .navigationTitle(L10n.text(lang, en: "Cloud Email Inbox", vi: "Hộp thư Ngân hàng", zh: "云端邮件收件箱"))
         .onAppear {
             urlDraft = settings.emailInboxURL

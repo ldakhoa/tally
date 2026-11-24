@@ -44,9 +44,9 @@ struct GeneralSettingsPane: View {
             } footer: {
                 formSectionFooter(L10n.text(
                     lang,
-                    en: "Each transaction logged on this iPhone is tagged with your name so you and your partner can filter spending.",
-                    vi: "Mỗi giao dịch ghi trên iPhone này sẽ tự động gắn tên bạn để hai vợ chồng dễ lọc và xem chi tiêu.",
-                    zh: "在这台 iPhone 上记录的每笔账单都会自动标记您的名字，方便两人筛选和查看支出。"
+                    en: "Each transaction logged on this device is tagged with your name so you and your partner can filter spending.",
+                    vi: "Mỗi giao dịch ghi trên thiết bị này sẽ tự động gắn tên bạn để hai vợ chồng dễ lọc và xem chi tiêu.",
+                    zh: "在此设备上记录的每笔账单都会自动标记您的名字，方便两人筛选和查看支出。"
                 ))
             }
 
@@ -101,14 +101,13 @@ struct GeneralSettingsPane: View {
             } footer: {
                 formSectionFooter(L10n.text(
                     lang,
-                    en: "Subtle pop & chime sounds when tapping tabs and buttons. Automatically muted when iPhone is on silent.",
-                    vi: "Âm thanh nhẹ kiểu pop khi chạm nút & chuyển tab. Tự động tắt khi iPhone bật chế độ im lặng.",
-                    zh: "点击按钮和切换标签时的轻柔提示音，iPhone 静音时自动关闭。"
+                    en: "Subtle pop & chime sounds when tapping tabs and buttons. Automatically muted when your device is on silent.",
+                    vi: "Âm thanh nhẹ kiểu pop khi chạm nút & chuyển tab. Tự động tắt khi thiết bị bật chế độ im lặng.",
+                    zh: "点击按钮和切换标签时的轻柔提示音，设备静音时自动关闭。"
                 ))
             }
         }
-        .scrollContentBackground(.hidden)
-        .pageBackground()
+        .cozyGroupedForm()
         .navigationTitle(L10n.text(lang, en: "General", vi: "Cài đặt chung", zh: "通用"))
         .onDisappear {
             store.reconcileMemberIdentities(settings: settings, notifyCloud: true)

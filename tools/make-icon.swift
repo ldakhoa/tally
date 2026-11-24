@@ -662,6 +662,54 @@ func render() -> CGImage {
     return ctx.makeImage()!
 }
 
+func renderMacSquircle(from base: CGImage) -> CGImage {
+    let S = 1024
+    let ctx = CGContext(data: nil, width: S, height: S, bitsPerComponent: 8, bytesPerRow: 0,
+                        space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.interpolationQuality = .high
+    ctx.setAllowsAntialiasing(true)
+    ctx.setShouldAntialias(true)
+
+    let inset: CGFloat = 100
+    let box = CGRect(x: inset, y: inset, width: CGFloat(S) - inset * 2, height: CGFloat(S) - inset * 2)
+    let cornerRadius: CGFloat = 185.4
+    let clipPath = CGPath(roundedRect: box, cornerWidth: cornerRadius, cornerHeight: cornerRadius, transform: nil)
+
+    // Soft warm cocoa drop shadow on transparent macOS dock canvas
+    ctx.saveGState()
+    ctx.setShadow(offset: CGSize(width: 0, height: -14), blur: 28, color: rgb(0x452D24, 0.28))
+    ctx.addPath(clipPath)
+    ctx.setFillColor(rgb(0xFFF3E6, 1.0))
+    ctx.fillPath()
+    ctx.restoreGState()
+
+    ctx.saveGState()
+    ctx.addPath(clipPath)
+    ctx.clip()
+    ctx.draw(base, in: box)
+    ctx.restoreGState()
+
+    // Subtle warm specular inner rim
+    ctx.saveGState()
+    ctx.addPath(clipPath)
+    ctx.setStrokeColor(rgb(0xFFFFFF, 0.45))
+    ctx.setLineWidth(3)
+    ctx.strokePath()
+    ctx.restoreGState()
+
+    return ctx.makeImage()!
+}
+
+func downscale(_ image: CGImage, size: Int) -> CGImage {
+    let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
+                        space: cs, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.interpolationQuality = .high
+    ctx.setAllowsAntialiasing(true)
+    ctx.setShouldAntialias(true)
+    ctx.draw(image, in: CGRect(x: 0, y: 0, width: size, height: size))
+    return ctx.makeImage()!
+}
+
 func writePNG(_ image: CGImage, to url: URL) {
     guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.png.identifier as CFString, 1, nil) else {
         fatalError("Cannot create \(url.path)")
@@ -679,9 +727,21 @@ while let arg = args.popFirst() {
 }
 
 let repoRoot = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-let defaultOut = repoRoot.appendingPathComponent("Tally/Assets.xcassets/AppIcon.appiconset/AppIcon.png")
+let iconSetDir = repoRoot.appendingPathComponent("Tally/Assets.xcassets/AppIcon.appiconset")
+let defaultOut = iconSetDir.appendingPathComponent("AppIcon.png")
 let target = outPath.map { URL(fileURLWithPath: $0) } ?? defaultOut
 try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
 
-writePNG(render(), to: target)
+let baseIcon = render()
+writePNG(baseIcon, to: target)
 print("Wrote kawaii Paws & Cream icon to \(target.path)")
+
+if outPath == nil {
+    let macFull = renderMacSquircle(from: baseIcon)
+    for px in [16, 32, 64, 128, 256, 512, 1024] {
+        let macOut = iconSetDir.appendingPathComponent("AppIcon-mac-\(px).png")
+        let scaled = px == 1024 ? macFull : downscale(macFull, size: px)
+        writePNG(scaled, to: macOut)
+    }
+    print("Wrote macOS icon variants in \(iconSetDir.path)")
+}

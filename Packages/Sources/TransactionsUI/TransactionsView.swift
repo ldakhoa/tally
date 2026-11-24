@@ -13,6 +13,7 @@ public struct TransactionsView: View {
     @State private var searchText = ""
     @State private var editingTransaction: TransactionRecord?
     @State private var showInlineCalendar = false
+    @State private var viewportWidth: CGFloat = 0
 
     public init() {}
 
@@ -51,114 +52,33 @@ public struct TransactionsView: View {
                         )
                     }
 
-                    if showInlineCalendar {
-                        InlineMonthCalendarCard(
-                            monthKey: store.selectedMonth,
-                            selectedDayKey: selectedSingleDay,
-                            language: lang,
-                            currency: settings.currency,
-                            dailyTotals: store.dailyCalendarTotals,
-                            onSelectDay: { dayKey in
-                                withAnimation(.snappy(duration: 0.18)) {
-                                    if selectedSingleDay == dayKey {
-                                        store.selectedPeriod = .month(DateKey.monthKey(fromDayKey: dayKey))
-                                    } else {
-                                        store.selectedPeriod = .day(dayKey)
-                                    }
-                                }
-                            },
-                            onSelectFullMonth: {
-                                withAnimation(.snappy(duration: 0.18)) {
-                                    store.selectedPeriod = .month(store.selectedMonth)
-                                }
-                            }
-                        )
-                    }
+                    if showInlineCalendar && viewportWidth >= 840 {
+                        unifiedFilterBar(lang: lang)
+                        MemberFilterBar()
 
-                    // Single unified filter strip: Type menu pill + Category chips
-                    unifiedFilterBar(lang: lang)
+                        HStack(alignment: .top, spacing: 18) {
+                            calendarCard(selectedSingleDay: selectedSingleDay, lang: lang)
+                                .frame(width: 320)
 
-                    MemberFilterBar()
-
-                    if groups.isEmpty {
-                        EmptyStateCard(
-                            symbol: "tray",
-                            title: hasActiveFilter
-                                ? L10n.text(lang, en: "No matching transactions", vi: "Không tìm thấy giao dịch phù hợp", zh: "没有匹配的账单")
-                                : L10n.text(lang, en: "No transactions yet", vi: "Chưa có giao dịch nào", zh: "暂无账单"),
-                            message: hasActiveFilter
-                                ? L10n.text(lang, en: "Try another search term or clear active filters.", vi: "Thử từ khoá khác hoặc xoá bộ lọc đang chọn.", zh: "尝试其他关键词或清除当前筛选。")
-                                : L10n.text(lang, en: "Add a transaction or paste a bank notification.", vi: "Thêm giao dịch hoặc dán thông báo ngân hàng.", zh: "记一笔账单或粘贴银行通知。"),
-                            actionTitle: hasActiveFilter
-                                ? L10n.text(lang, en: "Clear filters", vi: "Xoá bộ lọc", zh: "清除筛选")
-                                : L10n.text(lang, en: "Add transaction", vi: "Thêm giao dịch", zh: "记一笔")
-                        ) {
-                            if hasActiveFilter {
-                                withAnimation(.snappy(duration: 0.18)) {
-                                    searchText = ""
-                                    store.activityTypeFilter = .all
-                                    store.activityCategoryFilter = nil
-                                }
-                            } else {
-                                settings.isShowingQuickAdd = true
-                            }
+                            transactionListContent(groups: groups, hasActiveFilter: hasActiveFilter, lang: lang)
+                                .frame(maxWidth: .infinity, alignment: .leading)
                         }
                     } else {
-                        ForEach(groups) { group in
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack(spacing: 8) {
-                                    SectionLabel(DateKey.formatShortDay(group.dayKey, language: lang))
-                                    Spacer()
-                                    if group.totalIncomeMinor > 0 {
-                                        Text(MoneyFormat.format(minor: group.totalIncomeMinor, currency: settings.currency, language: lang, signed: true))
-                                            .font(.appCaption.weight(.semibold))
-                                            .monospacedDigit()
-                                            .foregroundStyle(Color.positive)
-                                    }
-                                    if group.totalSpendingMinor > 0 {
-                                        Text("−\(MoneyFormat.format(minor: group.totalSpendingMinor, currency: settings.currency, language: lang))")
-                                            .font(.appCaption.weight(.medium))
-                                            .monospacedDigit()
-                                            .foregroundStyle(Color.textSecondary)
-                                    }
-                                }
-                                .padding(.horizontal, 4)
-
-                                Card {
-                                    VStack(spacing: 2) {
-                                        ForEach(Array(group.transactions.enumerated()), id: \.element.id) { idx, tx in
-                                            if idx > 0 { Divider().overlay(Color.hairline) }
-                                            TransactionRow(transaction: tx, showDate: false) {
-                                                editingTransaction = tx
-                                            }
-                                            .contextMenu {
-                                                if tx.needsReview {
-                                                    Button {
-                                                        store.confirmReviewed(id: tx.id)
-                                                    } label: {
-                                                        Label(L10n.text(lang, en: "Mark reviewed", vi: "Xác nhận", zh: "标记已核对"), systemImage: "checkmark.circle")
-                                                    }
-                                                }
-                                                Button {
-                                                    editingTransaction = tx
-                                                } label: {
-                                                    Label(L10n.text(lang, en: "Edit", vi: "Chỉnh sửa", zh: "编辑"), systemImage: "pencil")
-                                                }
-                                                Button(role: .destructive) {
-                                                    store.deleteTransaction(id: tx.id)
-                                                } label: {
-                                                    Label(L10n.text(lang, en: "Delete", vi: "Xoá", zh: "删除"), systemImage: "trash")
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                        if showInlineCalendar {
+                            calendarCard(selectedSingleDay: selectedSingleDay, lang: lang)
                         }
+
+                        // Single unified filter strip: Type menu pill + Category chips
+                        unifiedFilterBar(lang: lang)
+
+                        MemberFilterBar()
+
+                        transactionListContent(groups: groups, hasActiveFilter: hasActiveFilter, lang: lang)
                     }
                 }
-                .documentColumn()
+                .documentColumn(maxWidth: 1000)
             }
+            .readViewportWidth($viewportWidth)
             .pageBackground()
             .navigationTitle(L10n.text(lang, en: "Transactions", vi: "Giao dịch", zh: "账单"))
             .searchable(text: $searchText, prompt: L10n.text(lang, en: "Search merchant, category, note", vi: "Tìm cửa hàng, danh mục, ghi chú", zh: "搜索商户、分类或备注"))
@@ -169,6 +89,114 @@ public struct TransactionsView: View {
             .onChange(of: store.activityTypeFilter) { _, _ in
                 if let current = store.activityCategoryFilter, !filterCategories.contains(current) {
                     store.activityCategoryFilter = nil
+                }
+            }
+        }
+    }
+
+    // MARK: - Calendar & List Subviews
+
+    private func calendarCard(selectedSingleDay: String?, lang: AppLanguage) -> some View {
+        InlineMonthCalendarCard(
+            monthKey: store.selectedMonth,
+            selectedDayKey: selectedSingleDay,
+            language: lang,
+            currency: settings.currency,
+            dailyTotals: store.dailyCalendarTotals,
+            onSelectDay: { dayKey in
+                withAnimation(.snappy(duration: 0.18)) {
+                    if selectedSingleDay == dayKey {
+                        store.selectedPeriod = .month(DateKey.monthKey(fromDayKey: dayKey))
+                    } else {
+                        store.selectedPeriod = .day(dayKey)
+                    }
+                }
+            },
+            onSelectFullMonth: {
+                withAnimation(.snappy(duration: 0.18)) {
+                    store.selectedPeriod = .month(store.selectedMonth)
+                }
+            }
+        )
+    }
+
+    @ViewBuilder
+    private func transactionListContent(groups: [DailyTransactionGroup], hasActiveFilter: Bool, lang: AppLanguage) -> some View {
+        if groups.isEmpty {
+            EmptyStateCard(
+                symbol: "tray",
+                title: hasActiveFilter
+                    ? L10n.text(lang, en: "No matching transactions", vi: "Không tìm thấy giao dịch phù hợp", zh: "没有匹配的账单")
+                    : L10n.text(lang, en: "No transactions yet", vi: "Chưa có giao dịch nào", zh: "暂无账单"),
+                message: hasActiveFilter
+                    ? L10n.text(lang, en: "Try another search term or clear active filters.", vi: "Thử từ khoá khác hoặc xoá bộ lọc đang chọn.", zh: "尝试其他关键词或清除当前筛选。")
+                    : L10n.text(lang, en: "Add a transaction or paste a bank notification.", vi: "Thêm giao dịch hoặc dán thông báo ngân hàng.", zh: "记一笔账单或粘贴银行通知。"),
+                actionTitle: hasActiveFilter
+                    ? L10n.text(lang, en: "Clear filters", vi: "Xoá bộ lọc", zh: "清除筛选")
+                    : L10n.text(lang, en: "Add transaction", vi: "Thêm giao dịch", zh: "记一笔")
+            ) {
+                if hasActiveFilter {
+                    withAnimation(.snappy(duration: 0.18)) {
+                        searchText = ""
+                        store.activityTypeFilter = .all
+                        store.activityCategoryFilter = nil
+                    }
+                } else {
+                    settings.isShowingQuickAdd = true
+                }
+            }
+        } else {
+            LazyVStack(alignment: .leading, spacing: 14) {
+                ForEach(groups) { group in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 8) {
+                            SectionLabel(DateKey.formatShortDay(group.dayKey, language: lang))
+                            Spacer()
+                            if group.totalIncomeMinor > 0 {
+                                Text(MoneyFormat.format(minor: group.totalIncomeMinor, currency: settings.currency, language: lang, signed: true))
+                                    .font(.appCaption.weight(.semibold))
+                                    .monospacedDigit()
+                                    .foregroundStyle(Color.positive)
+                            }
+                            if group.totalSpendingMinor > 0 {
+                                Text("−\(MoneyFormat.format(minor: group.totalSpendingMinor, currency: settings.currency, language: lang))")
+                                    .font(.appCaption.weight(.medium))
+                                    .monospacedDigit()
+                                    .foregroundStyle(Color.textSecondary)
+                            }
+                        }
+                        .padding(.horizontal, 4)
+
+                        Card {
+                            VStack(spacing: 2) {
+                                ForEach(Array(group.transactions.enumerated()), id: \.element.id) { idx, tx in
+                                    if idx > 0 { Divider().overlay(Color.hairline) }
+                                    TransactionRow(transaction: tx, showDate: false) {
+                                        editingTransaction = tx
+                                    }
+                                    .contextMenu {
+                                        if tx.needsReview {
+                                            Button {
+                                                store.confirmReviewed(id: tx.id)
+                                            } label: {
+                                                Label(L10n.text(lang, en: "Mark reviewed", vi: "Xác nhận", zh: "标记已核对"), systemImage: "checkmark.circle")
+                                            }
+                                        }
+                                        Button {
+                                            editingTransaction = tx
+                                        } label: {
+                                            Label(L10n.text(lang, en: "Edit", vi: "Chỉnh sửa", zh: "编辑"), systemImage: "pencil")
+                                        }
+                                        Button(role: .destructive) {
+                                            store.deleteTransaction(id: tx.id)
+                                        } label: {
+                                            Label(L10n.text(lang, en: "Delete", vi: "Xoá", zh: "删除"), systemImage: "trash")
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

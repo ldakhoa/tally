@@ -1,7 +1,7 @@
 import AppServices
 import AssistantUI
-import BudgetKit
 import BudgetsUI
+import BudgetKit
 import CloudKit
 import DesignSystem
 import GoalsUI
@@ -15,12 +15,16 @@ import TallyCore
 import TransactionsUI
 #if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
 #endif
 
 @main
 struct TallyApp: App {
     #if os(iOS)
     @UIApplicationDelegateAdaptor(TallyAppDelegate.self) private var appDelegate
+    #elseif os(macOS)
+    @NSApplicationDelegateAdaptor(TallyMacAppDelegate.self) private var macAppDelegate
     #endif
 
     @State private var settings = AppSettings()
@@ -28,17 +32,21 @@ struct TallyApp: App {
     @State private var cloudSync = CloudSync()
     @State private var emailInbox = EmailInboxSync()
     @State private var assistant = AssistantService()
+    @State private var router = TabRouter()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         WindowGroup {
-            RootTabs()
+            RootTabs(router: router)
                 .appTint()
                 .environment(settings)
                 .environment(store)
                 .environment(cloudSync)
                 .environment(emailInbox)
                 .environment(assistant)
+                #if os(macOS)
+                .frame(minWidth: 780, minHeight: 580)
+                #endif
                 .task {
                     settings.refreshKeychain()
                     cloudSync.start(settings: settings, store: store)
@@ -58,7 +66,16 @@ struct TallyApp: App {
                     Task { await handleDeepLink(url) }
                 }
         }
+        #if os(macOS)
+        .defaultSize(width: 1180, height: 780)
+        #endif
         .modelContainer(AppStore.container)
+        .commands {
+            TallyCommands(router: router, settings: settings, store: store, cloudSync: cloudSync)
+            #if os(macOS)
+            SidebarCommands()
+            #endif
+        }
     }
 
     /// Fallback URL scheme for Apple Shortcuts or Share Sheets:
@@ -122,6 +139,14 @@ struct TallyApp: App {
 final class TallyAppDelegate: NSObject, UIApplicationDelegate {
     func application(
         _ application: UIApplication,
+        didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]? = nil
+    ) -> Bool {
+        application.registerForRemoteNotifications()
+        return true
+    }
+
+    func application(
+        _ application: UIApplication,
         configurationForConnecting connectingSceneSession: UISceneSession,
         options: UIScene.ConnectionOptions
     ) -> UISceneConfiguration {
@@ -131,17 +156,23 @@ final class TallyAppDelegate: NSObject, UIApplicationDelegate {
     }
 
     func application(_ application: UIApplication, userDidAcceptCloudKitShareWith cloudKitShareMetadata: CKShare.Metadata) {
-        Task { @MainActor in
-            await CloudSync.current?.acceptShare(metadata: cloudKitShareMetadata)
-        }
+        CloudSync.acceptShareWhenReady(cloudKitShareMetadata)
     }
 }
 
 final class TallySceneDelegate: NSObject, UIWindowSceneDelegate {
     func windowScene(_ windowScene: UIWindowScene, userDidAcceptCloudKitShareWith cloudKitShareMetadata: CKShare.Metadata) {
-        Task { @MainActor in
-            await CloudSync.current?.acceptShare(metadata: cloudKitShareMetadata)
-        }
+        CloudSync.acceptShareWhenReady(cloudKitShareMetadata)
+    }
+}
+#elseif os(macOS)
+final class TallyMacAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApplication.shared.registerForRemoteNotifications()
+    }
+
+    func application(_ application: NSApplication, userDidAcceptCloudKitShareWith metadata: CKShare.Metadata) {
+        CloudSync.acceptShareWhenReady(metadata)
     }
 }
 #endif

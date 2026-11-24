@@ -18,6 +18,7 @@ public struct OverviewView: View {
     @Environment(\.colorScheme) private var colorScheme
 
     @State private var editingTransaction: TransactionRecord?
+    @State private var viewportWidth: CGFloat = 0
 
     public init(
         onSelectTransactions: @escaping () -> Void = {},
@@ -67,21 +68,39 @@ public struct OverviewView: View {
                     metricsRow(snapshot, lang: lang)
                         .cozyEntrance(index: 1)
 
-                    // Weekly Cash Flow chart
-                    cashFlowCard(snapshot, lang: lang)
+                    if viewportWidth >= 780 {
+                        HStack(alignment: .top, spacing: 16) {
+                            cashFlowCard(snapshot, lang: lang)
+                                .frame(maxWidth: .infinity)
+                            spendingBreakdownCard(snapshot, lang: lang)
+                                .frame(maxWidth: .infinity)
+                        }
                         .cozyEntrance(index: 2)
 
-                    // Spending Breakdown donut
-                    spendingBreakdownCard(snapshot, lang: lang)
+                        HStack(alignment: .top, spacing: 16) {
+                            recentTransactionsCard(snapshot, lang: lang)
+                                .frame(maxWidth: .infinity)
+                            goalsPreviewCard(lang: lang)
+                                .frame(maxWidth: .infinity)
+                        }
                         .cozyEntrance(index: 3)
+                    } else {
+                        // Weekly Cash Flow chart
+                        cashFlowCard(snapshot, lang: lang)
+                            .cozyEntrance(index: 2)
 
-                    // Recent transactions
-                    recentTransactionsCard(snapshot, lang: lang)
-                        .cozyEntrance(index: 4)
+                        // Spending Breakdown donut
+                        spendingBreakdownCard(snapshot, lang: lang)
+                            .cozyEntrance(index: 3)
 
-                    // Savings goals preview
-                    goalsPreviewCard(lang: lang)
-                        .cozyEntrance(index: 5)
+                        // Recent transactions
+                        recentTransactionsCard(snapshot, lang: lang)
+                            .cozyEntrance(index: 4)
+
+                        // Savings goals preview
+                        goalsPreviewCard(lang: lang)
+                            .cozyEntrance(index: 5)
+                    }
 
                     // First-run helper when completely blank
                     if store.activeTransactions.isEmpty && store.activeGoals.isEmpty {
@@ -113,8 +132,9 @@ public struct OverviewView: View {
                         }
                     }
                 }
-                .documentColumn()
+                .documentColumn(maxWidth: 1080)
             }
+            .readViewportWidth($viewportWidth)
             .pageBackground()
             .navigationTitle(L10n.text(lang, en: "Overview", vi: "Tổng quan", zh: "概览"))
             .toolbar { TopToolbarControls() }
@@ -351,7 +371,8 @@ public struct OverviewView: View {
     // MARK: - Metrics Row
 
     private func metricsRow(_ snapshot: MonthlySnapshot, lang: AppLanguage) -> some View {
-        let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+        let columnCount = viewportWidth >= 720 ? 4 : 2
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: columnCount)
         return LazyVGrid(columns: columns, spacing: 12) {
             metricTile(
                 title: L10n.text(lang, en: "Income", vi: "Thu nhập", zh: "收入"),

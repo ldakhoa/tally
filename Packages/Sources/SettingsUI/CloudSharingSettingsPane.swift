@@ -13,6 +13,9 @@ struct CloudSharingSettingsPane: View {
     @State private var shareItem: SharePresentation?
     @State private var shareError: String?
     @State private var confirmingLeave = false
+    #if os(macOS)
+    @State private var macSharePresenter = MacCloudSharePresenter()
+    #endif
 
     struct SharePresentation: Identifiable {
         let id = UUID()
@@ -129,14 +132,13 @@ struct CloudSharingSettingsPane: View {
             } footer: {
                 formSectionFooter(L10n.text(
                     lang,
-                    en: "Uses Apple iCloud Zone Sharing (CKShare). Send the invite link via iMessage or AirDrop — once accepted on your wife's iPhone, both phones stay in sync automatically with separate Apple IDs.",
-                    vi: "Dùng Apple iCloud Zone Sharing (CKShare). Gửi link mời qua iMessage hoặc AirDrop — khi vợ bạn mở link trên iPhone, hai máy sẽ tự động đồng bộ dù dùng 2 tài khoản Apple ID khác nhau.",
-                    zh: "使用 Apple iCloud 区域共享（CKShare）。通过 iMessage 或隔空投送发送邀请链接，伴侣接受后，两台不同 Apple ID 的 iPhone 即可自动实时同步。"
+                    en: "Uses Apple iCloud Zone Sharing (CKShare). Send the invite link via iMessage or AirDrop — once accepted on your partner's iPhone, iPad, or Mac, all devices stay in sync automatically with separate Apple IDs.",
+                    vi: "Dùng Apple iCloud Zone Sharing (CKShare). Gửi link mời qua iMessage hoặc AirDrop — khi vợ/chồng mở link trên iPhone, iPad hoặc Mac, mọi thiết bị sẽ tự động đồng bộ dù dùng 2 tài khoản Apple ID khác nhau.",
+                    zh: "使用 Apple iCloud 区域共享（CKShare）。通过 iMessage 或隔空投送发送邀请链接，伴侣在 iPhone、iPad 或 Mac 上接受后，不同 Apple ID 即可自动实时同步。"
                 ))
             }
         }
-        .scrollContentBackground(.hidden)
-        .pageBackground()
+        .cozyGroupedForm()
         .navigationTitle(L10n.text(lang, en: "iCloud & Household", vi: "iCloud & Gia đình", zh: "iCloud 与家庭"))
         #if os(iOS)
         .sheet(item: $shareItem) { item in
@@ -162,7 +164,16 @@ struct CloudSharingSettingsPane: View {
         defer { isPreparingShare = false }
         do {
             let (share, container) = try await cloudSync.prepareHouseholdShare()
+            #if os(macOS)
+            macSharePresenter.present(
+                share: share,
+                container: container,
+                onFinish: { Task { await cloudSync.refreshShareSummary() } },
+                onError: { message in shareError = message }
+            )
+            #else
             shareItem = SharePresentation(share: share, container: container)
+            #endif
         } catch {
             shareError = error.localizedDescription
         }
@@ -218,6 +229,53 @@ private struct CloudSharingControllerView: UIViewControllerRepresentable {
         func itemTitle(for csc: UICloudSharingController) -> String? { "Tally Household Budget" }
         func cloudSharingControllerDidSaveShare(_ csc: UICloudSharingController) { onFinish() }
         func cloudSharingControllerDidStopSharing(_ csc: UICloudSharingController) { onFinish() }
+    }
+}
+#elseif os(macOS)
+import AppKit
+
+private final class MacCloudSharePresenter: NSObject, NSCloudSharingServiceDelegate {
+    private var onFinish: (@MainActor () -> Void)?
+    private var onError: (@MainActor (String) -> Void)?
+
+    @MainActor
+    func present(
+        share: CKShare,
+        container: CKContainer,
+        onFinish: @escaping @MainActor () -> Void,
+        onError: @escaping @MainActor (String) -> Void
+    ) {
+        self.onFinish = onFinish
+        self.onError = onError
+
+        let provider = NSItemProvider()
+        provider.registerCloudKitShare(share, container: container)
+        guard let service = NSSharingService(named: .cloudSharing) else {
+            onError("iCloud sharing panel is unavailable on this Mac.")
+            return
+        }
+        service.delegate = self
+        service.perform(withItems: [provider])
+    }
+
+    func itemTitle(for sharingService: NSSharingService) -> String? {
+        "Tally Household Budget"
+    }
+
+    func sharingService(_ sharingService: NSSharingService, didSave share: CKShare) {
+        let callback = onFinish
+        Task { @MainActor in callback?() }
+    }
+
+    func sharingService(_ sharingService: NSSharingService, didStopSharing share: CKShare) {
+        let callback = onFinish
+        Task { @MainActor in callback?() }
+    }
+
+    func sharingService(_ sharingService: NSSharingService, didFailToShareItems items: [Any], error: Error) {
+        let callback = onError
+        let message = error.localizedDescription
+        Task { @MainActor in callback?(message) }
     }
 }
 #endif

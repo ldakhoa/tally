@@ -115,6 +115,25 @@ final class TallyCoreTests: XCTestCase {
         vnd.tapDigit("000")
         XCTAssertEqual(vnd.formattedDisplayNumber(currency: .vnd), "65.000")
         XCTAssertEqual(vnd.evaluatedValue ?? 0, 65_000, accuracy: 0.01)
+
+        // Hardware keyboard characters (Mac / iPad keyboard)
+        var kb = AmountKeypadEngine(maxFractionDigits: 2)
+        XCTAssertTrue(kb.handleKeyCharacter("1"))
+        XCTAssertTrue(kb.handleKeyCharacter("0"))
+        XCTAssertTrue(kb.handleKeyCharacter("+"))
+        XCTAssertTrue(kb.handleKeyCharacter("2"))
+        XCTAssertTrue(kb.handleKeyCharacter(","))
+        XCTAssertTrue(kb.handleKeyCharacter("5"))
+        XCTAssertTrue(kb.handleKeyCharacter("="))
+        XCTAssertEqual(kb.expression, "12.5")
+        XCTAssertFalse(kb.handleKeyCharacter("a"))
+
+        var kbVND = AmountKeypadEngine(maxFractionDigits: 0)
+        XCTAssertFalse(kbVND.handleKeyCharacter("."))
+        XCTAssertTrue(kbVND.handleKeyCharacter("5"))
+        XCTAssertTrue(kbVND.handleKeyCharacter("*"))
+        XCTAssertTrue(kbVND.handleKeyCharacter("3"))
+        XCTAssertEqual(kbVND.evaluatedValue ?? 0, 15, accuracy: 0.01)
     }
 
     func testChineseLanguageSupport() {

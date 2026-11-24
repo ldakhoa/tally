@@ -34,7 +34,7 @@ public struct BudgetsView: View {
             NavigationStack {
                 ScrollView {
                     content(snapshot: snapshot, lang: lang)
-                        .documentColumn()
+                        .documentColumn(maxWidth: 1020)
                 }
                 .pageBackground()
                 .navigationTitle(L10n.text(lang, en: "Budgets", vi: "Ngân sách", zh: "预算"))
@@ -114,7 +114,7 @@ public struct BudgetsView: View {
                 }
                 .blockButton(prominent: false)
             } else {
-                VStack(spacing: 12) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 320), spacing: 14)], spacing: 14) {
                     ForEach(snapshot.budgets) { budget in
                         let spent = snapshot.expensesByCategory[budget.category] ?? 0
                         let remaining = budget.limitMinor - spent
@@ -260,6 +260,7 @@ private struct BudgetEditorSheet: View {
                 )
             }
             .pageBackground()
+            .keypadKeyboardInput(engine: $keypad, isEnabled: true, isSaveEnabled: canSave, onSave: save)
             .navigationTitle(existing == nil
                 ? L10n.text(lang, en: "Set budget", vi: "Đặt ngân sách", zh: "设置预算")
                 : L10n.text(lang, en: "Edit budget", vi: "Sửa ngân sách", zh: "编辑预算"))
@@ -305,6 +306,7 @@ private struct BudgetEditorSheet: View {
                 }
             }
         }
+        .cozySheetFrame(minWidth: 440, idealWidth: 480, minHeight: 560, idealHeight: 640)
     }
 
     private func amountHeroStage(lang: AppLanguage) -> some View {

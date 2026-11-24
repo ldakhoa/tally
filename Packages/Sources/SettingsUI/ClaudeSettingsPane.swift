@@ -115,32 +115,41 @@ struct ClaudeSettingsPane: View {
             // API key & Workspace ID
             Section {
                 if settings.hasAPIKey && !isReplacing {
-                    HStack(spacing: 12) {
-                        SettingsIconTile(symbol: "key.fill", size: 30)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text("API key").font(.appBodyMedium)
-                            HStack(spacing: 6) {
-                                if let hint = settings.apiKeyHint {
-                                    Text(verbatim: hint).font(.appCaption.monospaced())
-                                    Text("·")
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(alignment: .center, spacing: 12) {
+                            SettingsIconTile(symbol: "key.fill", size: 34)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("API key").font(.appBodyMedium)
+                                let storage = settings.apiKeyIsShared ? "iCloud Keychain" : "Keychain"
+                                HStack(spacing: 6) {
+                                    if let hint = settings.apiKeyHint {
+                                        Text(verbatim: hint).font(.appCaption.monospaced())
+                                        Text("·")
+                                    }
+                                    Text(storage)
                                 }
-                                Text(settings.apiKeyIsShared ? "iCloud Keychain" : "Keychain")
+                                .font(.appCaption)
+                                .foregroundStyle(Color.textSecondary)
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
                             }
-                            .font(.appCaption)
-                            .foregroundStyle(Color.textSecondary)
                         }
-                        Spacer()
-                        Button(L10n.text(lang, en: "Replace", vi: "Đổi", zh: "更换")) {
-                            keyDraft = ""
-                            isReplacing = true
-                        }
-                        .pillButton()
 
-                        Button(L10n.text(lang, en: "Remove", vi: "Xoá", zh: "移除"), role: .destructive) {
-                            confirmingRemoval = true
+                        HStack(spacing: 10) {
+                            Button(L10n.text(lang, en: "Replace", vi: "Đổi", zh: "更换")) {
+                                keyDraft = ""
+                                isReplacing = true
+                            }
+                            .pillButton()
+
+                            Button(L10n.text(lang, en: "Remove", vi: "Xoá", zh: "移除"), role: .destructive) {
+                                confirmingRemoval = true
+                            }
+                            .pillButton()
                         }
-                        .pillButton()
+                        .padding(.leading, 46)
                     }
+                    .padding(.vertical, 4)
                 } else {
                     VStack(alignment: .leading, spacing: 10) {
                         SecureField("sk-ant-…", text: $keyDraft)
@@ -267,8 +276,7 @@ struct ClaudeSettingsPane: View {
                 formSectionHeader(L10n.text(lang, en: "Parsing & Siri", vi: "Phân tích & Siri", zh: "解析与 Siri"))
             }
         }
-        .scrollContentBackground(.hidden)
-        .pageBackground()
+        .cozyGroupedForm()
         .navigationTitle(L10n.text(lang, en: "AI Assistant", vi: "Trợ lý AI", zh: "AI 助手"))
         .onAppear {
             settings.refreshKeychain()

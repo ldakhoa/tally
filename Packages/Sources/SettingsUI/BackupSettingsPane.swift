@@ -79,8 +79,7 @@ struct BackupSettingsPane: View {
                 formSectionHeader(L10n.text(lang, en: "Data management", vi: "Quản lý dữ liệu", zh: "数据管理"))
             }
         }
-        .scrollContentBackground(.hidden)
-        .pageBackground()
+        .cozyGroupedForm()
         .navigationTitle(L10n.text(lang, en: "Backup & Data", vi: "Sao lưu & Dữ liệu", zh: "备份与数据"))
         .fileExporter(
             isPresented: $showingExporter,

@@ -1,4 +1,5 @@
 import BudgetKit
+import Observation
 import SwiftUI
 import ThemeTokens
 
@@ -21,6 +22,7 @@ extension Color {
     public static var appBackground: Color { current.colors.page }
     public static var cardBackground: Color { current.colors.card }
     public static var editorBackground: Color { current.colors.editor }
+    public static var sidebarBackground: Color { current.colors.sidebar }
     public static var hairline: Color { current.colors.hairline }
     public static var hairlineStrong: Color { current.colors.hairlineStrong }
     public static var separatorLine: Color { hairline }
@@ -148,6 +150,56 @@ extension View {
     public func pageBackground() -> some View {
         background(Color.appBackground.ignoresSafeArea())
     }
+
+    /// Gives sheets a comfortable native window size on macOS while keeping iOS/iPadOS sheet sizing unchanged.
+    @ViewBuilder
+    public func cozySheetFrame(
+        minWidth: CGFloat = 460,
+        idealWidth: CGFloat = 520,
+        minHeight: CGFloat = 520,
+        idealHeight: CGFloat = 620
+    ) -> some View {
+        #if os(macOS)
+        frame(minWidth: minWidth, idealWidth: idealWidth, minHeight: minHeight, idealHeight: idealHeight)
+        #else
+        self
+        #endif
+    }
+
+    /// Styles Settings `Form` views consistently across iOS/iPadOS and macOS grouped cards.
+    @ViewBuilder
+    public func cozyGroupedForm() -> some View {
+        #if os(macOS)
+        formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .pageBackground()
+        #else
+        scrollContentBackground(.hidden)
+            .pageBackground()
+        #endif
+    }
+
+    /// Reads the live viewport width of a container (such as a `ScrollView`) for adaptive wide layouts.
+    public func readViewportWidth(_ width: Binding<CGFloat>) -> some View {
+        background {
+            GeometryReader { geo in
+                Color.clear.preference(key: ViewportWidthKey.self, value: geo.size.width)
+            }
+        }
+        .onPreferenceChange(ViewportWidthKey.self) { newWidth in
+            if abs(width.wrappedValue - newWidth) > 1 {
+                width.wrappedValue = newWidth
+            }
+        }
+    }
+}
+
+private struct ViewportWidthKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        let next = nextValue()
+        if next > 0 { value = next }
+    }
 }
 
 private struct CardSurface: ViewModifier {
@@ -179,10 +231,43 @@ private struct TabBarBottomInsetKey: EnvironmentKey {
     static let defaultValue: CGFloat = 0
 }
 
+@MainActor
+@Observable
+public final class TabBarVisibility {
+    public private(set) var hiddenTabs: Set<String> = []
+
+    public init() {}
+
+    public func setHidden(_ hidden: Bool, for tabID: String) {
+        if hidden {
+            if !hiddenTabs.contains(tabID) {
+                hiddenTabs.insert(tabID)
+            }
+        } else {
+            if hiddenTabs.contains(tabID) {
+                hiddenTabs.remove(tabID)
+            }
+        }
+    }
+
+    public func isHidden(for tabID: String) -> Bool {
+        hiddenTabs.contains(tabID)
+    }
+}
+
+private struct TabBarVisibilityKey: EnvironmentKey {
+    static let defaultValue: TabBarVisibility? = nil
+}
+
 extension EnvironmentValues {
     public var tabBarBottomInset: CGFloat {
         get { self[TabBarBottomInsetKey.self] }
         set { self[TabBarBottomInsetKey.self] = newValue }
+    }
+
+    public var tabBarVisibility: TabBarVisibility? {
+        get { self[TabBarVisibilityKey.self] }
+        set { self[TabBarVisibilityKey.self] = newValue }
     }
 }
 

@@ -22,6 +22,7 @@ public struct StatisticsView: View {
     @State private var breakdownKind: TransactionType = .expense
     @State private var editingTransaction: TransactionRecord?
     @State private var activeKPISheet: KPIInspectSheet?
+    @State private var viewportWidth: CGFloat = 0
 
     public init(onSelectTransactions: @escaping () -> Void = {}) {
         self.onSelectTransactions = onSelectTransactions
@@ -66,32 +67,56 @@ public struct StatisticsView: View {
                             dailyPaceCard(stats, lang: lang)
                         }
 
-                        // 4. Category breakdown (Expense / Income)
-                        categoryBreakdownCard(stats, lang: lang)
+                        // 4. Category breakdown (Expense / Income) & Weekday pattern
+                        if viewportWidth >= 800 && stats.current.spendingMinor > 0 {
+                            HStack(alignment: .top, spacing: 16) {
+                                categoryBreakdownCard(stats, lang: lang)
+                                    .frame(maxWidth: .infinity)
+                                weekdayPatternCard(stats, lang: lang)
+                                    .frame(maxWidth: .infinity)
+                            }
+                        } else {
+                            categoryBreakdownCard(stats, lang: lang)
 
-                        // 5. Spending by day of week
-                        if stats.current.spendingMinor > 0 {
-                            weekdayPatternCard(stats, lang: lang)
+                            // 5. Spending by day of week
+                            if stats.current.spendingMinor > 0 {
+                                weekdayPatternCard(stats, lang: lang)
+                            }
                         }
 
-                        // 6. Top merchants
-                        if !stats.topMerchants.isEmpty {
-                            topMerchantsCard(stats, lang: lang)
+                        // 6. Top merchants & Largest expenses
+                        if viewportWidth >= 800 && (!stats.topMerchants.isEmpty || !stats.largestExpenses.isEmpty) {
+                            HStack(alignment: .top, spacing: 16) {
+                                if !stats.topMerchants.isEmpty {
+                                    topMerchantsCard(stats, lang: lang)
+                                        .frame(maxWidth: .infinity)
+                                }
+                                if !stats.largestExpenses.isEmpty {
+                                    largestExpensesCard(stats, lang: lang)
+                                        .frame(maxWidth: .infinity)
+                                }
+                            }
+                        } else {
+                            // 6. Top merchants
+                            if !stats.topMerchants.isEmpty {
+                                topMerchantsCard(stats, lang: lang)
+                            }
+
+                            // 8. Largest expenses in period
+                            if !stats.largestExpenses.isEmpty {
+                                largestExpensesCard(stats, lang: lang)
+                            }
                         }
 
                         // 7. Household split (when >1 member has activity)
                         if stats.current.memberBreakdown.count > 1 {
                             householdSplitCard(stats, lang: lang)
                         }
-
-                        // 8. Largest expenses in period
-                        if !stats.largestExpenses.isEmpty {
-                            largestExpensesCard(stats, lang: lang)
-                        }
                     }
                 }
-                .documentColumn()
+                .documentColumn(maxWidth: 1080)
             }
+            .readViewportWidth($viewportWidth)
             .pageBackground()
             .navigationTitle(L10n.text(lang, en: "Statistics", vi: "Thống kê", zh: "统计"))
             .toolbar { TopToolbarControls() }
@@ -107,7 +132,8 @@ public struct StatisticsView: View {
     // MARK: - KPI Highlights Grid
 
     private func kpiGrid(_ stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
-        let columns = [GridItem(.flexible(), spacing: 12), GridItem(.flexible(), spacing: 12)]
+        let columnCount = viewportWidth >= 720 ? 4 : 2
+        let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: columnCount)
         let currency = settings.currency
         let compactVND = currency == .vnd
 
@@ -1022,5 +1048,6 @@ public struct StatisticsView: View {
             }
         }
         .presentationDetents([.medium, .large])
+        .cozySheetFrame(minWidth: 420, idealWidth: 460, minHeight: 400, idealHeight: 480)
     }
 }

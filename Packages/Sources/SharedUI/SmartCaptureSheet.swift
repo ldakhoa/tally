@@ -156,6 +156,7 @@ public struct SmartCaptureSheet: View {
                 )
             }
         }
+        .cozySheetFrame(minWidth: 480, idealWidth: 520, minHeight: 460, idealHeight: 520)
     }
 
     private func runParse() async {

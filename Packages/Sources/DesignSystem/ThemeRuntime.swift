@@ -34,11 +34,12 @@ public struct ResolvedThemeTokens {
     public let theme: AppTheme
     public let accent: PlatformColor
     public let text: PlatformColor
+    public let page: PlatformColor
     public let colors: Colors
 
     public struct Colors {
         public let ink, onInk, accent, onAccent, text, textSecondary: Color
-        public let page, card, editor: Color
+        public let page, card, editor, sidebar: Color
         public let hairline, hairlineStrong, field, rowSelection, rowHover: Color
         public let positive, caution, negative, info: Color
     }
@@ -67,6 +68,7 @@ public struct ResolvedThemeTokens {
         let page = pair(\.ios.page)
         let card = pair(\.ios.card)
         let editor = pair(\.ios.editor)
+        let sidebar = dynamicColor(light: platformColor(light.ios.editor), dark: platformColor(dark.ios.card))
         let hairline = pair(\.hairline)
         let hairlineStrong = pair(\.hairlineStrong)
         let field = pair(\.field)
@@ -79,10 +81,11 @@ public struct ResolvedThemeTokens {
 
         self.accent = accent
         self.text = text
+        self.page = page
         self.colors = Colors(
             ink: toColor(ink), onInk: toColor(onInk), accent: toColor(accent), onAccent: toColor(onAccent),
             text: toColor(text), textSecondary: toColor(textSecondary),
-            page: toColor(page), card: toColor(card), editor: toColor(editor),
+            page: toColor(page), card: toColor(card), editor: toColor(editor), sidebar: toColor(sidebar),
             hairline: toColor(hairline), hairlineStrong: toColor(hairlineStrong), field: toColor(field),
             rowSelection: toColor(rowSelection), rowHover: toColor(rowHover),
             positive: toColor(positive), caution: toColor(caution), negative: toColor(negative), info: toColor(info)
@@ -122,9 +125,7 @@ public final class ThemeRuntime {
             guard themeChanged || appearanceChanged else { return }
             if themeChanged { self.theme = theme }
             if appearanceChanged { self.appearance = appearance }
-            #if os(iOS)
             MainActor.assumeIsolated { applyToWindows() }
-            #endif
             hasApplied = true
         }
         if Thread.isMainThread {
@@ -134,7 +135,20 @@ public final class ThemeRuntime {
         }
     }
 
-    #if os(iOS)
+    #if os(macOS)
+    @MainActor
+    public func applyToWindows() {
+        switch appearance {
+        case .system: NSApplication.shared.appearance = nil
+        case .light: NSApplication.shared.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApplication.shared.appearance = NSAppearance(named: .darkAqua)
+        }
+        let page = tokens.page
+        for window in NSApplication.shared.windows {
+            window.backgroundColor = page
+        }
+    }
+    #else
     @MainActor
     public func applyToWindows() {
         let style: UIUserInterfaceStyle
@@ -194,8 +208,6 @@ struct ThemeRoot: ViewModifier {
             .tint(colors.accent)
             .foregroundStyle(colors.text)
             .lineSpacing(.lineSpacing)
-            #if os(iOS)
             .onAppear { ThemeRuntime.shared.applyToWindows() }
-            #endif
     }
 }

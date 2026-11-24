@@ -352,6 +352,17 @@ public final class VoiceDictationManager {
     private func requestMicrophonePermission() async -> Bool {
         #if os(iOS)
         return await AVAudioApplication.requestRecordPermission()
+        #elseif os(macOS)
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .notDetermined:
+            return await AVCaptureDevice.requestAccess(for: .audio)
+        case .denied, .restricted:
+            return false
+        @unknown default:
+            return false
+        }
         #else
         return true
         #endif

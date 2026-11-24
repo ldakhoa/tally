@@ -110,6 +110,7 @@ public struct TransactionEditorSheet: View {
             }
             .animation(.snappy(duration: 0.22), value: focusedField == nil)
             .pageBackground()
+            .keypadKeyboardInput(engine: $keypad, isEnabled: focusedField == nil, isSaveEnabled: canSave, onSave: save)
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -120,6 +121,7 @@ public struct TransactionEditorSheet: View {
 
                 ToolbarItem(placement: .principal) {
                     typeSegmentedPill(lang: lang)
+                        .fixedSize()
                 }
 
                 ToolbarItem(placement: .primaryAction) {
@@ -173,8 +175,10 @@ public struct TransactionEditorSheet: View {
                     }
                 }
                 .presentationDetents([.large])
+                .cozySheetFrame(minWidth: 420, idealWidth: 440, minHeight: 520, idealHeight: 580)
             }
         }
+        .cozySheetFrame(minWidth: 460, idealWidth: 480, minHeight: 600, idealHeight: 660)
     }
 
     // MARK: - Top Type Switcher

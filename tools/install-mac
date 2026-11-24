@@ -1,0 +1,59 @@
+#!/bin/bash
+# Builds the Release version of Tally for macOS and installs it into /Applications/Tally.app,
+# keeping existing data, Keychain items, and iCloud sync state.
+#
+#   tools/install-mac            build, install to /Applications/Tally.app and open it
+#   tools/install-mac --no-open  build and install only
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$root"
+
+unset CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH OBJC_INCLUDE_PATH OBJCPLUS_INCLUDE_PATH
+
+open_after=1
+for arg in "$@"; do
+    case "$arg" in
+    --no-open) open_after=0 ;;
+    -h | --help)
+        sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0
+        ;;
+    *)
+        echo "Unknown option: $arg" >&2
+        exit 1
+        ;;
+    esac
+done
+
+bundle_id="com.ldakhoa.tally"
+target="/Applications/Tally.app"
+built="$root/build/Build/Products/Release/Tally.app"
+
+echo "== Release build for macOS"
+log="$(mktemp -t install-tally-mac-build)"
+if ! xcodebuild -project Tally.xcodeproj -scheme Tally -configuration Release \
+    -destination 'platform=macOS' -derivedDataPath build -allowProvisioningUpdates \
+    build >"$log" 2>&1 </dev/null; then
+    grep -E "error:" "$log" | sort -u | head -20
+    echo "Build failed; nothing installed. Full log: $log" >&2
+    exit 1
+fi
+rm -f "$log"
+
+installed="^$target/Contents/MacOS/"
+if pgrep -f "$installed" >/dev/null; then
+    osascript -e "tell application id \"$bundle_id\" to quit" >/dev/null 2>&1 || true
+    for _ in $(seq 1 40); do
+        pgrep -f "$installed" >/dev/null || break
+        sleep 0.25
+    done
+fi
+
+rm -rf "${target:?}"
+ditto "$built" "$target"
+echo "Installed: $target"
+
+if [ "$open_after" = 1 ]; then
+    open "$target"
+fi

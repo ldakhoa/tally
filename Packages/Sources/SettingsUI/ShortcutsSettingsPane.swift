@@ -60,27 +60,41 @@ struct ShortcutsSettingsPane: View {
             } footer: {
                 formSectionFooter(L10n.text(
                     lang,
-                    en: "Tap Install, then choose \"Shortcuts\" in the share sheet (or AirDrop it straight to your wife's iPhone too).",
-                    vi: "Bấm Cài đặt rồi chọn \"Phím tắt\" (hoặc AirDrop thẳng file này sang iPhone của vợ).",
-                    zh: "点击安装后在共享菜单中选择“快捷指令”（也可以直接隔空投送给伴侣的 iPhone）。"
+                    en: "Install straight into Apple Shortcuts on this device, or AirDrop it to your partner's iPhone, iPad, or Mac.",
+                    vi: "Cài thẳng vào Phím tắt Apple trên thiết bị này, hoặc AirDrop sang iPhone, iPad, Mac của vợ/chồng.",
+                    zh: "直接安装到此设备的 Apple 快捷指令中，或隔空投送给伴侣的 iPhone、iPad 或 Mac。"
                 ))
             }
 
             // Section 2: 20-Second Background Automations (1 single action!)
             Section {
                 Button {
+                    #if os(macOS)
+                    if let url = URL(string: "shortcuts://") {
+                        openURL(url)
+                    }
+                    #else
                     if let url = URL(string: "shortcuts://create-automation") {
                         openURL(url)
                     }
+                    #endif
                 } label: {
                     HStack {
                         SettingsIconTile(symbol: "arrow.up.forward.app.fill", tint: .ink, size: 30)
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(L10n.text(lang, en: "Open Apple Shortcuts → Automations", vi: "Mở Phím tắt Apple → Tự động hoá", zh: "打开 Apple 快捷指令 → 自动化"))
+                            #if os(macOS)
+                            Text(L10n.text(lang, en: "Open Apple Shortcuts on Mac", vi: "Mở Phím tắt Apple trên Mac", zh: "在 Mac 上打开 Apple 快捷指令"))
                                 .font(.appBodyMedium)
-                            Text(L10n.text(lang, en: "iOS requires picking the trigger once per phone", vi: "iOS yêu cầu tự chọn bộ kích hoạt 1 lần trên mỗi máy", zh: "iOS 要求每台手机手动选择一次触发条件"))
+                            Text(L10n.text(lang, en: "Quick Spend & Share Sheet run on Mac; Wallet/SMS triggers run on iPhone or iPad and sync via iCloud", vi: "Ghi nhanh & Chia sẻ chạy trên Mac; tự động hoá Wallet/SMS chạy trên iPhone/iPad và đồng bộ iCloud", zh: "快速记账与共享菜单可在 Mac 运行；钱包/短信自动化在 iPhone/iPad 触发并通过 iCloud 同步"))
                                 .font(.appCaption)
                                 .foregroundStyle(Color.textSecondary)
+                            #else
+                            Text(L10n.text(lang, en: "Open Apple Shortcuts → Automations", vi: "Mở Phím tắt Apple → Tự động hoá", zh: "打开 Apple 快捷指令 → 自动化"))
+                                .font(.appBodyMedium)
+                            Text(L10n.text(lang, en: "iOS requires picking the trigger once per device", vi: "iOS yêu cầu tự chọn bộ kích hoạt 1 lần trên mỗi máy", zh: "iOS 要求每台设备手动选择一次触发条件"))
+                                .font(.appCaption)
+                                .foregroundStyle(Color.textSecondary)
+                            #endif
                         }
                         Spacer()
                         CozyUIIcon(.chevronRight, size: 14, color: Color.textSecondary)
@@ -220,8 +234,7 @@ struct ShortcutsSettingsPane: View {
                 formSectionHeader(L10n.text(lang, en: "Test Bank Alert Parser", vi: "Thử bộ đọc tin nhắn ngân hàng", zh: "测试银行通知解析"))
             }
         }
-        .scrollContentBackground(.hidden)
-        .pageBackground()
+        .cozyGroupedForm()
         .navigationTitle(L10n.text(lang, en: "Auto-Capture", vi: "Tự động ghi", zh: "自动记账"))
         #if os(iOS)
         .sheet(item: $sharingShortcutURL) { item in
@@ -251,7 +264,11 @@ struct ShortcutsSettingsPane: View {
             Button(L10n.text(lang, en: "Install", vi: "Cài đặt", zh: "安装")) {
                 if let url = Bundle.main.url(forResource: resourceName, withExtension: "shortcut")
                     ?? Bundle.main.url(forResource: resourceName, withExtension: "shortcut", subdirectory: "Shortcuts") {
+                    #if os(macOS)
+                    NSWorkspace.shared.open(url)
+                    #else
                     sharingShortcutURL = ShortcutFileItem(url: url)
+                    #endif
                 }
             }
             .pillButton(prominent: true)
@@ -304,4 +321,6 @@ private struct ShortcutShareSheet: UIViewControllerRepresentable {
 
     func updateUIViewController(_ uiViewController: UIActivityViewController, context: Context) {}
 }
+#elseif os(macOS)
+import AppKit
 #endif

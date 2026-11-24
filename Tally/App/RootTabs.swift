@@ -12,6 +12,8 @@ import TallyCore
 import TransactionsUI
 #if os(iOS)
 import UIKit
+#elseif os(macOS)
+import AppKit
 #endif
 
 enum TallyTab: String, CaseIterable, Identifiable {
@@ -51,11 +53,74 @@ enum PlanSegment: String, CaseIterable, Identifiable {
     }
 }
 
+enum SidebarDestination: String, CaseIterable, Identifiable, Hashable {
+    case overview, transactions, statistics, budgets, goals, settings
+    var id: String { rawValue }
+
+    static var primaryCases: [SidebarDestination] {
+        [.overview, .transactions, .statistics, .budgets, .goals]
+    }
+
+    func title(in language: AppLanguage) -> String {
+        switch self {
+        case .overview: return L10n.text(language, en: "Overview", vi: "Tổng quan", zh: "概览")
+        case .transactions: return L10n.text(language, en: "Transactions", vi: "Giao dịch", zh: "账单")
+        case .statistics: return L10n.text(language, en: "Statistics", vi: "Thống kê", zh: "统计")
+        case .budgets: return L10n.text(language, en: "Budgets", vi: "Ngân sách", zh: "预算")
+        case .goals: return L10n.text(language, en: "Goals", vi: "Mục tiêu", zh: "目标")
+        case .settings: return L10n.text(language, en: "Settings", vi: "Cài đặt", zh: "设置")
+        }
+    }
+
+    var shortcutHint: String? {
+        switch self {
+        case .overview: return "⌘1"
+        case .transactions: return "⌘2"
+        case .statistics: return "⌘3"
+        case .budgets: return "⌘4"
+        case .goals: return "⌘5"
+        case .settings: return "⌘,"
+        }
+    }
+}
+
 @MainActor
 @Observable
 final class TabRouter {
     var selectedTab: TallyTab = .overview
     var planSegment: PlanSegment = .budgets
+
+    var activeDestination: SidebarDestination {
+        get {
+            switch selectedTab {
+            case .overview: return .overview
+            case .transactions: return .transactions
+            case .statistics: return .statistics
+            case .budgets: return planSegment == .goals ? .goals : .budgets
+            case .settings: return .settings
+            }
+        }
+        set {
+            switch newValue {
+            case .overview: selectedTab = .overview
+            case .transactions: selectedTab = .transactions
+            case .statistics: selectedTab = .statistics
+            case .budgets:
+                planSegment = .budgets
+                selectedTab = .budgets
+            case .goals:
+                planSegment = .goals
+                selectedTab = .budgets
+            case .settings:
+                selectedTab = .settings
+            }
+        }
+    }
+
+    func goToOverview() {
+        CozyHaptics.selection()
+        selectedTab = .overview
+    }
 
     func goToTransactions() {
         CozyHaptics.selection()
@@ -144,73 +209,46 @@ private struct TabPagesHost: View {
 }
 
 struct RootTabs: View {
+    @Bindable var router: TabRouter
+
     @Environment(AppSettings.self) private var settings
     @Environment(BudgetStore.self) private var store
+    @Environment(CloudSync.self) private var cloudSync
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    #endif
 
-    @State private var router = TabRouter()
+    @State private var tabBarVisibility = TabBarVisibility()
     @State private var loadedTabs: Set<TallyTab> = [.overview]
     @State private var celebrationTrigger = 0
     @State private var lastTransactionCount = -1
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+
+    private var usesSidebarShell: Bool {
+        #if os(macOS)
+        return true
+        #else
+        return horizontalSizeClass == .regular
+        #endif
+    }
 
     var body: some View {
         @Bindable var settings = settings
-        @Bindable var router = router
         let lang = settings.language
 
-        let tabItems = TallyTab.allCases.map { tab in
-            CozyTabBarItem(
-                id: tab,
-                icon: tab.cozyIcon,
-                accessibilityLabel: tab.title(in: lang),
-                badgeCount: tab == .overview ? store.pendingReviewTransactions.count : 0
-            )
-        }
-
-        ZStack {
-            TabPagesHost(router: router, loadedTabs: loadedTabs)
-        }
-        .overlay(alignment: .bottom) {
-            ZStack(alignment: .bottom) {
-                LinearGradient(
-                    colors: [Color.appBackground.opacity(0), Color.appBackground.opacity(0.92), Color.appBackground],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 92)
-                .ignoresSafeArea(edges: .bottom)
-                .allowsHitTesting(false)
-
-                CozyFloatingTabBar(items: tabItems, selection: $router.selectedTab)
+        Group {
+            if usesSidebarShell {
+                sidebarShell(lang: lang)
+            } else {
+                compactTabShell(lang: lang)
             }
-            .ignoresSafeArea(.keyboard, edges: .bottom)
-        }
-        .overlay(alignment: .bottom) {
-            CozyCelebrationOverlay(trigger: celebrationTrigger)
-                .padding(.bottom, 100)
-        }
-        .overlay(alignment: .bottomTrailing) {
-            Group {
-                if router.selectedTab != .settings {
-                    FloatingTallyActionDock(
-                        language: lang,
-                        onAskTally: { settings.isShowingAskTally = true },
-                        onQuickAdd: { settings.isShowingQuickAdd = true },
-                        onSmartPaste: { settings.isShowingSmartCapture = true }
-                    )
-                    .padding(.trailing, 16)
-                    .padding(.bottom, 84)
-                    .transition(.scale(scale: 0.88).combined(with: .opacity))
-                }
-            }
-            .animation(.spring(response: 0.24, dampingFraction: 0.82), value: router.selectedTab == .settings)
-            .ignoresSafeArea(.keyboard, edges: .bottom)
         }
         .onAppear {
             lastTransactionCount = store.activeTransactions.count
         }
         .task {
             CozySounds.warmUp()
-            // Stagger pre-warming of remaining tabs after launch settles so first tap or scrub is locked at 120fps.
+            // Stagger pre-warming of remaining tabs on phone so first tap or scrub is locked at 120fps.
             try? await Task.sleep(for: .milliseconds(250))
             let tabsToWarm: [TallyTab] = [.transactions, .budgets, .statistics, .settings]
             for tab in tabsToWarm {
@@ -251,10 +289,473 @@ struct RootTabs: View {
             settings.isShowingSettings = false
         }
     }
+
+    // MARK: - iPhone Compact Tab Bar Shell
+
+    private func compactTabShell(lang: AppLanguage) -> some View {
+        let hidesTabBar = tabBarVisibility.isHidden(for: router.selectedTab.rawValue)
+        let tabItems = TallyTab.allCases.map { tab in
+            CozyTabBarItem(
+                id: tab,
+                icon: tab.cozyIcon,
+                accessibilityLabel: tab.title(in: lang),
+                badgeCount: tab == .overview ? store.pendingReviewTransactions.count : 0
+            )
+        }
+
+        return ZStack {
+            TabPagesHost(router: router, loadedTabs: loadedTabs)
+                .environment(\.tabBarVisibility, tabBarVisibility)
+        }
+        .overlay(alignment: .bottom) {
+            CozyFloatingTabBar(items: tabItems, selection: $router.selectedTab)
+                .offset(y: hidesTabBar ? 110 : 0)
+                .opacity(hidesTabBar ? 0 : 1)
+                .allowsHitTesting(!hidesTabBar)
+                .animation(.spring(response: 0.28, dampingFraction: 0.86), value: hidesTabBar)
+                .ignoresSafeArea(.keyboard, edges: .bottom)
+        }
+        .overlay(alignment: .bottom) {
+            CozyCelebrationOverlay(trigger: celebrationTrigger)
+                .padding(.bottom, 100)
+        }
+        .overlay(alignment: .bottomTrailing) {
+            Group {
+                if router.selectedTab != .settings && !hidesTabBar {
+                    FloatingTallyActionDock(
+                        language: lang,
+                        onAskTally: { settings.isShowingAskTally = true },
+                        onQuickAdd: { settings.isShowingQuickAdd = true },
+                        onSmartPaste: { settings.isShowingSmartCapture = true }
+                    )
+                    .padding(.trailing, 16)
+                    .padding(.bottom, 84)
+                    .transition(.scale(scale: 0.88).combined(with: .opacity))
+                }
+            }
+            .animation(.spring(response: 0.24, dampingFraction: 0.82), value: router.selectedTab == .settings || hidesTabBar)
+            .ignoresSafeArea(.keyboard, edges: .bottom)
+        }
+    }
+
+    // MARK: - iPad & Mac Cozy Sidebar Shell
+
+    private func sidebarShell(lang: AppLanguage) -> some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            CozySidebarView(
+                router: router,
+                language: lang,
+                pendingCount: store.pendingReviewTransactions.count,
+                cloudSync: cloudSync,
+                syncsWithICloud: settings.syncsWithICloud,
+                onQuickAdd: {
+                    CozyHaptics.medium()
+                    CozySounds.play(.pop)
+                    settings.isShowingQuickAdd = true
+                },
+                onSmartPaste: {
+                    CozyHaptics.light()
+                    CozySounds.play(.pop)
+                    settings.isShowingSmartCapture = true
+                },
+                onAskTally: {
+                    CozyHaptics.light()
+                    CozySounds.play(.pop)
+                    settings.isShowingAskTally = true
+                }
+            )
+            .navigationSplitViewColumnWidth(min: 224, ideal: 244, max: 276)
+        } detail: {
+            detailPage
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .environment(\.tabBarBottomInset, 24)
+                .overlay(alignment: .bottom) {
+                    CozyCelebrationOverlay(trigger: celebrationTrigger)
+                        .padding(.bottom, 32)
+                }
+        }
+    }
+
+    @ViewBuilder
+    private var detailPage: some View {
+        switch router.activeDestination {
+        case .overview:
+            OverviewView(
+                onSelectTransactions: router.goToTransactions,
+                onSelectStatistics: router.goToStatistics,
+                onSelectBudgets: router.goToBudgets,
+                onSelectGoals: router.goToGoals,
+                onSelectSettings: router.goToSettings
+            )
+        case .transactions:
+            TransactionsView()
+        case .statistics:
+            StatisticsView(onSelectTransactions: router.goToTransactions)
+        case .budgets:
+            BudgetsView(embedded: false)
+        case .goals:
+            GoalsView(embedded: false)
+        case .settings:
+            SettingsView(isModal: false)
+        }
+    }
 }
 
-/// Hosts Budgets and Savings Goals cleanly under the 4th tab so all 5 primary tabs stay visible
-/// without overflowing into iOS's "More" tab.
+// MARK: - Cozy Paws & Cream Sidebar
+
+private struct CozySidebarView: View {
+    @Bindable var router: TabRouter
+    let language: AppLanguage
+    let pendingCount: Int
+    let cloudSync: CloudSync
+    let syncsWithICloud: Bool
+    let onQuickAdd: () -> Void
+    let onSmartPaste: () -> Void
+    let onAskTally: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var petBounce = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            brandHeader
+                .padding(.horizontal, 12)
+                .padding(.top, 10)
+                .padding(.bottom, 14)
+
+            ScrollView {
+                VStack(spacing: 4) {
+                    ForEach(SidebarDestination.primaryCases) { destination in
+                        SidebarNavRow(
+                            destination: destination,
+                            language: language,
+                            isSelected: router.activeDestination == destination,
+                            badgeCount: destination == .overview ? pendingCount : 0
+                        ) {
+                            CozyHaptics.selection()
+                            CozySounds.play(.tick)
+                            withAnimation(.snappy(duration: 0.16)) {
+                                router.activeDestination = destination
+                            }
+                        }
+                    }
+                }
+                .padding(.horizontal, 10)
+            }
+            .scrollIndicators(.never)
+
+            VStack(spacing: 10) {
+                Divider().overlay(Color.hairline)
+
+                // Primary Quick Add + Smart Paste row
+                HStack(spacing: 8) {
+                    Button(action: onQuickAdd) {
+                        HStack(spacing: 6) {
+                            CozyUIIcon(.plus, size: 15, color: Color.onInk, lineWidthScale: 1.1)
+                            Text(L10n.text(language, en: "Add expense", vi: "Ghi chi tiêu", zh: "记一笔"))
+                                .font(.appControl)
+                                .lineLimit(1)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: 38)
+                        .foregroundStyle(Color.onInk)
+                        .background(Color.ink, in: Capsule())
+                        .shadow(color: Color.ink.opacity(0.18), radius: 6, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    #if os(macOS)
+                    .help(L10n.text(language, en: "New Transaction (⌘N)", vi: "Thêm giao dịch (⌘N)", zh: "新建账单 (⌘N)"))
+                    #endif
+
+                    Button(action: onSmartPaste) {
+                        CozyUIIcon(.bolt, size: 16, color: Color.accent)
+                            .frame(width: 38, height: 38)
+                            .background(Color.cardBackground, in: Circle())
+                            .overlay(Circle().strokeBorder(Color.hairlineStrong, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(L10n.text(language, en: "Smart paste", vi: "Dán thông báo", zh: "智能粘贴"))
+                    #if os(macOS)
+                    .help(L10n.text(language, en: "Smart Paste (⇧⌘V)", vi: "Dán thông báo (⇧⌘V)", zh: "智能粘贴 (⇧⌘V)"))
+                    #endif
+                }
+
+                // Cozy Pet AI Companion card
+                askTallyCard
+
+                SidebarNavRow(
+                    destination: .settings,
+                    language: language,
+                    isSelected: router.activeDestination == .settings,
+                    badgeCount: 0
+                ) {
+                    CozyHaptics.selection()
+                    CozySounds.play(.tick)
+                    withAnimation(.snappy(duration: 0.16)) {
+                        router.activeDestination = .settings
+                    }
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.bottom, 12)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background {
+            Color.sidebarBackground.ignoresSafeArea()
+        }
+        .overlay(alignment: .trailing) {
+            Rectangle()
+                .fill(Color.hairline)
+                .frame(width: 1)
+                .ignoresSafeArea()
+        }
+    }
+
+    private var brandHeader: some View {
+        HStack(spacing: 10) {
+            brandArtwork
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Tally")
+                    .font(.appHeading)
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(1)
+
+                Button {
+                    if cloudSync.phase == .running {
+                        cloudSync.syncNow()
+                    } else {
+                        router.goToSettings()
+                    }
+                } label: {
+                    iCloudStatusPill
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L10n.text(language, en: "iCloud sync status", vi: "Trạng thái đồng bộ iCloud", zh: "iCloud 同步状态"))
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    @ViewBuilder
+    private var brandArtwork: some View {
+        #if os(macOS)
+        Image(nsImage: NSImage(named: "AppIcon") ?? NSApplication.shared.applicationIconImage)
+            .resizable()
+            .interpolation(.high)
+            .frame(width: 34, height: 34)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .accessibilityHidden(true)
+        #else
+        CoupleAvatarsBadge(avatarSize: 28, showHeart: false)
+            .accessibilityHidden(true)
+        #endif
+    }
+
+    private var iCloudStatusPill: some View {
+        HStack(spacing: 5) {
+            if cloudSync.isSyncing {
+                ProgressView()
+                    .controlSize(.mini)
+                    .scaleEffect(0.75)
+            } else {
+                Circle()
+                    .fill(statusDotColor)
+                    .frame(width: 6.5, height: 6.5)
+            }
+            Text(statusText)
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.textSecondary)
+                .lineLimit(1)
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2.5)
+        .background(Color.softFill, in: Capsule())
+    }
+
+    private var statusDotColor: Color {
+        guard syncsWithICloud else { return .textSecondary }
+        switch cloudSync.phase {
+        case .running: return .positive
+        case .checkingAccount: return .info
+        case .noAccount, .accountUnavailable, .unavailable: return .caution
+        case .off: return .textSecondary
+        }
+    }
+
+    private var statusText: String {
+        if cloudSync.isSyncing {
+            return L10n.text(language, en: "Syncing", vi: "Đang đồng bộ", zh: "同步中")
+        }
+        guard syncsWithICloud else {
+            return L10n.text(language, en: "iCloud off", vi: "Tắt iCloud", zh: "已关闭")
+        }
+        switch cloudSync.phase {
+        case .running:
+            if cloudSync.isSharedHouseholdActive {
+                return L10n.text(language, en: "iCloud · Shared", vi: "iCloud · Chung", zh: "iCloud · 共享")
+            }
+            return "iCloud"
+        case .checkingAccount:
+            return L10n.text(language, en: "Checking…", vi: "Đang kiểm tra…", zh: "检查中…")
+        case .noAccount:
+            return L10n.text(language, en: "Sign in iCloud", vi: "Chưa có iCloud", zh: "未登录 iCloud")
+        case .accountUnavailable, .unavailable:
+            return L10n.text(language, en: "iCloud paused", vi: "Tạm ngưng", zh: "iCloud 暂停")
+        case .off:
+            return L10n.text(language, en: "iCloud off", vi: "Tắt iCloud", zh: "已关闭")
+        }
+    }
+
+    private var askTallyCard: some View {
+        let isDark = colorScheme == .dark
+        let gradientColors: [Color] = isDark
+            ? [Color(hex: 0x3D2E29), Color(hex: 0x2F2220)]
+            : [Color(hex: 0xFFE9D8), Color(hex: 0xFFF7EC)]
+        let borderColor = isDark ? Color.accent.opacity(0.32) : Color(hex: 0xE67360, alpha: 0.22)
+
+        return Button {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.55)) {
+                petBounce = true
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                petBounce = false
+            }
+            onAskTally()
+        } label: {
+            HStack(spacing: 10) {
+                ZStack(alignment: .topTrailing) {
+                    ShibaPuppyView(mood: .happy, size: 32, isBouncing: petBounce)
+                        .frame(width: 34, height: 34)
+                    ZStack {
+                        Circle()
+                            .fill(Color.accent)
+                            .frame(width: 14, height: 14)
+                        CozyUIIcon(.sparkles, size: 8, color: Color.onAccent)
+                    }
+                    .offset(x: 2, y: -2)
+                }
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(L10n.text(language, en: "Ask Tally AI", vi: "Hỏi Tally AI", zh: "问问 Tally AI"))
+                        .font(.appControl)
+                        .foregroundStyle(Color.textPrimary)
+                        .lineLimit(1)
+                    Text(L10n.text(language, en: "Chat or dictate", vi: "Chat hoặc nói", zh: "对话或语音记账"))
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.textSecondary)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 4)
+
+                #if os(macOS)
+                Text("⌘K")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Color.textSecondary.opacity(0.8))
+                #endif
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(
+                LinearGradient(colors: gradientColors, startPoint: .topLeading, endPoint: .bottomTrailing),
+                in: RoundedRectangle(cornerRadius: 14, style: .continuous)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .strokeBorder(borderColor, lineWidth: 1)
+            )
+        }
+        .buttonStyle(.cozyCard)
+        .accessibilityLabel(L10n.text(language, en: "Ask Tally AI", vi: "Hỏi Trợ lý Tally AI", zh: "问问 Tally AI"))
+    }
+}
+
+private struct SidebarNavRow: View {
+    let destination: SidebarDestination
+    let language: AppLanguage
+    let isSelected: Bool
+    let badgeCount: Int
+    let action: () -> Void
+
+    @Environment(\.colorScheme) private var colorScheme
+    @State private var isHovering = false
+
+    private var activeFill: Color {
+        colorScheme == .dark ? Color(hex: 0x4E3B34) : Color(hex: 0xFFE9DB)
+    }
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                rowIcon
+                    .frame(width: 24, height: 24)
+
+                Text(destination.title(in: language))
+                    .font(.appControl)
+                    .foregroundStyle(isSelected ? Color.textPrimary : Color.textPrimary.opacity(0.85))
+                    .lineLimit(1)
+
+                Spacer(minLength: 4)
+
+                if badgeCount > 0 {
+                    Text("\(min(badgeCount, 99))")
+                        .font(.system(size: 11, weight: .bold, design: .rounded))
+                        .foregroundStyle(Color.onAccent)
+                        .padding(.horizontal, 6)
+                        .frame(minWidth: 20, minHeight: 18)
+                        .background(Color.accent, in: Capsule())
+                } else if let hint = destination.shortcutHint {
+                    #if os(macOS)
+                    Text(hint)
+                        .font(.system(size: 11, weight: .medium, design: .rounded))
+                        .foregroundStyle(Color.textSecondary.opacity(0.65))
+                    #endif
+                }
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 38)
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(isSelected ? activeFill : (isHovering ? Color.rowHover : Color.clear))
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
+    }
+
+    @ViewBuilder
+    private var rowIcon: some View {
+        switch destination {
+        case .overview:
+            CozyTabIconView(kind: .overview, isSelected: isSelected)
+                .scaleEffect(0.82)
+        case .transactions:
+            CozyTabIconView(kind: .transactions, isSelected: isSelected)
+                .scaleEffect(0.82)
+        case .statistics:
+            CozyTabIconView(kind: .statistics, isSelected: isSelected)
+                .scaleEffect(0.82)
+        case .budgets:
+            CozyTabIconView(kind: .budgets, isSelected: isSelected)
+                .scaleEffect(0.82)
+        case .goals:
+            CozyGoalIcon(
+                goal: .target,
+                size: 21,
+                style: isSelected ? .watercolor : .tinted(Color.textSecondary.opacity(0.75))
+            )
+        case .settings:
+            CozyTabIconView(kind: .settings, isSelected: isSelected)
+                .scaleEffect(0.82)
+        }
+    }
+}
+
+/// Hosts Budgets and Savings Goals cleanly under the 4th tab on compact iPhone width so all 5 primary
+/// tabs stay visible without overflowing into iOS's "More" tab.
 private struct PlanTabView: View {
     @Bindable var router: TabRouter
 
