@@ -136,6 +136,7 @@ public struct PeriodPickerSheet: View {
 
     public var body: some View {
         let lang = settings.language
+        let convertedTotals = settings.displayDailyTotals(dailyTotals)
         let selectedSummary = MonthlySnapshot.periodTotal(for: draftPeriod, dailyTotals: dailyTotals)
 
         NavigationStack {
@@ -143,8 +144,8 @@ public struct PeriodPickerSheet: View {
                 HorizonPeriodCalendarView(
                     selection: $draftPeriod,
                     language: lang,
-                    currency: settings.currency,
-                    dailyTotals: dailyTotals,
+                    currency: settings.effectiveDisplayCurrency,
+                    dailyTotals: convertedTotals,
                     highlightedDayKeys: highlightedDayKeys
                 )
 
@@ -161,21 +162,15 @@ public struct PeriodPickerSheet: View {
                             if selectedSummary.incomeMinor > 0 || selectedSummary.spendingMinor > 0 {
                                 HStack(spacing: 8) {
                                     if selectedSummary.incomeMinor > 0 {
-                                        Text(MoneyFormat.masked(MoneyFormat.format(
+                                        Text(MoneyFormat.masked(settings.formatMoney(
                                             minor: selectedSummary.incomeMinor,
-                                            currency: settings.currency,
-                                            language: lang,
                                             signed: true
                                         ), hidden: selectedSummary.isSalaryMasked(hidden: settings.hideSalary)))
                                         .salaryMaskAccessibility(selectedSummary.isSalaryMasked(hidden: settings.hideSalary), language: lang)
                                         .foregroundStyle(Color.positive)
                                     }
                                     if selectedSummary.spendingMinor > 0 {
-                                        Text(MoneyFormat.format(
-                                            minor: -selectedSummary.spendingMinor,
-                                            currency: settings.currency,
-                                            language: lang
-                                        ))
+                                        Text(settings.formatMoney(minor: -selectedSummary.spendingMinor))
                                         .foregroundStyle(Color.accent)
                                     }
                                 }
@@ -402,12 +397,23 @@ public struct TransactionRow: View {
 
             Spacer(minLength: 8)
 
-            Text(formattedAmount)
-                .salaryMaskAccessibility(hidesAmount, language: settings.language)
-                .font(.appAmount)
-                .foregroundStyle(transaction.type == .income ? Color.positive : Color.textPrimary)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
+            VStack(alignment: .trailing, spacing: 2) {
+                Text(formattedAmount)
+                    .salaryMaskAccessibility(hidesAmount, language: settings.language)
+                    .font(.appAmount)
+                    .foregroundStyle(transaction.type == .income ? Color.positive : Color.textPrimary)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+
+                if let subtitle = secondaryAmountText {
+                    Text(subtitle)
+                        .font(.appCaption)
+                        .monospacedDigit()
+                        .foregroundStyle(Color.textSecondary)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                }
+            }
         }
         .padding(.vertical, 6)
         .padding(.horizontal, 6)
@@ -445,11 +451,27 @@ public struct TransactionRow: View {
 
     private var formattedAmount: String {
         let signed = transaction.type == .income ? transaction.amountMinor : -transaction.amountMinor
-        return MoneyFormat.masked(MoneyFormat.format(
+        return MoneyFormat.masked(settings.formatMoney(
             minor: signed,
-            currency: settings.currency,
-            language: settings.language,
             signed: transaction.type == .income
         ), hidden: hidesAmount)
+    }
+
+    private var secondaryAmountText: String? {
+        guard !hidesAmount else { return nil }
+        if transaction.isForeignCurrency,
+           let origCode = transaction.originalCurrencyCode,
+           origCode.caseInsensitiveCompare(settings.effectiveDisplayCurrency.rawValue) != .orderedSame,
+           let origText = transaction.formattedOriginalAmount(language: settings.language) {
+            return origText
+        }
+        if settings.isConvertingDisplay {
+            return MoneyFormat.format(
+                minor: transaction.amountMinor,
+                currency: settings.currency,
+                language: settings.language
+            )
+        }
+        return nil
     }
 }

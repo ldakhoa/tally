@@ -194,6 +194,7 @@ public final class AssistantService {
         errorMessage = nil
         statusLabel = nil
         didUserCancel = false
+        let bankAlertHint = images.isEmpty && attachments.isEmpty ? BudgetAssistantPrompt.bankAlertHint(for: trimmed) : nil
         let priorHistory = messages
         if activeSessionID == nil {
             activeSessionID = UUID()
@@ -228,7 +229,8 @@ public final class AssistantService {
                             message: trimmed,
                             recentHistory: priorHistory,
                             settings: settings,
-                            store: store
+                            store: store,
+                            bankAlertHint: bankAlertHint
                         ) { partialText in
                             if let idx = self.messages.firstIndex(where: { $0.id == assistantID }) {
                                 self.messages[idx].text = partialText
@@ -258,7 +260,7 @@ public final class AssistantService {
                     guard let client = settings.makeClaudeClient() else {
                         throw ClaudeError.missingAPIKey
                     }
-                    lastDiagnostic = try await self.runClaudeLoop(client: client, assistantID: assistantID, settings: settings, store: store)
+                    lastDiagnostic = try await self.runClaudeLoop(client: client, assistantID: assistantID, settings: settings, store: store, bankAlertHint: bankAlertHint)
                 }
 
                 // If Apple Intelligence returned empty with no actions, transparently fall back to Claude if available.
@@ -267,7 +269,7 @@ public final class AssistantService {
                    self.messages[idx].text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                    self.messages[idx].actions.isEmpty,
                    let claude = settings.makeClaudeClient() {
-                    lastDiagnostic = try await self.runClaudeLoop(client: claude, assistantID: assistantID, settings: settings, store: store)
+                    lastDiagnostic = try await self.runClaudeLoop(client: claude, assistantID: assistantID, settings: settings, store: store, bankAlertHint: bankAlertHint)
                 }
 
                 // Final safety net: NEVER leave a silent empty assistant bubble!
@@ -393,6 +395,9 @@ public final class AssistantService {
 
         // Offline fallback: parse as a transaction with LocalTransactionParser so Siri still works!
         if let parsed = LocalTransactionParser.parse(trimmed, defaultCurrency: settings.currency) {
+            if let parsedCode = parsed.currencyCode, parsedCode != settings.currency.rawValue {
+                await ExchangeRateService.shared.refreshIfStale()
+            }
             let member = settings.currentMember
             let resolved = AITransactionParser.resolvedAmountAndNote(
                 for: parsed,
@@ -410,7 +415,10 @@ public final class AssistantService {
                 rawSourceText: trimmed,
                 memberID: member.id,
                 memberName: member.name,
-                needsReview: false
+                needsReview: resolved.usedFallbackUnavailableRate,
+                originalAmountMinor: resolved.originalAmountMinor,
+                originalCurrencyCode: resolved.originalCurrencyCode,
+                exchangeRate: resolved.exchangeRate
             )
             store.saveTransaction(record)
             let formatted = MoneyFormat.masked(MoneyFormat.format(minor: record.amountMinor, currency: settings.currency, language: lang), hidden: record.isSalaryMasked(hidden: settings.hideSalary))
@@ -452,7 +460,8 @@ public final class AssistantService {
         client: any AIClient,
         assistantID: UUID,
         settings: AppSettings,
-        store: BudgetStore
+        store: BudgetStore,
+        bankAlertHint: String? = nil
     ) async throws -> String {
         let lang = settings.language
         // Room for: figure tools -> salary request -> figure tools again -> answer, plus actions.
@@ -464,6 +473,7 @@ public final class AssistantService {
                 goals: store.activeGoals,
                 plans: store.plans,
                 currency: settings.currency,
+                displayCurrency: settings.isConvertingDisplay ? settings.effectiveDisplayCurrency : nil,
                 language: lang,
                 myName: settings.currentMember.name,
                 partnerName: settings.partnerDisplayName,
@@ -472,7 +482,7 @@ public final class AssistantService {
             )
 
             let request = ClaudeRequest(
-                system: systemPrompt,
+                system: systemPrompt + (bankAlertHint.map { "\n\n\($0)" } ?? ""),
                 messages: self.wireHistory,
                 maxTokens: 2_048,
                 effort: .low,
@@ -514,6 +524,11 @@ public final class AssistantService {
 
                 var toolResults: [(id: String, content: String, isError: Bool)] = []
                 var receipts: [AssistantActionReceipt] = []
+
+                if completion.toolUses.contains(where: { $0.name == AssistantToolCatalog.addTransactionsName }),
+                   ExchangeRateTable.current.fetchedAt == nil {
+                    await ExchangeRateService.shared.refreshIfStale()
+                }
 
                 for toolUse in completion.toolUses {
                     if toolUse.name == SalaryAccessTool.name {
@@ -864,41 +879,81 @@ public final class AssistantService {
                 var touchedBudgets: [(CategoryID, String)] = []
                 for item in items {
                     let member = resolveMember(hint: item.memberHint, settings: settings, store: store)
-                    let amount = AssistantAmounts.storageMinor(
+                    let resolved = AssistantAmounts.resolve(
                         amountMajor: item.amountMajor,
-                        stated: item.currency,
+                        statedCurrencyCode: item.currencyCode,
+                        convertedAmountMajor: item.convertedAmountMajor,
                         household: currency,
                         note: item.note,
                         language: lang
                     )
-                    let minor = amount.minor
+                    let minor = resolved.amountMinor
                     let record = TransactionRecord(
                         name: item.name,
                         amountMinor: minor,
                         type: item.type,
                         category: item.category,
                         dayKey: item.dayKey,
-                        note: amount.note,
+                        note: resolved.note,
                         source: .aiQuickAdd,
                         memberID: member.id,
                         memberName: member.name,
-                        needsReview: false
+                        needsReview: resolved.usedFallbackUnavailableRate,
+                        originalAmountMinor: resolved.originalAmountMinor,
+                        originalCurrencyCode: resolved.originalCurrencyCode,
+                        exchangeRate: resolved.exchangeRate
                     )
                     store.saveTransaction(record)
                     store.ensureVisible(dayKey: record.dayKey)
 
                     let signedMinor = item.type == .income ? minor : -minor
                     let amtStr = MoneyFormat.masked(MoneyFormat.format(minor: signedMinor, currency: currency, language: lang, signed: item.type == .income), hidden: record.isSalaryMasked(hidden: settings.hideSalary))
+                    var receiptDetails: [String]? = nil
+                    var foreignSummary = ""
+                    if let origCode = record.originalCurrencyCode,
+                       let origText = record.formattedOriginalAmount(language: lang) {
+                        let absAmtStr = MoneyFormat.masked(
+                            MoneyFormat.format(minor: minor, currency: currency, language: lang),
+                            hidden: record.isSalaryMasked(hidden: settings.hideSalary)
+                        )
+                        if resolved.usedFallbackUnavailableRate {
+                            receiptDetails = [L10n.text(
+                                lang,
+                                en: "Original: \(origText) · FX rate unavailable",
+                                vi: "Gốc: \(origText) · chưa có tỷ giá",
+                                zh: "原币: \(origText) · 暂无汇率"
+                            )]
+                            foreignSummary = " (foreign \(origCode) \(origText); FX rate unavailable, flagged for review; note: \(record.note))"
+                        } else {
+                            let rateLabel = resolved.exchangeRate.map { ExchangeRateTable.formatRate($0, from: origCode, to: currency) }
+                            let sourceLabel: String = {
+                                if item.convertedAmountMajor != nil {
+                                    return L10n.text(lang, en: "Exact", vi: "Thực thu", zh: "实付")
+                                }
+                                return resolved.isLiveRate
+                                    ? L10n.text(lang, en: "Live", vi: "Tỷ giá thực", zh: "实时汇率")
+                                    : L10n.text(lang, en: "Est.", vi: "Ước tính", zh: "估算")
+                            }()
+                            let ratePart = rateLabel.map { " · \($0)" } ?? ""
+                            receiptDetails = ["\(origText) → \(absAmtStr)\(ratePart) (\(sourceLabel))"]
+                            let rateModelNote = resolved.exchangeRate.map { ", rate \(ExchangeRateTable.formatRate($0, from: origCode, to: currency))" } ?? ""
+                            let sourceModelNote = resolved.isLiveRate
+                                ? "live rate\(resolved.rateDate.map { " \($0)" } ?? "")"
+                                : (item.convertedAmountMajor != nil ? "stated billed amount" : "offline fallback rate")
+                            foreignSummary = " (converted from \(origText) using \(sourceModelNote)\(rateModelNote); note: \(record.note))"
+                        }
+                    }
                     receipts.append(AssistantActionReceipt(
                         kind: .transactionAdded,
                         emoji: item.category.cuteEmoji,
                         title: record.name,
                         subtitle: "\(item.category.title(in: lang)) · \(DateKey.formatCompactDay(record.dayKey, language: lang))",
                         amountText: amtStr,
-                        isPositive: item.type == .income
+                        isPositive: item.type == .income,
+                        details: receiptDetails,
+                        recordID: record.id
                     ))
-                    let converted = item.currency.map { $0 != currency } ?? false
-                    summaries.append("Added transaction [id:\(record.id)] \(record.name) \(amtStr) in \(item.category.rawValue) on \(record.dayKey)\(converted ? " (converted from \(item.currency!.rawValue); note: \(record.note))" : "")")
+                    summaries.append("Added transaction [id:\(record.id)] \(record.name) \(amtStr) in \(item.category.rawValue) on \(record.dayKey)\(foreignSummary)")
                     if record.type == .expense, !touchedBudgets.contains(where: { $0 == (record.category, record.monthKey) }) {
                         touchedBudgets.append((record.category, record.monthKey))
                     }
@@ -933,7 +988,8 @@ public final class AssistantService {
                     title: tx.name,
                     subtitle: L10n.text(lang, en: "Updated · \(tx.category.title(in: lang))", vi: "Đã cập nhật · \(tx.category.title(in: lang))", zh: "已更新 · \(tx.category.title(in: lang))"),
                     amountText: amtStr,
-                    isPositive: tx.type == .income
+                    isPositive: tx.type == .income,
+                    recordID: tx.id
                 )
                 return ToolExecutionOutcome(toolOutput: "Updated transaction \(tx.id): \(tx.name) \(amtStr).", isError: false, receipts: [receipt])
 

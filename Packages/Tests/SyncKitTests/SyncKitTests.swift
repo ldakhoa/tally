@@ -356,3 +356,30 @@ final class AlreadyPaidPlanSyncTests: XCTestCase {
         XCTAssertEqual(SyncMerge.mergePlan(local: a, remote: b), SyncMerge.mergePlan(local: b, remote: a))
     }
 }
+
+final class HouseholdSettingsSyncTests: XCTestCase {
+    func testHouseholdSettingsMergeAndRecordName() {
+        XCTAssertEqual(SyncRecordKind.householdSettings.rawValue, "TallyHouseholdSettings")
+        XCTAssertEqual(
+            SyncMerge.cloudRecordName(kind: .householdSettings, id: HouseholdSettingsRecord.singletonID),
+            "hs_household"
+        )
+
+        let older = HouseholdSettingsRecord(currency: .sgd, updatedAt: Date(timeIntervalSince1970: 1_000))
+        let newer = HouseholdSettingsRecord(currency: .vnd, updatedAt: Date(timeIntervalSince1970: 2_000))
+
+        XCTAssertEqual(SyncMerge.mergeHouseholdSettings(local: nil, remote: newer), newer)
+        XCTAssertEqual(SyncMerge.mergeHouseholdSettings(local: older, remote: newer), newer)
+        XCTAssertEqual(SyncMerge.mergeHouseholdSettings(local: newer, remote: older), newer)
+
+        // Tie on updatedAt is commutative and idempotent
+        let t = Date(timeIntervalSince1970: 3_000)
+        let a = HouseholdSettingsRecord(currency: .sgd, updatedAt: t)
+        let b = HouseholdSettingsRecord(currency: .vnd, updatedAt: t)
+        XCTAssertEqual(
+            SyncMerge.mergeHouseholdSettings(local: a, remote: b),
+            SyncMerge.mergeHouseholdSettings(local: b, remote: a)
+        )
+        XCTAssertEqual(SyncMerge.mergeHouseholdSettings(local: a, remote: a), a)
+    }
+}

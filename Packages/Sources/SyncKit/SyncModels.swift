@@ -24,6 +24,7 @@ public enum SyncRecordKind: String, Codable, Hashable, Sendable {
     case budget = "TallyBudget"
     case goal = "TallyGoal"
     case plan = "TallyInstallmentPlan"
+    case householdSettings = "TallyHouseholdSettings"
 }
 
 /// Pure, deterministic Last-Write-Wins merge rules for household sync between devices and partners.
@@ -90,6 +91,16 @@ public enum SyncMerge {
         return canonicalTieBreak(local: local, remote: remote)
     }
 
+    public static func mergeHouseholdSettings(local: HouseholdSettingsRecord?, remote: HouseholdSettingsRecord) -> HouseholdSettingsRecord {
+        guard let local else { return remote }
+        if remote.updatedAt > local.updatedAt { return remote }
+        if local.updatedAt > remote.updatedAt { return local }
+        if remote.currency.rawValue != local.currency.rawValue {
+            return remote.currency.rawValue > local.currency.rawValue ? remote : local
+        }
+        return canonicalTieBreak(local: local, remote: remote)
+    }
+
     /// Total order over every field: the record whose sorted-key JSON encoding is
     /// lexicographically larger wins. Only reached when timestamps and the cheap tie-breakers
     /// are equal.
@@ -128,6 +139,7 @@ public enum SyncMerge {
         case .budget: return "bd_\(id.replacingOccurrences(of: "/", with: "_"))"
         case .goal: return "gl_\(id)"
         case .plan: return "pl_\(id)"
+        case .householdSettings: return "hs_\(id)"
         }
     }
 }

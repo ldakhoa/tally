@@ -87,6 +87,11 @@ public final class CloudSync: CKSyncEngineDelegate {
                 self?.enqueueLocalChanges(changes)
             }
         }
+        settings.onHouseholdCurrencyChanged = { [weak self] record in
+            Task { @MainActor in
+                self?.enqueueLocalChanges([ChangedSyncRecord(kind: .householdSettings, id: record.id)])
+            }
+        }
 
         accountObserver = NotificationCenter.default.addObserver(
             forName: .CKAccountChanged,
@@ -133,7 +138,7 @@ public final class CloudSync: CKSyncEngineDelegate {
             do {
                 try await engine.fetchChanges()
                 if let store {
-                    enqueueLocalChanges(store.allChangedRecordsForFullUpload, scheduleSend: false)
+                    enqueueLocalChanges(fullUploadRecords(store: store), scheduleSend: false)
                 }
                 try await engine.sendChanges()
                 lastSynced = Date()
@@ -309,10 +314,18 @@ public final class CloudSync: CKSyncEngineDelegate {
         }
 
         if let store {
-            enqueueLocalChanges(store.allChangedRecordsForFullUpload, scheduleSend: false)
+            enqueueLocalChanges(fullUploadRecords(store: store), scheduleSend: false)
         }
         await refreshShareSummary()
         sendSoon()
+    }
+
+    private func fullUploadRecords(store: BudgetStore) -> [ChangedSyncRecord] {
+        var changes = store.allChangedRecordsForFullUpload
+        if let hs = settings?.householdSettingsRecord {
+            changes.append(ChangedSyncRecord(kind: .householdSettings, id: hs.id))
+        }
+        return changes
     }
 
     private func stopEngine(clearState: Bool) async {
@@ -425,6 +438,10 @@ public final class CloudSync: CKSyncEngineDelegate {
                     if let g = decodeGoal(from: record) { goals.append(g) }
                 case SyncRecordKind.plan.rawValue:
                     if let p = decodePlan(from: record) { plans.append(p) }
+                case SyncRecordKind.householdSettings.rawValue:
+                    if let hs = decodeHouseholdSettings(from: record) {
+                        settings?.applyRemoteHouseholdSettings(hs)
+                    }
                 default:
                     break
                 }
@@ -671,6 +688,16 @@ public final class CloudSync: CKSyncEngineDelegate {
                     resend.append(record.recordID)
                 }
                 plans.append(server)
+            case SyncRecordKind.householdSettings.rawValue:
+                guard let server = decodeHouseholdSettings(from: record) else { continue }
+                if SyncMerge.resolveConflict(
+                    local: settings?.householdSettingsRecord,
+                    server: server,
+                    merge: SyncMerge.mergeHouseholdSettings
+                ).resendLocal {
+                    resend.append(record.recordID)
+                }
+                settings?.applyRemoteHouseholdSettings(server)
             default:
                 continue
             }
@@ -748,7 +775,20 @@ public final class CloudSync: CKSyncEngineDelegate {
             record["updatedAt"] = p.updatedAt as CKRecordValue
             return record
         }
+        if name.hasPrefix("hs_") {
+            let id = String(name.dropFirst(3))
+            guard let hs = settings?.householdSettingsRecord, hs.id == id else { return nil }
+            let record = systemFields.record(for: recordID, recordType: SyncRecordKind.householdSettings.rawValue)
+            record["payload"] = (try? JSONEncoder().encode(hs)) as CKRecordValue?
+            record["updatedAt"] = hs.updatedAt as CKRecordValue
+            return record
+        }
         return nil
+    }
+
+    private func decodeHouseholdSettings(from record: CKRecord) -> HouseholdSettingsRecord? {
+        guard let data = record["payload"] as? Data else { return nil }
+        return try? JSONDecoder().decode(HouseholdSettingsRecord.self, from: data)
     }
 
     private func decodePlan(from record: CKRecord) -> InstallmentPlanRecord? {

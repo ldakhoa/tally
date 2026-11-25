@@ -155,8 +155,8 @@ public struct InstallmentDatePickerSheet: View {
             HorizonSingleDateCalendarView(
                 selectedDayKey: $dayKey,
                 language: lang,
-                currency: settings.currency,
-                dailyTotals: store.dailyCalendarTotals
+                currency: settings.effectiveDisplayCurrency,
+                dailyTotals: settings.displayDailyTotals(store.dailyCalendarTotals)
             ) { _ in
                 dismiss()
             }

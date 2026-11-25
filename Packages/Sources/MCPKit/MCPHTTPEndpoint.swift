@@ -25,11 +25,16 @@ public struct MCPHTTPEndpoint: Sendable {
         if let origin = request.headers["origin"], !Self.isLocalOrigin(origin) {
             return .text(403, "Forbidden origin")
         }
-        guard request.path == path else {
+        if let quickToken = Self.extractQuickToken(path: request.path) {
+            guard !token.isEmpty, Self.constantTimeEquals(quickToken, token) else {
+                return .text(401, "Missing or wrong bearer token", headers: ["WWW-Authenticate": "Bearer"])
+            }
+        } else if request.path == path {
+            guard Self.isAuthorized(request.headers["authorization"], token: token) else {
+                return .text(401, "Missing or wrong bearer token", headers: ["WWW-Authenticate": "Bearer"])
+            }
+        } else {
             return .text(404, "Not found. The MCP endpoint is \(path)")
-        }
-        guard Self.isAuthorized(request.headers["authorization"], token: token) else {
-            return .text(401, "Missing or wrong bearer token", headers: ["WWW-Authenticate": "Bearer"])
         }
         guard request.method == "POST" else {
             // GET would open a server-to-client stream, which this server does not offer.
@@ -42,6 +47,20 @@ public struct MCPHTTPEndpoint: Sendable {
             return HTTPResponse(status: 202)
         }
         return .json(200, reply)
+    }
+
+    static func extractQuickToken(path: String) -> String? {
+        let prefix = "/u/"
+        let suffix = "/mcp"
+        guard path.hasPrefix(prefix), path.hasSuffix(suffix), path.count > prefix.count + suffix.count else {
+            return nil
+        }
+        let middle = path.dropFirst(prefix.count).dropLast(suffix.count)
+        guard !middle.contains("/"),
+              let decoded = String(middle).removingPercentEncoding,
+              !decoded.isEmpty
+        else { return nil }
+        return decoded
     }
 
     static let localHosts: Set<String> = ["127.0.0.1", "localhost", "[::1]"]

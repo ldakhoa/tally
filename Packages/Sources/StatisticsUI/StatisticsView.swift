@@ -121,7 +121,6 @@ public struct StatisticsView: View {
             .readViewportWidth($viewportWidth)
             .pageBackground()
             .navigationTitle(L10n.text(lang, en: "Statistics", vi: "Thống kê", zh: "统计"))
-            .toolbar { TopToolbarControls() }
             .sheet(item: $editingTransaction) { tx in
                 TransactionEditorSheet(existing: tx)
             }
@@ -136,8 +135,8 @@ public struct StatisticsView: View {
     private func kpiGrid(_ stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
         let columnCount = viewportWidth >= 720 ? 4 : 2
         let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: columnCount)
-        let currency = settings.currency
-        let compactVND = currency == .vnd
+        let displayCurrency = settings.effectiveDisplayCurrency
+        let compactZeroDecimal = displayCurrency.isZeroDecimal
 
         let deltaText: String
         let deltaTint: Color
@@ -151,20 +150,19 @@ public struct StatisticsView: View {
         }
 
         let prevNote = stats.previousSpendingMinor > 0
-            ? "\(L10n.text(lang, en: "Prev:", vi: "Kỳ trước:", zh: "上期：")) \(MoneyFormat.format(minor: stats.previousSpendingMinor, currency: currency, language: lang, compact: true))"
+            ? "\(L10n.text(lang, en: "Prev:", vi: "Kỳ trước:", zh: "上期：")) \(settings.formatMoney(minor: stats.previousSpendingMinor, compact: true))"
             : L10n.text(lang, en: "No prior data", vi: "Chưa có kỳ trước", zh: "暂无上期数据")
 
         let hidesNet = stats.isSalaryMasked(hidden: settings.hideSalary)
         let savingsRateText = hidesNet
             ? MoneyFormat.hiddenPlaceholder
             : (stats.current.savingsRatePercent.map { "\($0)%" } ?? "—")
-        let netNote = MoneyFormat.masked(MoneyFormat.format(
+        let netNote = MoneyFormat.masked(settings.formatMoney(
             minor: stats.current.netSavingsMinor,
-            currency: currency,
-            language: lang,
-            compact: compactVND,
+            compact: compactZeroDecimal,
             signed: true
         ), hidden: hidesNet)
+        let shownAvgDay = settings.displayMinor(stats.averageDailySpendingMinor)
 
         return LazyVGrid(columns: columns, spacing: 12) {
             Button {
@@ -173,10 +171,10 @@ public struct StatisticsView: View {
                 statTileContent(
                     title: L10n.text(lang, en: "Avg / day", vi: "Chi TB / ngày", zh: "日均支出"),
                     value: MoneyFormat.format(
-                        minor: stats.averageDailySpendingMinor,
-                        currency: currency,
+                        minor: shownAvgDay,
+                        currency: displayCurrency,
                         language: lang,
-                        compact: compactVND && stats.averageDailySpendingMinor >= 10_000_000_00
+                        compact: compactZeroDecimal && shownAvgDay >= 10_000_000_00
                     ),
                     valueColor: .textPrimary,
                     note: L10n.text(
@@ -233,11 +231,12 @@ public struct StatisticsView: View {
                 statTileContent(
                     title: L10n.text(lang, en: "Peak day", vi: "Ngày chi cao nhất", zh: "单日最高"),
                     value: stats.highestSpendDay.map {
-                        MoneyFormat.format(
-                            minor: $0.spendingMinor,
-                            currency: currency,
+                        let shownPeak = settings.displayMinor($0.spendingMinor)
+                        return MoneyFormat.format(
+                            minor: shownPeak,
+                            currency: displayCurrency,
                             language: lang,
-                            compact: compactVND && $0.spendingMinor >= 10_000_000_00
+                            compact: compactZeroDecimal && shownPeak >= 10_000_000_00
                         )
                     } ?? "—",
                     valueColor: .textPrimary,
@@ -316,6 +315,7 @@ public struct StatisticsView: View {
     private func monthlyTrendCard(_ stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
         let incomeLabel = L10n.text(lang, en: "Income", vi: "Thu", zh: "收入")
         let spendLabel = L10n.text(lang, en: "Spending", vi: "Chi", zh: "支出")
+        let displayCurrency = settings.effectiveDisplayCurrency
         let activeMonths = stats.monthlyTrend.filter { $0.spendingMinor > 0 }
         let avgMonthlySpend: Int64 = activeMonths.isEmpty
             ? 0
@@ -328,7 +328,7 @@ public struct StatisticsView: View {
                         .font(.appHeading)
                     Text(
                         avgMonthlySpend > 0
-                            ? "\(L10n.text(lang, en: "Avg spend:", vi: "Chi TB/tháng:", zh: "月均支出：")) \(MoneyFormat.format(minor: avgMonthlySpend, currency: settings.currency, language: lang, compact: true))"
+                            ? "\(L10n.text(lang, en: "Avg spend:", vi: "Chi TB/tháng:", zh: "月均支出：")) \(settings.formatMoney(minor: avgMonthlySpend, compact: true))"
                             : L10n.text(lang, en: "Income vs. spending by month", vi: "Thu & chi theo từng tháng", zh: "每月收支对比")
                     )
                     .font(.appCaption)
@@ -356,7 +356,7 @@ public struct StatisticsView: View {
 
                     BarMark(
                         x: .value("Month", label),
-                        y: .value(kindLabel, settings.currency.toMajor(bar.amountMinor))
+                        y: .value(kindLabel, settings.displayMajor(bar.amountMinor))
                     )
                     .foregroundStyle(color)
                     .cornerRadius(4)
@@ -371,8 +371,8 @@ public struct StatisticsView: View {
                     AxisValueLabel {
                         if let num = val.as(Double.self) {
                             Text(MoneyFormat.format(
-                                minor: settings.currency.toStorageMinor(num),
-                                currency: settings.currency,
+                                minor: displayCurrency.toStorageMinor(num),
+                                currency: displayCurrency,
                                 language: lang,
                                 compact: true
                             ))
@@ -414,10 +414,8 @@ public struct StatisticsView: View {
                                 rows: (point.isSalaryMasked(hidden: settings.hideSalary) ? [] : [
                                     (
                                         label: incomeLabel,
-                                        value: MoneyFormat.format(
+                                        value: settings.formatMoney(
                                             minor: point.incomeMinor,
-                                            currency: settings.currency,
-                                            language: lang,
                                             signed: point.incomeMinor > 0
                                         ),
                                         color: Color.positive
@@ -425,11 +423,7 @@ public struct StatisticsView: View {
                                 ]) + [
                                     (
                                         label: spendLabel,
-                                        value: MoneyFormat.format(
-                                            minor: point.spendingMinor,
-                                            currency: settings.currency,
-                                            language: lang
-                                        ),
+                                        value: settings.formatMoney(minor: point.spendingMinor),
                                         color: Color.accent
                                     )
                                 ]
@@ -463,12 +457,7 @@ public struct StatisticsView: View {
                                 Text(DateKey.formatShortMonth(point.monthKey, language: lang))
                                     .font(.appCaption.weight(.semibold))
                                 if point.spendingMinor > 0 {
-                                    Text(MoneyFormat.format(
-                                        minor: point.spendingMinor,
-                                        currency: settings.currency,
-                                        language: lang,
-                                        compact: true
-                                    ))
+                                    Text(settings.formatMoney(minor: point.spendingMinor, compact: true))
                                     .font(.appCaption)
                                     .monospacedDigit()
                                     .foregroundStyle(isSelected ? Color.onInk.opacity(0.85) : Color.textSecondary)
@@ -489,7 +478,8 @@ public struct StatisticsView: View {
     // MARK: - Daily Spending Pace
 
     private func dailyPaceCard(_ stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
-        let avgMajor = settings.currency.toMajor(stats.averageDailySpendingMinor)
+        let displayCurrency = settings.effectiveDisplayCurrency
+        let avgMajor = settings.displayMajor(stats.averageDailySpendingMinor)
         let avgLabel = L10n.text(lang, en: "Daily avg", vi: "TB ngày", zh: "日均")
 
         return Card {
@@ -498,14 +488,14 @@ public struct StatisticsView: View {
                     Text(L10n.text(lang, en: "Daily spending", vi: "Chi tiêu theo ngày", zh: "每日支出"))
                         .font(.appHeading)
                     Text(
-                        "\(L10n.text(lang, en: "Avg per transaction:", vi: "TB mỗi giao dịch:", zh: "笔均支出：")) \(MoneyFormat.format(minor: stats.averageExpenseMinor, currency: settings.currency, language: lang))"
+                        "\(L10n.text(lang, en: "Avg per transaction:", vi: "TB mỗi giao dịch:", zh: "笔均支出：")) \(settings.formatMoney(minor: stats.averageExpenseMinor))"
                     )
                     .font(.appCaption)
                     .foregroundStyle(Color.textSecondary)
                 }
                 Spacer()
                 Tag(
-                    text: MoneyFormat.format(minor: stats.current.spendingMinor, currency: settings.currency, language: lang, compact: true),
+                    text: settings.formatMoney(minor: stats.current.spendingMinor, compact: true),
                     color: .accent
                 )
             }
@@ -520,7 +510,7 @@ public struct StatisticsView: View {
 
                     BarMark(
                         x: .value("Day", point.dayIndex),
-                        y: .value("Spend", settings.currency.toMajor(point.spendingMinor))
+                        y: .value("Spend", settings.displayMajor(point.spendingMinor))
                     )
                     .foregroundStyle(baseColor.opacity(isDimmed ? 0.34 : 1.0))
                     .cornerRadius(3)
@@ -532,7 +522,7 @@ public struct StatisticsView: View {
                         .lineStyle(StrokeStyle(lineWidth: 1.25, dash: [4, 4]))
                         .annotation(position: .top, alignment: .trailing) {
                             if hoveredDayIndex == nil {
-                                Text("\(avgLabel) \(MoneyFormat.format(minor: stats.averageDailySpendingMinor, currency: settings.currency, language: lang, compact: true))")
+                                Text("\(avgLabel) \(settings.formatMoney(minor: stats.averageDailySpendingMinor, compact: true))")
                                     .font(.system(size: 10, weight: .semibold))
                                     .foregroundStyle(Color.accent)
                                     .padding(.horizontal, 6)
@@ -549,8 +539,8 @@ public struct StatisticsView: View {
                     AxisValueLabel {
                         if let num = val.as(Double.self) {
                             Text(MoneyFormat.format(
-                                minor: settings.currency.toStorageMinor(num),
-                                currency: settings.currency,
+                                minor: displayCurrency.toStorageMinor(num),
+                                currency: displayCurrency,
                                 language: lang,
                                 compact: true
                             ))
@@ -588,21 +578,15 @@ public struct StatisticsView: View {
                             var list: [(label: String, value: String, color: Color)] = [
                                 (
                                     label: L10n.text(lang, en: "Spend", vi: "Chi", zh: "支出"),
-                                    value: MoneyFormat.format(
-                                        minor: selectedDay.spendingMinor,
-                                        currency: settings.currency,
-                                        language: lang
-                                    ),
+                                    value: settings.formatMoney(minor: selectedDay.spendingMinor),
                                     color: .accent
                                 )
                             ]
                             if selectedDay.incomeMinor > 0, !selectedDay.isSalaryMasked(hidden: settings.hideSalary) {
                                 list.append((
                                     label: L10n.text(lang, en: "Income", vi: "Thu", zh: "收入"),
-                                    value: MoneyFormat.format(
+                                    value: settings.formatMoney(
                                         minor: selectedDay.incomeMinor,
-                                        currency: settings.currency,
-                                        language: lang,
                                         signed: true
                                     ),
                                     color: .positive
@@ -751,7 +735,7 @@ public struct StatisticsView: View {
                         }
 
                         VStack(spacing: 1) {
-                            Text(MoneyFormat.masked(MoneyFormat.format(minor: totalMinor, currency: settings.currency, language: lang, compact: true), hidden: hidesTotal))
+                            Text(MoneyFormat.masked(settings.formatMoney(minor: totalMinor, compact: true), hidden: hidesTotal))
                                 .salaryMaskAccessibility(hidesTotal, language: lang)
                                 .font(.appControl)
                                 .lineLimit(1)
@@ -806,7 +790,7 @@ public struct StatisticsView: View {
                                         }
                                     }
                                     Spacer()
-                                    Text(MoneyFormat.masked(MoneyFormat.format(minor: item.spentMinor, currency: settings.currency, language: lang), hidden: hidesAmount(item)))
+                                    Text(MoneyFormat.masked(settings.formatMoney(minor: item.spentMinor), hidden: hidesAmount(item)))
                                         .salaryMaskAccessibility(hidesAmount(item), language: lang)
                                         .font(.appAmount)
                                         .foregroundStyle(breakdownKind == .income ? Color.positive : Color.textPrimary)
@@ -830,6 +814,7 @@ public struct StatisticsView: View {
     // MARK: - Day of Week Pattern
 
     private func weekdayPatternCard(_ stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
+        let displayCurrency = settings.effectiveDisplayCurrency
         let peak = stats.weekdayBreakdown.max(by: { $0.totalMinor < $1.totalMinor })
 
         return Card {
@@ -838,11 +823,12 @@ public struct StatisticsView: View {
                     Text(L10n.text(lang, en: "Spending by weekday", vi: "Chi tiêu theo thứ trong tuần", zh: "按星期消费"))
                         .font(.appHeading)
                     if let peak, peak.totalMinor > 0 {
+                        let peakText = settings.formatMoney(minor: peak.totalMinor, compact: true)
                         Text(L10n.text(
                             lang,
-                            en: "Highest on \(DateKey.shortWeekdayLabel(weekday: peak.weekday, language: lang)) · \(MoneyFormat.format(minor: peak.totalMinor, currency: settings.currency, language: lang, compact: true))",
-                            vi: "Cao nhất vào \(DateKey.shortWeekdayLabel(weekday: peak.weekday, language: lang)) · \(MoneyFormat.format(minor: peak.totalMinor, currency: settings.currency, language: lang, compact: true))",
-                            zh: "周\(DateKey.shortWeekdayLabel(weekday: peak.weekday, language: lang))最高 · \(MoneyFormat.format(minor: peak.totalMinor, currency: settings.currency, language: lang, compact: true))"
+                            en: "Highest on \(DateKey.shortWeekdayLabel(weekday: peak.weekday, language: lang)) · \(peakText)",
+                            vi: "Cao nhất vào \(DateKey.shortWeekdayLabel(weekday: peak.weekday, language: lang)) · \(peakText)",
+                            zh: "周\(DateKey.shortWeekdayLabel(weekday: peak.weekday, language: lang))最高 · \(peakText)"
                         ))
                         .font(.appCaption)
                         .foregroundStyle(Color.textSecondary)
@@ -854,7 +840,7 @@ public struct StatisticsView: View {
             Chart(stats.weekdayBreakdown) { item in
                 BarMark(
                     x: .value("Day", DateKey.shortWeekdayLabel(weekday: item.weekday, language: lang)),
-                    y: .value("Spent", settings.currency.toMajor(item.totalMinor))
+                    y: .value("Spent", settings.displayMajor(item.totalMinor))
                 )
                 .foregroundStyle(item.weekday == peak?.weekday && item.totalMinor > 0 ? Color.accent : Color.ink.opacity(0.72))
                 .cornerRadius(5)
@@ -865,8 +851,8 @@ public struct StatisticsView: View {
                     AxisValueLabel {
                         if let num = val.as(Double.self) {
                             Text(MoneyFormat.format(
-                                minor: settings.currency.toStorageMinor(num),
-                                currency: settings.currency,
+                                minor: displayCurrency.toStorageMinor(num),
+                                currency: displayCurrency,
                                 language: lang,
                                 compact: true
                             ))
@@ -923,7 +909,7 @@ public struct StatisticsView: View {
                                 .foregroundStyle(Color.textSecondary)
                             }
                             Spacer()
-                            Text(MoneyFormat.format(minor: merchant.totalMinor, currency: settings.currency, language: lang))
+                            Text(settings.formatMoney(minor: merchant.totalMinor))
                                 .font(.appAmount)
                         }
                         TallyProgressBar(
@@ -965,7 +951,7 @@ public struct StatisticsView: View {
                             Text("\(Int((share * 100).rounded()))%")
                                 .font(.appCaption.weight(.semibold))
                                 .foregroundStyle(Color.textSecondary)
-                            Text(MoneyFormat.format(minor: member.spendingMinor, currency: settings.currency, language: lang))
+                            Text(settings.formatMoney(minor: member.spendingMinor))
                                 .font(.appAmount)
                         }
                         TallyProgressBar(value: share, fill: barColor)
@@ -1008,7 +994,6 @@ public struct StatisticsView: View {
     // MARK: - Interactive KPI Detail Sheets
 
     private func kpiDetailSheet(kind: KPIInspectSheet, stats: StatisticsSnapshot, lang: AppLanguage) -> some View {
-        let currency = settings.currency
         let title: String
         switch kind {
         case .dailyAverage:
@@ -1035,7 +1020,7 @@ public struct StatisticsView: View {
                                     Text(L10n.text(lang, en: "Daily average", vi: "Trung bình / ngày", zh: "日均支出"))
                                         .font(.appCaption)
                                         .foregroundStyle(Color.textSecondary)
-                                    Text(MoneyFormat.format(minor: stats.averageDailySpendingMinor, currency: currency, language: lang))
+                                    Text(settings.formatMoney(minor: stats.averageDailySpendingMinor))
                                         .font(.appMetric)
                                 }
                                 Spacer()
@@ -1043,7 +1028,7 @@ public struct StatisticsView: View {
                                     Text(L10n.text(lang, en: "Avg / transaction", vi: "TB / giao dịch", zh: "笔均支出"))
                                         .font(.appCaption)
                                         .foregroundStyle(Color.textSecondary)
-                                    Text(MoneyFormat.format(minor: stats.averageExpenseMinor, currency: currency, language: lang))
+                                    Text(settings.formatMoney(minor: stats.averageExpenseMinor))
                                         .font(.appHeading)
                                 }
                             }
@@ -1068,7 +1053,7 @@ public struct StatisticsView: View {
                                                     Text(DateKey.formatShortDay(point.dayKey, language: lang))
                                                         .font(.appBodyMedium)
                                                     Spacer()
-                                                    Text(MoneyFormat.format(minor: point.spendingMinor, currency: currency, language: lang))
+                                                    Text(settings.formatMoney(minor: point.spendingMinor))
                                                         .font(.appAmount)
                                                     Image(systemName: "chevron.right")
                                                         .font(.system(size: 10, weight: .semibold))
@@ -1103,7 +1088,7 @@ public struct StatisticsView: View {
                                     Text(store.selectedPeriod.formattedTitle(language: lang))
                                         .font(.appCaption)
                                         .foregroundStyle(Color.textSecondary)
-                                    Text(MoneyFormat.format(minor: stats.current.spendingMinor, currency: currency, language: lang))
+                                    Text(settings.formatMoney(minor: stats.current.spendingMinor))
                                         .font(.appMetric)
                                 }
                                 Spacer()
@@ -1111,7 +1096,7 @@ public struct StatisticsView: View {
                                     Text(prevPeriod.formattedTitle(language: lang))
                                         .font(.appCaption)
                                         .foregroundStyle(Color.textSecondary)
-                                    Text(MoneyFormat.format(minor: prevSnap.spendingMinor, currency: currency, language: lang))
+                                    Text(settings.formatMoney(minor: prevSnap.spendingMinor))
                                         .font(.appHeading)
                                         .foregroundStyle(Color.textSecondary)
                                 }
@@ -1122,7 +1107,7 @@ public struct StatisticsView: View {
                                     .font(.appSecondary)
                                     .foregroundStyle(Color.textSecondary)
                                 Spacer()
-                                Text(MoneyFormat.format(minor: diffMinor, currency: currency, language: lang, signed: true))
+                                Text(settings.formatMoney(minor: diffMinor, signed: true))
                                     .font(.appHeading)
                                     .foregroundStyle(diffMinor > 0 ? Color.accent : Color.positive)
                             }
@@ -1147,12 +1132,12 @@ public struct StatisticsView: View {
                                             CategoryBadge(category: row.cat, size: 32)
                                             VStack(alignment: .leading, spacing: 1) {
                                                 Text(row.cat.title(in: lang)).font(.appBodyMedium)
-                                                Text("\(MoneyFormat.format(minor: row.prev, currency: currency, language: lang, compact: true)) → \(MoneyFormat.format(minor: row.now, currency: currency, language: lang, compact: true))")
+                                                Text("\(settings.formatMoney(minor: row.prev, compact: true)) → \(settings.formatMoney(minor: row.now, compact: true))")
                                                     .font(.appCaption)
                                                     .foregroundStyle(Color.textSecondary)
                                             }
                                             Spacer()
-                                            Text(MoneyFormat.format(minor: row.delta, currency: currency, language: lang, signed: true))
+                                            Text(settings.formatMoney(minor: row.delta, signed: true))
                                                 .font(.appCaption.weight(.semibold).monospacedDigit())
                                                 .foregroundStyle(row.delta > 0 ? Color.accent : Color.positive)
                                         }
@@ -1182,7 +1167,7 @@ public struct StatisticsView: View {
                                         .font(.appSecondary)
                                         .foregroundStyle(Color.textSecondary)
                                     Spacer()
-                                    Text(MoneyFormat.masked(MoneyFormat.format(minor: stats.current.incomeMinor, currency: currency, language: lang, signed: true), hidden: stats.isSalaryMasked(hidden: settings.hideSalary)))
+                                    Text(MoneyFormat.masked(settings.formatMoney(minor: stats.current.incomeMinor, signed: true), hidden: stats.isSalaryMasked(hidden: settings.hideSalary)))
                                         .salaryMaskAccessibility(stats.isSalaryMasked(hidden: settings.hideSalary), language: lang)
                                         .font(.appHeading)
                                         .foregroundStyle(Color.positive)
@@ -1192,7 +1177,7 @@ public struct StatisticsView: View {
                                         .font(.appSecondary)
                                         .foregroundStyle(Color.textSecondary)
                                     Spacer()
-                                    Text(MoneyFormat.format(minor: -stats.current.spendingMinor, currency: currency, language: lang))
+                                    Text(settings.formatMoney(minor: -stats.current.spendingMinor))
                                         .font(.appHeading)
                                         .foregroundStyle(Color.textPrimary)
                                 }
@@ -1201,7 +1186,7 @@ public struct StatisticsView: View {
                                     Text(L10n.text(lang, en: "Net savings", vi: "Tiết kiệm ròng", zh: "净结余"))
                                         .font(.appBodyMedium)
                                     Spacer()
-                                    Text(MoneyFormat.masked(MoneyFormat.format(minor: stats.current.netSavingsMinor, currency: currency, language: lang, signed: true), hidden: stats.isSalaryMasked(hidden: settings.hideSalary)))
+                                    Text(MoneyFormat.masked(settings.formatMoney(minor: stats.current.netSavingsMinor, signed: true), hidden: stats.isSalaryMasked(hidden: settings.hideSalary)))
                                         .salaryMaskAccessibility(stats.isSalaryMasked(hidden: settings.hideSalary), language: lang)
                                         .font(.appMetric)
                                         .foregroundStyle(stats.isSalaryMasked(hidden: settings.hideSalary) ? Color.textPrimary : (stats.current.netSavingsMinor >= 0 ? Color.positive : Color.accent))

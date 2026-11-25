@@ -99,7 +99,7 @@ struct TellTallyIntent: AppIntent {
 struct AutoLogTransactionIntent: AppIntent {
     static var title: LocalizedStringResource = "Auto-Log to Tally"
     static var description = IntentDescription(
-        "One-step action: pass any Apple Pay alert, bank email, SMS, or note and Tally extracts and logs the transaction."
+        "One-step action for bank emails, SMS, PayNow alerts, or OCR'd screenshots — Tally extracts and logs the transaction."
     )
     static var openAppWhenRun: Bool = false
 
@@ -144,6 +144,9 @@ struct AutoLogTransactionIntent: AppIntent {
             return .result(dialog: IntentDialog(stringLiteral: err))
         }
 
+        if let parsedCode = parsed.currencyCode, parsedCode != settings.currency.rawValue {
+            await ExchangeRateService.shared.refreshIfStale()
+        }
         let resolved = AITransactionParser.resolvedAmountAndNote(
             for: parsed,
             targetCurrency: settings.currency,
@@ -157,17 +160,27 @@ struct AutoLogTransactionIntent: AppIntent {
             dayKey: parsed.dayKey,
             note: resolved.note,
             source: detectedSource,
-            rawSourceText: input
+            rawSourceText: input,
+            originalAmountMinor: resolved.originalAmountMinor,
+            originalCurrencyCode: resolved.originalCurrencyCode,
+            exchangeRate: resolved.exchangeRate,
+            needsReviewOverride: resolved.usedFallbackUnavailableRate ? true : nil
         )
         let formatted = MoneyFormat.masked(
             MoneyFormat.format(minor: saved.amountMinor, currency: settings.currency, language: settings.language),
             hidden: saved.isSalaryMasked(hidden: settings.hideSalary)
         )
+        let origSuffix: String = {
+            guard !saved.isSalaryMasked(hidden: settings.hideSalary),
+                  let orig = saved.formattedOriginalAmount(language: settings.language)
+            else { return "" }
+            return " (\(orig))"
+        }()
         let msg = L10n.text(
             settings.language,
-            en: "Logged \(saved.name): \(formatted) (\(saved.category.title(in: settings.language))).",
-            vi: "Đã lưu \(saved.name): \(formatted) (\(saved.category.title(in: settings.language))).",
-            zh: "已记录 \(saved.name)：\(formatted)（\(saved.category.title(in: settings.language))）。"
+            en: "Logged \(saved.name): \(formatted)\(origSuffix) (\(saved.category.title(in: settings.language))).",
+            vi: "Đã lưu \(saved.name): \(formatted)\(origSuffix) (\(saved.category.title(in: settings.language))).",
+            zh: "已记录 \(saved.name)：\(formatted)\(origSuffix)（\(saved.category.title(in: settings.language))）。"
         )
         return .result(dialog: IntentDialog(stringLiteral: msg))
     }
@@ -176,35 +189,74 @@ struct AutoLogTransactionIntent: AppIntent {
 // MARK: - 1. Apple Pay Wallet Automation Intent
 
 /// Wire directly into Apple Shortcuts → Automation → Transaction (Apple Wallet):
-/// Passes Amount, Merchant, and Card/Pass Name automatically on every Apple Pay tap!
+/// Accepts Wallet's formatted `Amount` string (e.g. `S$18.50`, `$10.00`, `HK$83.75`),
+/// `Merchant`, and `Card or Pass Name` automatically on every Apple Pay tap!
 struct LogApplePayTransactionIntent: AppIntent {
     static var title: LocalizedStringResource = "Log Apple Pay Transaction"
     static var description = IntentDescription(
-        "Automatically logs an Apple Pay purchase into Tally with smart category detection."
+        "Automatically logs an Apple Pay purchase into Tally. Accepts formatted Wallet Amount text directly and detects currency & category."
     )
     static var openAppWhenRun: Bool = false
 
-    @Parameter(title: "Amount")
-    var amount: Double
+    @Parameter(
+        title: "Amount",
+        description: "Connect Shortcut Input → Amount. Accepts formatted Wallet text like S$18.50, $10.00, HK$83.75, 125.000 ₫, or a plain number."
+    )
+    var amount: String
 
-    @Parameter(title: "Merchant")
-    var merchant: String
+    @Parameter(
+        title: "Merchant",
+        description: "Connect Shortcut Input → Merchant."
+    )
+    var merchant: String?
 
-    @Parameter(title: "Card or Pass Name")
+    @Parameter(
+        title: "Card or Pass Name",
+        description: "Optional — connect Shortcut Input → Card or Pass."
+    )
     var cardName: String?
+
+    @Parameter(
+        title: "Currency",
+        description: "Optional — leave blank to auto-detect from Amount."
+    )
+    var currency: String?
+
+    static var parameterSummary: some ParameterSummary {
+        Summary("Log Apple Pay \(\.$amount) at \(\.$merchant)") {
+            \.$cardName
+            \.$currency
+        }
+    }
 
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let settings = AppSettings()
-        let cleanedMerchant = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
-        let rawLine = "Apple Pay \(amount) \(settings.currency.rawValue) at \(cleanedMerchant) \(cardName ?? "")"
+        guard let parsed = ApplePayInputParser.parse(
+            amountText: amount,
+            merchant: merchant,
+            cardName: cardName,
+            explicitCurrency: currency,
+            defaultCurrency: settings.currency
+        ) else {
+            let err = L10n.text(
+                settings.language,
+                en: "Could not read a valid amount from Apple Pay input.",
+                vi: "Không đọc được số tiền hợp lệ từ giao dịch Apple Pay.",
+                zh: "无法从 Apple Pay 输入中读取有效金额。"
+            )
+            return .result(dialog: IntentDialog(stringLiteral: err))
+        }
 
-        var category = LocalTransactionParser.inferCategory(text: cleanedMerchant, type: .expense)
-        var finalName = cleanedMerchant.isEmpty ? "Apple Pay" : cleanedMerchant
+        var category = LocalTransactionParser.inferCategory(
+            text: "\(parsed.merchantName) \(parsed.cardName ?? "")",
+            type: .expense
+        )
+        var finalName = parsed.merchantName
 
         if settings.autoParseWithAI, let client = settings.makeAIClient(),
            let aiDraft = await AITransactionParser.parse(
-            text: rawLine,
+            text: parsed.rawSummary,
             source: .applePay,
             defaultCurrency: settings.currency,
             language: settings.language,
@@ -214,25 +266,51 @@ struct LogApplePayTransactionIntent: AppIntent {
             finalName = aiDraft.name
         }
 
+        if parsed.currencyCode != settings.currency.rawValue {
+            await ExchangeRateService.shared.refreshIfStale()
+        }
+        let resolved = AITransactionParser.resolvedAmountAndNote(
+            for: ParsedTransactionDraft(
+                name: finalName,
+                amountMajor: parsed.amountMajor,
+                currencyCode: parsed.currencyCode,
+                type: .expense,
+                category: category,
+                note: parsed.note
+            ),
+            targetCurrency: settings.currency,
+            language: settings.language
+        )
+
         let saved = BudgetStore.ingestFromShortcut(
             name: finalName,
-            amountMajor: abs(amount),
+            amountMajor: settings.currency.toMajor(max(1, resolved.amountMinor)),
             type: .expense,
             category: category,
-            note: cardName?.isEmpty == false ? "Apple Pay · \(cardName!)" : "Apple Pay",
+            note: resolved.note,
             source: .applePay,
-            rawSourceText: rawLine
+            rawSourceText: parsed.rawSummary,
+            originalAmountMinor: resolved.originalAmountMinor,
+            originalCurrencyCode: resolved.originalCurrencyCode,
+            exchangeRate: resolved.exchangeRate,
+            needsReviewOverride: resolved.usedFallbackUnavailableRate ? true : nil
         )
 
         let formatted = MoneyFormat.masked(
             MoneyFormat.format(minor: saved.amountMinor, currency: settings.currency, language: settings.language),
             hidden: saved.isSalaryMasked(hidden: settings.hideSalary)
         )
+        let origSuffix: String = {
+            guard !saved.isSalaryMasked(hidden: settings.hideSalary),
+                  let orig = saved.formattedOriginalAmount(language: settings.language)
+            else { return "" }
+            return " (\(orig))"
+        }()
         let msg = L10n.text(
             settings.language,
-            en: "Logged \(formatted) at \(saved.name) (\(saved.category.title(in: settings.language))).",
-            vi: "Đã ghi \(formatted) tại \(saved.name) (\(saved.category.title(in: settings.language))).",
-            zh: "已在 \(saved.name) 记录 \(formatted)（\(saved.category.title(in: settings.language))）。"
+            en: "Logged \(formatted)\(origSuffix) at \(saved.name) (\(saved.category.title(in: settings.language))).",
+            vi: "Đã ghi \(formatted)\(origSuffix) tại \(saved.name) (\(saved.category.title(in: settings.language))).",
+            zh: "已在 \(saved.name) 记录 \(formatted)\(origSuffix)（\(saved.category.title(in: settings.language))）。"
         )
         return .result(dialog: IntentDialog(stringLiteral: msg))
     }
@@ -277,6 +355,9 @@ struct LogTransactionFromTextIntent: AppIntent {
             return .result(dialog: IntentDialog(stringLiteral: err))
         }
 
+        if let parsedCode = parsed.currencyCode, parsedCode != settings.currency.rawValue {
+            await ExchangeRateService.shared.refreshIfStale()
+        }
         let resolved = AITransactionParser.resolvedAmountAndNote(
             for: parsed,
             targetCurrency: settings.currency,
@@ -290,18 +371,28 @@ struct LogTransactionFromTextIntent: AppIntent {
             dayKey: parsed.dayKey,
             note: resolved.note,
             source: source.domainSource,
-            rawSourceText: text
+            rawSourceText: text,
+            originalAmountMinor: resolved.originalAmountMinor,
+            originalCurrencyCode: resolved.originalCurrencyCode,
+            exchangeRate: resolved.exchangeRate,
+            needsReviewOverride: resolved.usedFallbackUnavailableRate ? true : nil
         )
 
         let formatted = MoneyFormat.masked(
             MoneyFormat.format(minor: saved.amountMinor, currency: settings.currency, language: settings.language),
             hidden: saved.isSalaryMasked(hidden: settings.hideSalary)
         )
+        let origSuffix: String = {
+            guard !saved.isSalaryMasked(hidden: settings.hideSalary),
+                  let orig = saved.formattedOriginalAmount(language: settings.language)
+            else { return "" }
+            return " (\(orig))"
+        }()
         let msg = L10n.text(
             settings.language,
-            en: "Saved \(saved.name): \(formatted) in \(saved.category.title(in: settings.language)).",
-            vi: "Đã lưu \(saved.name): \(formatted) (\(saved.category.title(in: settings.language))).",
-            zh: "已保存 \(saved.name)：\(formatted)（\(saved.category.title(in: settings.language))）。"
+            en: "Saved \(saved.name): \(formatted)\(origSuffix) in \(saved.category.title(in: settings.language)).",
+            vi: "Đã lưu \(saved.name): \(formatted)\(origSuffix) (\(saved.category.title(in: settings.language))).",
+            zh: "已保存 \(saved.name)：\(formatted)\(origSuffix)（\(saved.category.title(in: settings.language))）。"
         )
         return .result(dialog: IntentDialog(stringLiteral: msg))
     }
@@ -326,27 +417,56 @@ struct QuickLogExpenseIntent: AppIntent {
     @Parameter(title: "Note")
     var note: String?
 
+    @Parameter(title: "Currency")
+    var currency: String?
+
     @MainActor
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let settings = AppSettings()
         let domainCat = category.domainCategory
+        let statedCode = currency.flatMap(CurrencyCode.normalizeCode) ?? settings.currency.rawValue
+        if statedCode != settings.currency.rawValue {
+            await ExchangeRateService.shared.refreshIfStale()
+        }
+        let resolved = AITransactionParser.resolvedAmountAndNote(
+            for: ParsedTransactionDraft(
+                name: name,
+                amountMajor: abs(amount),
+                currencyCode: statedCode,
+                type: domainCat.transactionType,
+                category: domainCat,
+                note: note ?? ""
+            ),
+            targetCurrency: settings.currency,
+            language: settings.language
+        )
         let saved = BudgetStore.ingestFromShortcut(
             name: name,
-            amountMajor: abs(amount),
+            amountMajor: settings.currency.toMajor(max(1, resolved.amountMinor)),
             type: domainCat.transactionType,
             category: domainCat,
-            note: note ?? "",
-            source: .shortcut
+            note: resolved.note,
+            source: .shortcut,
+            originalAmountMinor: resolved.originalAmountMinor,
+            originalCurrencyCode: resolved.originalCurrencyCode,
+            exchangeRate: resolved.exchangeRate,
+            needsReviewOverride: resolved.usedFallbackUnavailableRate ? true : nil
         )
         let formatted = MoneyFormat.masked(
             MoneyFormat.format(minor: saved.amountMinor, currency: settings.currency, language: settings.language),
             hidden: saved.isSalaryMasked(hidden: settings.hideSalary)
         )
+        let origSuffix: String = {
+            guard !saved.isSalaryMasked(hidden: settings.hideSalary),
+                  let orig = saved.formattedOriginalAmount(language: settings.language)
+            else { return "" }
+            return " (\(orig))"
+        }()
         let msg = L10n.text(
             settings.language,
-            en: "Logged \(formatted) for \(saved.name).",
-            vi: "Đã ghi \(formatted) cho \(saved.name).",
-            zh: "已为 \(saved.name) 记录 \(formatted)。"
+            en: "Logged \(formatted)\(origSuffix) for \(saved.name).",
+            vi: "Đã ghi \(formatted)\(origSuffix) cho \(saved.name).",
+            zh: "已为 \(saved.name) 记录 \(formatted)\(origSuffix)。"
         )
         return .result(dialog: IntentDialog(stringLiteral: msg))
     }
@@ -365,8 +485,8 @@ struct GetSpendingSummaryIntent: AppIntent {
         let store = BudgetStore.current ?? BudgetStore()
         store.reload()
         let snapshot = store.snapshot
-        let todayStr = MoneyFormat.format(minor: snapshot.todaySpendingMinor, currency: settings.currency, language: settings.language)
-        let monthStr = MoneyFormat.format(minor: snapshot.spendingMinor, currency: settings.currency, language: settings.language)
+        let todayStr = settings.formatMoney(minor: snapshot.todaySpendingMinor)
+        let monthStr = settings.formatMoney(minor: snapshot.spendingMinor)
         let msg = L10n.text(
             settings.language,
             en: "Today's spending is \(todayStr). This month's total spending is \(monthStr).",

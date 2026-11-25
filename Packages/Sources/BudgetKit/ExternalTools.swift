@@ -220,7 +220,13 @@ public enum ExternalToolCatalog {
             if let category = query.category, tx.category != category { return false }
             if let type = query.type, tx.type != type { return false }
             if let memberID = query.memberID, tx.memberID != memberID { return false }
-            if let needle, !folded(tx.name).contains(needle), !folded(tx.note).contains(needle) { return false }
+            if let needle,
+               !folded(tx.name).contains(needle),
+               !folded(tx.note).contains(needle),
+               !folded(tx.originalCurrencyCode ?? "").contains(needle),
+               !folded(tx.formattedOriginalAmount(language: .english) ?? "").contains(needle) {
+                return false
+            }
             return true
         }
         let visible = SalaryPrivacy.visibleTransactions(matching, hidden: data.salaryHidden)
@@ -240,6 +246,17 @@ public enum ExternalToolCatalog {
             ]
             if !tx.memberName.isEmpty { row["member"] = .string(tx.memberName) }
             if !tx.note.isEmpty { row["note"] = .string(tx.note) }
+            if tx.isForeignCurrency,
+               let origCode = tx.originalCurrencyCode,
+               let origMinor = tx.originalAmountMinor,
+               let origFormatted = tx.formattedOriginalAmount(language: .english) {
+                row["original_currency"] = .string(origCode)
+                row["original_amount"] = .string(origFormatted)
+                row["original_amount_value"] = .double(CurrencyCode.toMajor(origMinor))
+                if let rate = tx.exchangeRate {
+                    row["exchange_rate"] = .double(rate)
+                }
+            }
             if tx.needsReview { row["needs_review"] = true }
             if let planID = tx.planID { row["plan_id"] = .string(planID) }
             return .object(row)

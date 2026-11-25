@@ -20,13 +20,9 @@ public enum SettingsCategory: String, CaseIterable, Identifiable, Hashable, Send
 
     public var id: String { rawValue }
 
-    /// The categories this platform offers. The MCP server runs in the Mac app only.
+    /// All categories are available on iPhone, iPad, and Mac.
     public static var available: [SettingsCategory] {
-        #if os(macOS)
-        return allCases
-        #else
-        return allCases.filter { $0 != .mcp }
-        #endif
+        allCases
     }
 }
 
@@ -36,6 +32,7 @@ public struct SettingsView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(CloudSync.self) private var cloudSync
     @Environment(MCPServer.self) private var mcpServer
+    @Environment(RemoteMCPSync.self) private var remoteMCP
     @Environment(\.dismiss) private var dismiss
     @Environment(\.tabBarBottomInset) private var tabBarBottomInset
     @Environment(\.tabBarVisibility) private var tabBarVisibility
@@ -201,11 +198,14 @@ public struct SettingsView: View {
     private func categoryMeta(for category: SettingsCategory, lang: AppLanguage) -> CategoryMeta {
         switch category {
         case .general:
+            let currencyDetail = settings.isConvertingDisplay
+                ? "\(settings.currency.rawValue) → \(settings.effectiveDisplayCurrency.rawValue)"
+                : settings.currency.rawValue
             return CategoryMeta(
                 symbol: "slider.horizontal.3",
                 tint: nil,
                 title: L10n.text(lang, en: "General & Appearance", vi: "Chung & Giao diện", zh: "通用与外观"),
-                detail: "\(settings.currency.rawValue) · \(settings.language.title(in: lang))"
+                detail: "\(currencyDetail) · \(settings.language.title(in: lang))"
             )
         case .ai:
             return CategoryMeta(
@@ -241,7 +241,7 @@ public struct SettingsView: View {
             return CategoryMeta(
                 symbol: "message.fill",
                 tint: mcpTint,
-                title: L10n.text(lang, en: "MCP Server", vi: "Máy chủ MCP", zh: "MCP 服务器"),
+                title: L10n.text(lang, en: "MCP & AI Assistants", vi: "MCP & Trợ lý AI", zh: "MCP 与 AI 助手"),
                 detail: mcpStatusShort(lang: lang)
             )
         case .backup:
@@ -287,6 +287,9 @@ public struct SettingsView: View {
     }
 
     private var mcpTint: Color {
+        if settings.isCloudMCPConfigured && settings.cloudMCPEnabled {
+            return remoteMCP.lastError != nil ? .caution : .positive
+        }
         switch mcpServer.state {
         case .running: return .positive
         case .failed: return .caution
@@ -295,14 +298,19 @@ public struct SettingsView: View {
     }
 
     private func mcpStatusShort(lang: AppLanguage) -> String {
+        if settings.isCloudMCPConfigured && settings.cloudMCPEnabled {
+            return settings.mcpAllowsChanges
+                ? L10n.text(lang, en: "Cloud 24/7 · can make changes", vi: "Cloud 24/7 · được thay đổi", zh: "云端 24/7 · 可更改")
+                : L10n.text(lang, en: "Cloud 24/7 · read-only", vi: "Cloud 24/7 · chỉ đọc", zh: "云端 24/7 · 只读")
+        }
         switch mcpServer.state {
         case .running:
             return settings.mcpAllowsChanges
-                ? L10n.text(lang, en: "On · can make changes", vi: "Bật · được thay đổi", zh: "已开启 · 可更改")
-                : L10n.text(lang, en: "On · read-only", vi: "Bật · chỉ đọc", zh: "已开启 · 只读")
+                ? L10n.text(lang, en: "Mac · can make changes", vi: "Mac · được thay đổi", zh: "Mac · 可更改")
+                : L10n.text(lang, en: "Mac · read-only", vi: "Mac · chỉ đọc", zh: "Mac · 只读")
         case .starting: return L10n.text(lang, en: "Starting…", vi: "Đang khởi động…", zh: "正在启动…")
         case .failed: return L10n.text(lang, en: "Not running", vi: "Không chạy", zh: "未运行")
-        case .stopped: return L10n.text(lang, en: "Claude Code, Codex & more", vi: "Claude Code, Codex và hơn nữa", zh: "Claude Code、Codex 等")
+        case .stopped: return L10n.text(lang, en: "1-tap setup · Claude, Codex, Muse", vi: "Cài 1 chạm · Claude, Codex, Muse", zh: "一键配置 · Claude、Codex、Muse")
         }
     }
 

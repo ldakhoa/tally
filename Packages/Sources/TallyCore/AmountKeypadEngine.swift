@@ -53,12 +53,18 @@ public struct AmountKeypadEngine: Equatable, Hashable, Sendable {
     /// Preserves typed decimal point / trailing fraction zeros when entering a single number,
     /// and displays the live calculated result when an arithmetic operator is active.
     public func formattedDisplayNumber(currency: CurrencyCode) -> String {
+        formattedDisplayNumber(currencyCode: currency.rawValue)
+    }
+
+    /// Formatted string for the hero amount display using an arbitrary ISO 4217 currency code.
+    public func formattedDisplayNumber(currencyCode: String) -> String {
         if expression.isEmpty {
             return "0"
         }
 
-        let groupSep = currency == .vnd ? "." : ","
-        let decSep = currency == .vnd ? "," : "."
+        let isVND = currencyCode.trimmingCharacters(in: .whitespacesAndNewlines).uppercased() == CurrencyCode.vnd.rawValue
+        let groupSep = isVND ? "." : ","
+        let decSep = isVND ? "," : "."
 
         if !hasOperator {
             return Self.formatTypedOperand(expression, groupSeparator: groupSep, decimalSeparator: decSep)

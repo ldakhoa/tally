@@ -71,8 +71,18 @@ public enum TransactionDeduplicator {
         let incomingDay = DateKey.date(fromDayKey: incoming.dayKey)
 
         for candidate in active {
+            let sameConvertedAmount = candidate.amountMinor == incoming.amountMinor
+            let sameForeignAmount: Bool = {
+                guard let cCode = candidate.originalCurrencyCode,
+                      let iCode = incoming.originalCurrencyCode,
+                      let cMinor = candidate.originalAmountMinor,
+                      let iMinor = incoming.originalAmountMinor,
+                      !cCode.isEmpty
+                else { return false }
+                return cCode.caseInsensitiveCompare(iCode) == .orderedSame && cMinor == iMinor
+            }()
             guard candidate.type == incoming.type,
-                  candidate.amountMinor == incoming.amountMinor
+                  sameConvertedAmount || sameForeignAmount
             else { continue }
 
             let isSameMember = candidate.memberID.isEmpty
@@ -177,6 +187,14 @@ public enum TransactionDeduplicator {
         }
         if updated.note.isEmpty && !duplicate.note.isEmpty {
             updated.note = duplicate.note
+            changed = true
+        }
+        if !updated.isForeignCurrency, duplicate.isForeignCurrency {
+            updated.originalAmountMinor = duplicate.originalAmountMinor
+            updated.originalCurrencyCode = duplicate.originalCurrencyCode
+            if updated.exchangeRate == nil {
+                updated.exchangeRate = duplicate.exchangeRate
+            }
             changed = true
         }
         if changed {

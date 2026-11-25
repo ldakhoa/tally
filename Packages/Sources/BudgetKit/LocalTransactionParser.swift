@@ -5,7 +5,7 @@ import TallyCore
 public struct ParsedTransactionDraft: Codable, Hashable, Sendable {
     public var name: String
     public var amountMajor: Double
-    public var currency: CurrencyCode?
+    public var currencyCode: String?
     public var type: TransactionType
     public var category: CategoryID
     public var dayKey: String
@@ -13,10 +13,15 @@ public struct ParsedTransactionDraft: Codable, Hashable, Sendable {
     public var confidence: Double
     public var parsedByAI: Bool
 
+    public var currency: CurrencyCode? {
+        get { currencyCode.flatMap(CurrencyCode.init(rawValue:)) }
+        set { currencyCode = newValue?.rawValue }
+    }
+
     public init(
         name: String,
         amountMajor: Double,
-        currency: CurrencyCode? = nil,
+        currencyCode: String? = nil,
         type: TransactionType = .expense,
         category: CategoryID = .other,
         dayKey: String = DateKey.dayKey(from: Date()),
@@ -26,7 +31,7 @@ public struct ParsedTransactionDraft: Codable, Hashable, Sendable {
     ) {
         self.name = name
         self.amountMajor = amountMajor
-        self.currency = currency
+        self.currencyCode = currencyCode.flatMap(CurrencyCode.normalizeCode) ?? currencyCode?.uppercased()
         self.type = type
         self.category = category
         self.dayKey = dayKey
@@ -34,18 +39,59 @@ public struct ParsedTransactionDraft: Codable, Hashable, Sendable {
         self.confidence = confidence
         self.parsedByAI = parsedByAI
     }
+
+    public init(
+        name: String,
+        amountMajor: Double,
+        currency: CurrencyCode?,
+        type: TransactionType = .expense,
+        category: CategoryID = .other,
+        dayKey: String = DateKey.dayKey(from: Date()),
+        note: String = "",
+        confidence: Double = 0.75,
+        parsedByAI: Bool = false
+    ) {
+        self.init(
+            name: name,
+            amountMajor: amountMajor,
+            currencyCode: currency?.rawValue,
+            type: type,
+            category: category,
+            dayKey: dayKey,
+            note: note,
+            confidence: confidence,
+            parsedByAI: parsedByAI
+        )
+    }
 }
 
-/// Deterministic offline parser for Vietnamese & English bank alerts, emails, Apple Pay notes,
-/// and natural shorthand (e.g. "ăn phở 65k", "TK 1903xxx -125,000 VND tai HIGHLANDS COFFEE",
-/// "You spent SGD 18.50 at FairPrice").
+public struct RecognizedBankAlert: Equatable, Sendable {
+    public let amount: Double
+    public let currencyCode: String
+    public let type: TransactionType
+
+    public var currency: CurrencyCode? { CurrencyCode(rawValue: currencyCode) }
+
+    public init(amount: Double, currencyCode: String, type: TransactionType) {
+        self.amount = amount
+        self.currencyCode = currencyCode
+        self.type = type
+    }
+}
+
+/// Deterministic offline parser for Vietnamese, Singapore, & international bank alerts, emails,
+/// Apple Pay notes, and natural shorthand (e.g. "ăn phở 65k",
+/// "TK 1903xxx -125,000 VND tai HIGHLANDS COFFEE", "You spent SGD 18.50 at FairPrice",
+/// "0% FX fees! You've spent HKD 83.75 using Freedom credit card at PinDuoDuo...").
 public enum LocalTransactionParser {
     /// Rejects obvious marketing/promotional emails, newsletters, OTPs, and ads.
     public static func isLikelyPromotional(_ rawText: String) -> Bool {
-        let folded = rawText.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+        let normalized = normalizeApostrophes(rawText)
+        let folded = normalized.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
         let strongTransactionSignals = [
             "transaction alert", "card transaction", "made a payment", "has been debited",
             "has been credited", "was made on your", "you have transferred", "you have received",
+            "you've spent", "you have spent", "you spent", "alert us via",
             "e-receipt", "your grab e-receipt", "bien dong so du", "so du kha dung",
             "sd tk ", "tai khoan thanh toan", "paynow transfer", "payment confirmation"
         ]
@@ -95,12 +141,12 @@ public enum LocalTransactionParser {
         defaultCurrency: CurrencyCode,
         now: Date = Date()
     ) -> ParsedTransactionDraft? {
-        let trimmed = rawText.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = normalizeApostrophes(rawText).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
         let lowered = trimmed.lowercased()
         let detectedType = detectType(lowered: lowered, raw: trimmed)
-        guard let (amount, detectedCurrency) = extractAmountAndCurrency(from: trimmed, defaultCurrency: defaultCurrency) else {
+        guard let (amount, detectedCurrencyCode) = extractAmountAndCurrency(from: trimmed, defaultCurrency: defaultCurrency) else {
             return nil
         }
 
@@ -111,7 +157,7 @@ public enum LocalTransactionParser {
         return ParsedTransactionDraft(
             name: merchant,
             amountMajor: amount,
-            currency: detectedCurrency,
+            currencyCode: detectedCurrencyCode,
             type: detectedType,
             category: category,
             dayKey: dayKey,
@@ -119,6 +165,70 @@ public enum LocalTransactionParser {
             confidence: 0.72,
             parsedByAI: false
         )
+    }
+
+    public static func recognizedBankAlertAmount(_ text: String) -> RecognizedBankAlert? {
+        let trimmed = normalizeApostrophes(text).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !isLikelyPromotional(trimmed),
+              firstMatch(#"(?i)\b(?:declined|failed|unsuccessful|pending|reversed|cancelled|canceled)\b"#, in: trimmed) == nil else { return nil }
+
+        if let match = firstMatch(#"(?i)^SD\s+TK\s+[\dx*]+\s+([-+−])\s*(\d{1,3}(?:[.,]\d{3})+|\d+)\s*(?:VND|VNĐ|đ)(?=\s|[.,;]|$)"#, in: trimmed),
+           let value = parseNumber(match[2], isZeroDecimal: true), value > 0, value.isFinite {
+            return RecognizedBankAlert(amount: value, currencyCode: "VND", type: match[1] == "+" ? .income : .expense)
+        }
+
+        let currToken = #"(?:(?i:S\$|HK\$|US\$|NT\$|AU\$|A\$|CA\$|NZ\$|RM|Rp|VNĐ|SGD|VND|USD|EUR|GBP|AUD|CAD|MYR|HKD|CNY|RMB|JPY|KRW|THB|TWD|NTD|IDR|PHP|NZD|CHF|INR)|€|£|¥|₩|฿|₱|₹|(?-i:[A-Z]{3}))"#
+        let numToken = #"(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d{1,2})?"#
+        let amountPattern = "(?:\(currToken)\\s*\(numToken)|\(numToken)\\s*\(currToken))"
+        let prefix = #"(?i)^(?:(?:0%\s*FX\s*fees!\s*)|(?:[A-Za-z\d]+\s*(?:Alert)?:\s*))*"#
+        let templates: [(String, TransactionType)] = [
+            (#"You have made a payment of ("# + amountPattern + #")\s+to\b"#, .expense),
+            (#"A transaction of ("# + amountPattern + #")\s+was made on your\b"#, .expense),
+            (#"You have received ("# + amountPattern + #")\s+via PayNow from\b"#, .income),
+            (#"You(?:'ve|\s+have)?\s+spent\s+("# + amountPattern + #")\s+(?:using|on|at|with)\b"#, .expense),
+            (#"You(?:'ve|\s+have)?\s+(?:paid|been\s+charged)\s+("# + amountPattern + #")\s+(?:at|to|on|with|using)\b"#, .expense),
+            (#"(?:A\s+)?(?:card\s+transaction|purchase|payment)\s+of\s+("# + amountPattern + #")\s+(?:was\s+made|at|to|on|with)\b"#, .expense),
+            (#"You(?:'ve|\s+have)?\s+transferred\s+("# + amountPattern + #")\s+(?:via\s+PayNow\s+)?to\b"#, .expense),
+        ]
+        for (template, type) in templates {
+            if let match = firstMatch(prefix + template, in: trimmed),
+               let (amount, currencyCode) = parseBankAlertAmountSlice(match[1]),
+               amount > 0, amount.isFinite {
+                return RecognizedBankAlert(amount: amount, currencyCode: currencyCode, type: type)
+            }
+        }
+        return nil
+    }
+
+    private static func parseBankAlertAmountSlice(_ raw: String) -> (Double, String)? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let m = firstMatch(#"^([^\d\s]+)\s*([0-9][0-9,]*(?:\.\d{1,2})?)$"#, in: trimmed),
+           let code = resolveCurrencyToken(m[1], defaultCurrency: .sgd),
+           let value = parseNumber(m[2], isZeroDecimal: CurrencyCode.isZeroDecimal(code: code)) {
+            return (value, code)
+        }
+        if let m = firstMatch(#"^([0-9][0-9,]*(?:\.\d{1,2})?)\s*([^\d\s]+)$"#, in: trimmed),
+           let code = resolveCurrencyToken(m[2], defaultCurrency: .sgd),
+           let value = parseNumber(m[1], isZeroDecimal: CurrencyCode.isZeroDecimal(code: code)) {
+            return (value, code)
+        }
+        return nil
+    }
+
+    private static func resolveCurrencyToken(_ token: String, defaultCurrency: CurrencyCode) -> String? {
+        switch token {
+        case "€": return "EUR"
+        case "£": return "GBP"
+        case "¥": return (defaultCurrency == .cny || defaultCurrency == .jpy) ? defaultCurrency.rawValue : "JPY"
+        case "₩": return "KRW"
+        case "฿": return "THB"
+        case "₱": return "PHP"
+        case "₹": return "INR"
+        case "₫": return "VND"
+        case "$": return defaultCurrency == .vnd ? "SGD" : defaultCurrency.rawValue
+        default:
+            return CurrencyCode.normalizeCode(token)
+        }
     }
 
     /// Categorizes an Apple Pay merchant name quickly offline.
@@ -162,7 +272,9 @@ public enum LocalTransactionParser {
         ]) { return .bills }
 
         if containsAny(lower, [
-            "shopee", "lazada", "tiki", "tiktok shop", "amazon", "uniqlo", "zara", "h&m", "decathlon",
+            "shopee", "lazada", "tiki", "tiktok shop", "amazon", "pinduoduo", "taobao", "tmall",
+            "aliexpress", "temu", "shein", "jd.com", "1688", "qoo10", "zalora", "ebay", "asos", "etsy",
+            "uniqlo", "zara", "h&m", "decathlon",
             "muji", "daiso", "apple store", "challenger", "harvey norman", "best denki", "cellphones",
             "the gioi di dong", "dien may", "mua sam", "quan ao", "giay", "shoes", "shopping", "mall",
             "takashimaya", "ion orchard", "vivocity", "jewel", "sephora", "love bonito"
@@ -187,10 +299,10 @@ public enum LocalTransactionParser {
     private static func detectType(lowered: String, raw: String) -> TransactionType {
         let folded = lowered.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
         // Explicit plus sign before digits like "+15,000,000 VND" or "+$500"
-        if raw.range(of: #"\+\s*(?:[A-Z]{3}\s*)?[S$₫€£]?\s*\d"#, options: .regularExpression) != nil {
+        if raw.range(of: #"\+\s*(?:[A-Z]{3}\s*)?[S$₫€£¥₩฿₱₹]?\s*\d"#, options: .regularExpression) != nil {
             return .income
         }
-        if raw.range(of: #"[-−]\s*(?:[A-Z]{3}\s*)?[S$₫€£]?\s*\d"#, options: .regularExpression) != nil {
+        if raw.range(of: #"[-−]\s*(?:[A-Z]{3}\s*)?[S$₫€£¥₩฿₱₹]?\s*\d"#, options: .regularExpression) != nil {
             return .expense
         }
         if containsAny(folded, [
@@ -204,50 +316,165 @@ public enum LocalTransactionParser {
         return .expense
     }
 
-    private static func extractAmountAndCurrency(from text: String, defaultCurrency: CurrencyCode) -> (Double, CurrencyCode?)? {
-        // 1. Vietnamese shorthand: e.g. "65k", "1.5tr", "2,5 triệu", "350 nghìn"
+    private static func extractAmountAndCurrency(from text: String, defaultCurrency: CurrencyCode) -> (Double, String?)? {
+        // 1. Recognized structured bank alert always wins over secondary amounts (like cashback or balance).
+        if let bankAlert = recognizedBankAlertAmount(text) {
+            return (bankAlert.amount, bankAlert.currencyCode)
+        }
+
+        // 2. Vietnamese shorthand: e.g. "65k", "1.5tr", "2,5 triệu", "350 nghìn"
         if let match = firstMatch(#"(?i)(?<![\d.,])(\d+(?:[.,]\d+)?)\s*(tr(?:i[eệ]u)?|m|k|ngh[iì]n|ng[aà]n)\b"#, in: text) {
             let numStr = match[1].replacingOccurrences(of: ",", with: ".")
             let unit = match[2].lowercased()
             if let base = Double(numStr) {
                 let multiplier: Double = (unit.hasPrefix("tr") || unit == "m") ? 1_000_000 : 1_000
                 let value = base * multiplier
-                if value > 0 { return (value, .vnd) }
+                if value > 0 { return (value, "VND") }
             }
         }
 
-        // 2. Explicit currency prefix/suffix: "SGD 18.50", "S$18.50", "USD 12.40", "$12.40", "125,000 VND", "65.000đ"
-        let prefixPatterns: [(String, CurrencyCode)] = [
-            (#"(?i)\b(?:SGD|S\$)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, .sgd),
-            (#"(?i)\b(?:VND|VNĐ)\s*([0-9][0-9.,]*)"#, .vnd),
-            (#"(?i)\b(?:USD|US\$)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, .usd),
-            (#"(?i)\b(?:MYR|RM)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, .myr),
-            (#"(?i)\b(?:AUD|A\$)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, .aud),
-            (#"(?i)\b(?:EUR|€)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, .eur),
-            (#"(?i)\b(?:GBP|£)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, .gbp),
-            (#"\$\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, defaultCurrency == .vnd ? .sgd : defaultCurrency),
+        // 3. Collect all explicit currency+amount matches (prefix & suffix), picking earliest non-secondary match.
+        struct CurrencyMatch {
+            let location: Int
+            let amount: Double
+            let currencyCode: String
+            let isSecondary: Bool
+        }
+
+        let bareDollarDefault = defaultCurrency == .vnd ? "SGD" : defaultCurrency.rawValue
+        let yenDefault = (defaultCurrency == .cny || defaultCurrency == .jpy) ? defaultCurrency.rawValue : "JPY"
+
+        let prefixSpecs: [(pattern: String, code: String?)] = [
+            (#"(?i)\b(?:SGD|S\$)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "SGD"),
+            (#"(?i)\b(?:HKD|HK\$)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "HKD"),
+            (#"(?i)\b(?:USD|US\$)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "USD"),
+            (#"(?i)\b(?:TWD|NTD|NT\$)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "TWD"),
+            (#"(?i)\b(?:NZD|NZ\$)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "NZD"),
+            (#"(?i)\b(?:CAD|CA\$)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "CAD"),
+            (#"(?i)\b(?:AUD|AU\$|A\$)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "AUD"),
+            (#"(?i)\b(?:MYR|RM)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "MYR"),
+            (#"(?i)\b(?:IDR|Rp)\s*([0-9][0-9.,]*)"#, "IDR"),
+            (#"(?i)\b(?:VND|VNĐ)\s*([0-9][0-9.,]*)"#, "VND"),
+            (#"(?i)(?:\bEUR\b|€)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "EUR"),
+            (#"(?i)(?:\bGBP\b|£)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "GBP"),
+            (#"(?i)\bJPY\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "JPY"),
+            (#"(?i)\b(?:CNY|RMB)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "CNY"),
+            (#"(?i)(?:\bKRW\b|₩)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "KRW"),
+            (#"(?i)(?:\bTHB\b|฿)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "THB"),
+            (#"(?i)(?:\bPHP\b|₱)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "PHP"),
+            (#"(?i)(?:\bINR\b|₹)\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "INR"),
+            (#"(?i)\bCHF\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, "CHF"),
+            (#"¥\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, yenDefault),
+            (#"(?<![A-Za-z])\$\s*([0-9][0-9,]*(?:\.\d{1,2})?)"#, bareDollarDefault),
         ]
-        for (pattern, code) in prefixPatterns {
-            if let match = firstMatch(pattern, in: text),
-               let value = parseNumber(match[1], isZeroDecimal: code.isZeroDecimal), value > 0 {
-                return (value, code)
+
+        var matches: [CurrencyMatch] = []
+        let nsText = text as NSString
+        let fullRange = NSRange(location: 0, length: nsText.length)
+
+        for (pattern, explicitCode) in prefixSpecs {
+            guard let code = explicitCode, let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            for hit in regex.matches(in: text, range: fullRange) {
+                guard hit.numberOfRanges >= 2,
+                      let r = Range(hit.range(at: 1), in: text),
+                      let value = parseNumber(String(text[r]), isZeroDecimal: CurrencyCode.isZeroDecimal(code: code)),
+                      value > 0
+                else { continue }
+                matches.append(CurrencyMatch(
+                    location: hit.range.location,
+                    amount: value,
+                    currencyCode: code,
+                    isSecondary: isSecondaryAmountContext(in: text, range: hit.range)
+                ))
             }
         }
 
-        let suffixPatterns: [(String, CurrencyCode)] = [
-            (#"(?i)([0-9][0-9.,]*)\s*(?:VND|VNĐ|đ|d\b)"#, .vnd),
-            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*SGD\b"#, .sgd),
-            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*USD\b"#, .usd),
-            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*MYR\b"#, .myr),
+        // Case-sensitive uppercase ISO 4217 prefix for any other currency (e.g. AED 120.50, SEK 350).
+        if let isoPrefix = try? NSRegularExpression(pattern: #"(?-i)(?<![A-Za-z])([A-Z]{3})\s+([0-9][0-9,]*(?:\.\d{1,2})?)"#) {
+            for hit in isoPrefix.matches(in: text, range: fullRange) {
+                guard hit.numberOfRanges >= 3,
+                      let cRange = Range(hit.range(at: 1), in: text),
+                      let nRange = Range(hit.range(at: 2), in: text),
+                      let code = CurrencyCode.normalizeCode(String(text[cRange])),
+                      let value = parseNumber(String(text[nRange]), isZeroDecimal: CurrencyCode.isZeroDecimal(code: code)),
+                      value > 0
+                else { continue }
+                matches.append(CurrencyMatch(
+                    location: hit.range.location,
+                    amount: value,
+                    currencyCode: code,
+                    isSecondary: isSecondaryAmountContext(in: text, range: hit.range)
+                ))
+            }
+        }
+
+        let suffixSpecs: [(pattern: String, code: String)] = [
+            (#"(?i)([0-9][0-9.,]*)\s*(?:VND|VNĐ|₫|đ|d\b)"#, "VND"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*SGD\b"#, "SGD"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*HKD\b"#, "HKD"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*USD\b"#, "USD"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*MYR\b"#, "MYR"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*AUD\b"#, "AUD"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*CAD\b"#, "CAD"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*EUR\b"#, "EUR"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*GBP\b"#, "GBP"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*(?:CNY|RMB)\b"#, "CNY"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*JPY\b"#, "JPY"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*KRW\b"#, "KRW"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*THB\b"#, "THB"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*(?:TWD|NTD)\b"#, "TWD"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*IDR\b"#, "IDR"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*PHP\b"#, "PHP"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*NZD\b"#, "NZD"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*CHF\b"#, "CHF"),
+            (#"(?i)([0-9][0-9,]*(?:\.\d{1,2})?)\s*INR\b"#, "INR"),
         ]
-        for (pattern, code) in suffixPatterns {
-            if let match = firstMatch(pattern, in: text),
-               let value = parseNumber(match[1], isZeroDecimal: code.isZeroDecimal), value > 0 {
-                return (value, code)
+        for (pattern, code) in suffixSpecs {
+            guard let regex = try? NSRegularExpression(pattern: pattern) else { continue }
+            for hit in regex.matches(in: text, range: fullRange) {
+                guard hit.numberOfRanges >= 2,
+                      let r = Range(hit.range(at: 1), in: text),
+                      let value = parseNumber(String(text[r]), isZeroDecimal: CurrencyCode.isZeroDecimal(code: code)),
+                      value > 0
+                else { continue }
+                matches.append(CurrencyMatch(
+                    location: hit.range.location,
+                    amount: value,
+                    currencyCode: code,
+                    isSecondary: isSecondaryAmountContext(in: text, range: hit.range)
+                ))
             }
         }
 
-        // 3. Fallback: signed or standalone number (skipping account numbers / dates like 1903... or 2026-11-23)
+        if let isoSuffix = try? NSRegularExpression(pattern: #"(?-i)([0-9][0-9,]*(?:\.\d{1,2})?)\s+([A-Z]{3})\b"#) {
+            for hit in isoSuffix.matches(in: text, range: fullRange) {
+                guard hit.numberOfRanges >= 3,
+                      let nRange = Range(hit.range(at: 1), in: text),
+                      let cRange = Range(hit.range(at: 2), in: text),
+                      let code = CurrencyCode.normalizeCode(String(text[cRange])),
+                      let value = parseNumber(String(text[nRange]), isZeroDecimal: CurrencyCode.isZeroDecimal(code: code)),
+                      value > 0
+                else { continue }
+                matches.append(CurrencyMatch(
+                    location: hit.range.location,
+                    amount: value,
+                    currencyCode: code,
+                    isSecondary: isSecondaryAmountContext(in: text, range: hit.range)
+                ))
+            }
+        }
+
+        if !matches.isEmpty {
+            let ordered = matches.sorted { lhs, rhs in
+                if lhs.isSecondary != rhs.isSecondary { return !lhs.isSecondary }
+                return lhs.location < rhs.location
+            }
+            if let best = ordered.first {
+                return (best.amount, best.currencyCode)
+            }
+        }
+
+        // 4. Fallback: signed or standalone number (skipping account numbers / dates like 1903... or 2026-11-23)
         if let match = firstMatch(#"[+-−]\s*([0-9][0-9.,]{1,12})"#, in: text),
            let value = parseNumber(match[1], isZeroDecimal: defaultCurrency.isZeroDecimal), value > 0 {
             return (value, nil)
@@ -266,11 +493,36 @@ public enum LocalTransactionParser {
         return nil
     }
 
+    private static func isSecondaryAmountContext(in text: String, range: NSRange) -> Bool {
+        let ns = text as NSString
+        let beforeStart = max(0, range.location - 24)
+        let beforeLen = range.location - beforeStart
+        let afterStart = range.location + range.length
+        let afterLen = min(ns.length - afterStart, 20)
+        let before = ns.substring(with: NSRange(location: beforeStart, length: beforeLen))
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+        let after = ns.substring(with: NSRange(location: afterStart, length: afterLen))
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+        let secondarySignals = ["cashback", "rebate", "reward", "balance", "available", "so du", "avail bal"]
+        if secondarySignals.contains(where: { before.contains($0) || after.contains($0) }) {
+            return true
+        }
+        return before.hasSuffix("sd ")
+    }
+
     private static func parseNumber(_ raw: String, isZeroDecimal: Bool) -> Double? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         if isZeroDecimal {
-            // In VND, both "125,000" and "125.000" are thousand separators.
+            // Preserve ".0" / ".00" fractional endings (e.g. "JPY 2,400.00") while still treating
+            // Vietnamese thousand-grouped integers ("125.000", "1.250.000") as whole numbers.
+            let dotCount = trimmed.filter { $0 == "." }.count
+            if dotCount == 1, let dotIdx = trimmed.firstIndex(of: ".") {
+                let fracCount = trimmed.distance(from: trimmed.index(after: dotIdx), to: trimmed.endIndex)
+                if fracCount >= 1 && fracCount <= 2 {
+                    return Double(trimmed.replacingOccurrences(of: ",", with: ""))
+                }
+            }
             let stripped = trimmed.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: ".", with: "")
             return Double(stripped)
         }
@@ -291,7 +543,7 @@ public enum LocalTransactionParser {
     private static func extractMerchant(from text: String, fallbackType: TransactionType) -> String {
         // Common bank SMS/email phrases: "at MERCHANT", "to MERCHANT", "tai MERCHANT", "tại MERCHANT", "ND: ..."
         let merchantPatterns = [
-            #"(?i)(?:tại|tai|at|to|merchant[:\s]+)\s+([A-Za-zÀ-ỹ0-9 &'\-./]{2,45}?)(?:\s+(?:on|vào|vao|luc|lúc|ngày|ngay|with|bằng|bang|so du|số dư|sd|ref|ma gd|mã gd)\b|[.,;\n]|$)"#,
+            #"(?i)(?<![A-Za-zÀ-ỹ])(?:tại|tai|at|to|merchant[:\s]+)\s+([A-Za-zÀ-ỹ0-9 &'\-./]{2,45}?)(?:\s+(?:on|vào|vao|luc|lúc|ngày|ngay|with|bằng|bang|so du|số dư|sd|ref|ma gd|mã gd)\b|[.,;\n]|$)"#,
             #"(?i)(?:nội dung|noi dung|nd|content|desc(?:ription)?)[:\s]+([^\n.;]{2,50})"#,
         ]
         for pattern in merchantPatterns {
@@ -303,7 +555,12 @@ public enum LocalTransactionParser {
 
         // For short natural text ("ăn phở 65k", "coffee 6.50"), strip the numeric/currency part.
         var stripped = text
-        stripped = stripped.replacingOccurrences(of: #"(?i)[+-−]?\s*(?:SGD|S\$|VND|VNĐ|USD|US\$|MYR|RM|\$|€|£)?\s*\d[\d.,]*\s*(?:tr(?:i[eệ]u)?|k|ngh[iì]n|ng[aà]n|VND|VNĐ|SGD|USD|đ|d\b)?"#, with: " ", options: .regularExpression)
+        stripped = stripped.replacingOccurrences(
+            of: #"(?i)[+-−]?\s*(?:SGD|S\$|HKD|HK\$|VND|VNĐ|USD|US\$|MYR|RM|AUD|AU\$|A\$|CAD|CA\$|NZD|NZ\$|EUR|GBP|JPY|CNY|RMB|KRW|THB|TWD|NTD|IDR|Rp|PHP|CHF|INR|[\$€£¥₩฿₱₹])?\s*\d[\d.,]*\s*(?:tr(?:i[eệ]u)?|k|ngh[iì]n|ng[aà]n|VND|VNĐ|SGD|HKD|USD|MYR|AUD|CAD|EUR|GBP|JPY|CNY|RMB|KRW|THB|TWD|NTD|IDR|PHP|NZD|CHF|INR|đ|d\b)?"#,
+            with: " ",
+            options: .regularExpression
+        )
+        stripped = stripped.replacingOccurrences(of: #"(?-i)\b[A-Z]{3}\b(?=\s*$|\s+\d)"#, with: " ", options: .regularExpression)
         stripped = cleanMerchantName(stripped)
         if !stripped.isEmpty {
             return String(stripped.prefix(60))
@@ -323,6 +580,21 @@ public enum LocalTransactionParser {
         return collapsed.prefix(1).uppercased() + collapsed.dropFirst()
     }
 
+    private static let monthLookup: [String: Int] = [
+        "jan": 1, "january": 1,
+        "feb": 2, "february": 2,
+        "mar": 3, "march": 3,
+        "apr": 4, "april": 4,
+        "may": 5,
+        "jun": 6, "june": 6,
+        "jul": 7, "july": 7,
+        "aug": 8, "august": 8,
+        "sep": 9, "sept": 9, "september": 9,
+        "oct": 10, "october": 10,
+        "nov": 11, "november": 11,
+        "dec": 12, "december": 12,
+    ]
+
     private static func extractDate(from text: String) -> String? {
         // ISO YYYY-MM-DD
         if let m = firstMatch(#"\b(20\d{2})-(\d{2})-(\d{2})\b"#, in: text) {
@@ -335,7 +607,25 @@ public enum LocalTransactionParser {
             let key = String(format: "%04d-%02d-%02d", y, mo, d)
             if DateKey.date(fromDayKey: key) != nil { return key }
         }
+        // DD MMM YYYY (e.g. "25 Nov 2026")
+        if let m = firstMatch(#"\b(\d{1,2})\s+([A-Za-z]{3,9})\s+(20\d{2})\b"#, in: text),
+           let d = Int(m[1]), let mo = monthLookup[m[2].lowercased()], let y = Int(m[3]) {
+            let key = String(format: "%04d-%02d-%02d", y, mo, d)
+            if DateKey.date(fromDayKey: key) != nil { return key }
+        }
+        // MMM DD, YYYY (e.g. "Nov 25, 2026")
+        if let m = firstMatch(#"\b([A-Za-z]{3,9})\s+(\d{1,2}),?\s+(20\d{2})\b"#, in: text),
+           let mo = monthLookup[m[1].lowercased()], let d = Int(m[2]), let y = Int(m[3]) {
+            let key = String(format: "%04d-%02d-%02d", y, mo, d)
+            if DateKey.date(fromDayKey: key) != nil { return key }
+        }
         return nil
+    }
+
+    private static func normalizeApostrophes(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\u{2019}", with: "'")
+            .replacingOccurrences(of: "\u{2018}", with: "'")
     }
 
     private static func containsAny(_ text: String, _ keywords: [String]) -> Bool {

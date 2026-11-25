@@ -45,17 +45,7 @@ public struct OverviewView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    // Header controls: Period switcher + Paste Alert
-                    PeriodHeaderBar {
-                        PasteButton(payloadType: String.self) { items in
-                            if let text = items.first, !text.isEmpty {
-                                Task { await quickIngestPasted(text) }
-                            }
-                        }
-                        .labelStyle(.iconOnly)
-                        .buttonBorderShape(.capsule)
-                        .accessibilityLabel(L10n.text(lang, en: "Paste bank alert", vi: "Dán thông báo NH", zh: "粘贴银行通知"))
-                    }
+                    MonthSwitcher()
 
                     MemberFilterBar()
 
@@ -117,9 +107,9 @@ public struct OverviewView: View {
                                     .font(.appHeading)
                                 Text(L10n.text(
                                     lang,
-                                    en: "Add your first expense manually, paste a bank alert, or load sample household data to explore.",
-                                    vi: "Thêm khoản chi đầu tiên, dán thông báo ngân hàng, hoặc tải dữ liệu mẫu gia đình để trải nghiệm.",
-                                    zh: "手动记下第一笔支出、粘贴银行通知，或加载家庭示例数据快速体验。"
+                                    en: "Add your first expense manually, message Ask Tally, or explore with sample data.",
+                                    vi: "Thêm khoản chi đầu tiên, nhắn cho Tally, hoặc khám phá với dữ liệu mẫu.",
+                                    zh: "手动记下第一笔支出、给 Ask Tally 发消息，或使用示例数据体验。"
                                 ))
                                 .font(.appSecondary)
                                 .foregroundStyle(Color.textSecondary)
@@ -130,8 +120,8 @@ public struct OverviewView: View {
                                     }
                                     .pillButton()
 
-                                    Button(L10n.text(lang, en: "Smart paste", vi: "Dán thông báo", zh: "智能粘贴")) {
-                                        settings.isShowingSmartCapture = true
+                                    Button(L10n.text(lang, en: "Ask Tally", vi: "Hỏi Tally", zh: "问问 Tally")) {
+                                        settings.isShowingAskTally = true
                                     }
                                     .pillButton(prominent: true)
                                 }
@@ -144,46 +134,10 @@ public struct OverviewView: View {
             .readViewportWidth($viewportWidth)
             .pageBackground()
             .navigationTitle(L10n.text(lang, en: "Overview", vi: "Tổng quan", zh: "概览"))
-            .toolbar { TopToolbarControls() }
             .sheet(item: $editingTransaction) { tx in
                 TransactionEditorSheet(existing: tx)
             }
         }
-    }
-
-    private func quickIngestPasted(_ text: String) async {
-        let client = settings.autoParseWithAI ? settings.makeAIClient() : nil
-        guard let parsed = await AITransactionParser.parse(
-            text: text,
-            source: .bankNotification,
-            defaultCurrency: settings.currency,
-            language: settings.language,
-            client: client
-        ) else {
-            settings.isShowingSmartCapture = true
-            return
-        }
-        let member = settings.currentMember
-        let resolved = AITransactionParser.resolvedAmountAndNote(
-            for: parsed,
-            targetCurrency: settings.currency,
-            language: settings.language
-        )
-        let record = TransactionRecord(
-            name: parsed.name,
-            amountMinor: max(1, resolved.amountMinor),
-            type: parsed.type,
-            category: parsed.category,
-            dayKey: parsed.dayKey,
-            note: resolved.note,
-            source: parsed.parsedByAI ? .aiQuickAdd : .bankNotification,
-            rawSourceText: text,
-            memberID: member.id,
-            memberName: member.name,
-            needsReview: true
-        )
-        let outcome = store.saveAutoCapturedTransaction(record)
-        store.ensureVisible(dayKey: outcome.saved.dayKey)
     }
 
     // MARK: - Pending Review Banner
@@ -292,7 +246,7 @@ public struct OverviewView: View {
                                 .foregroundStyle(Color.textSecondary)
                         }
 
-                        Text(MoneyFormat.masked(MoneyFormat.format(minor: snapshot.netSavingsMinor, currency: settings.currency, language: lang), hidden: netHidden))
+                        Text(MoneyFormat.masked(settings.formatMoney(minor: snapshot.netSavingsMinor), hidden: netHidden))
                             .salaryMaskAccessibility(netHidden, language: lang)
                             .font(.appMetricHero)
                             .foregroundStyle(Color.textPrimary)
@@ -334,7 +288,7 @@ public struct OverviewView: View {
                             Text(L10n.text(lang, en: "Today's spending", vi: "Chi tiêu hôm nay", zh: "今日支出"))
                                 .font(.appCaption)
                                 .foregroundStyle(Color.textSecondary)
-                            Text(MoneyFormat.format(minor: snapshot.todaySpendingMinor, currency: settings.currency, language: lang))
+                            Text(settings.formatMoney(minor: snapshot.todaySpendingMinor))
                                 .font(.appHeading)
                                 .foregroundStyle(Color.textPrimary)
                                 .contentTransition(.numericText())
@@ -382,10 +336,14 @@ public struct OverviewView: View {
     private func metricsRow(_ snapshot: MonthlySnapshot, lang: AppLanguage) -> some View {
         let columnCount = viewportWidth >= 720 ? 4 : 2
         let columns = Array(repeating: GridItem(.flexible(), spacing: 12), count: columnCount)
+        let displayCurrency = settings.effectiveDisplayCurrency
+        let shownIncome = settings.displayMinor(snapshot.incomeMinor)
+        let shownSpending = settings.displayMinor(snapshot.spendingMinor)
+        let shownBudgetLeft = settings.displayMinor(snapshot.budgetLeftMinor)
         return LazyVGrid(columns: columns, spacing: 12) {
             metricTile(
                 title: L10n.text(lang, en: "Income", vi: "Thu nhập", zh: "收入"),
-                value: MoneyFormat.masked(MoneyFormat.format(minor: snapshot.incomeMinor, currency: settings.currency, language: lang, compact: settings.currency == .vnd && snapshot.incomeMinor >= 100_000_000_00), hidden: snapshot.isSalaryMasked(hidden: settings.hideSalary)),
+                value: MoneyFormat.masked(MoneyFormat.format(minor: shownIncome, currency: displayCurrency, language: lang, compact: displayCurrency == .vnd && shownIncome >= 100_000_000_00), hidden: snapshot.isSalaryMasked(hidden: settings.hideSalary)),
                 note: L10n.text(lang, en: "Received", vi: "Đã nhận", zh: "已入账"),
                 icon: .income,
                 isIncome: true
@@ -396,7 +354,7 @@ public struct OverviewView: View {
             }
             metricTile(
                 title: L10n.text(lang, en: "Spending", vi: "Chi tiêu", zh: "支出"),
-                value: MoneyFormat.format(minor: snapshot.spendingMinor, currency: settings.currency, language: lang, compact: settings.currency == .vnd && snapshot.spendingMinor >= 100_000_000_00),
+                value: MoneyFormat.format(minor: shownSpending, currency: displayCurrency, language: lang, compact: displayCurrency.isZeroDecimal && shownSpending >= 100_000_000_00),
                 note: snapshot.period.isFullMonth
                     ? L10n.text(lang, en: "Spent this month", vi: "Chi trong tháng", zh: "本月已花")
                     : snapshot.period.formattedTitle(language: lang),
@@ -411,10 +369,10 @@ public struct OverviewView: View {
                     ? L10n.text(lang, en: "Over budget", vi: "Vượt ngân sách", zh: "已超预算")
                     : L10n.text(lang, en: "Budget left", vi: "Ngân sách còn", zh: "剩余预算"),
                 value: snapshot.budgetTotalMinor > 0
-                    ? MoneyFormat.format(minor: abs(snapshot.budgetLeftMinor), currency: settings.currency, language: lang, compact: settings.currency == .vnd && abs(snapshot.budgetLeftMinor) >= 100_000_000_00)
+                    ? MoneyFormat.format(minor: abs(shownBudgetLeft), currency: displayCurrency, language: lang, compact: displayCurrency.isZeroDecimal && abs(shownBudgetLeft) >= 100_000_000_00)
                     : "—",
                 note: snapshot.budgetTotalMinor > 0
-                    ? "\(L10n.text(lang, en: "of", vi: "trên", zh: "共")) \(MoneyFormat.format(minor: snapshot.budgetTotalMinor, currency: settings.currency, language: lang, compact: true))"
+                    ? "\(L10n.text(lang, en: "of", vi: "trên", zh: "共")) \(settings.formatMoney(minor: snapshot.budgetTotalMinor, compact: true))"
                     : L10n.text(lang, en: "Set limits in Budgets", vi: "Đặt hạn mức", zh: "去设置预算"),
                 icon: .budget
             ) {
@@ -507,6 +465,7 @@ public struct OverviewView: View {
     private func cashFlowCard(_ snapshot: MonthlySnapshot, lang: AppLanguage) -> some View {
         let incomeLabel = L10n.text(lang, en: "Income", vi: "Thu", zh: "收入")
         let spendLabel = L10n.text(lang, en: "Spending", vi: "Chi", zh: "支出")
+        let displayCurrency = settings.effectiveDisplayCurrency
         let hideSalary = settings.hideSalary
         // Only weeks whose income includes salary lose their income bar; others are drawn.
         let plottedIncomeBins = snapshot.weeklyCashFlow.filter { !$0.isSalaryMasked(hidden: hideSalary) }
@@ -540,7 +499,7 @@ public struct OverviewView: View {
                     if !bin.isSalaryMasked(hidden: hideSalary) {
                         BarMark(
                             x: .value("Week", bin.label),
-                            y: .value(incomeLabel, settings.currency.toMajor(bin.incomeMinor))
+                            y: .value(incomeLabel, settings.displayMajor(bin.incomeMinor))
                         )
                         .foregroundStyle(Color.positive.opacity(isDimmed ? 0.28 : 0.75))
                         .cornerRadius(4)
@@ -549,7 +508,7 @@ public struct OverviewView: View {
 
                     BarMark(
                         x: .value("Week", bin.label),
-                        y: .value(spendLabel, settings.currency.toMajor(bin.spendingMinor))
+                        y: .value(spendLabel, settings.displayMajor(bin.spendingMinor))
                     )
                     .foregroundStyle(Color.ink.opacity(isDimmed ? 0.36 : 1.0))
                     .cornerRadius(4)
@@ -563,7 +522,7 @@ public struct OverviewView: View {
                     AxisGridLine().foregroundStyle(Color.hairline)
                     AxisValueLabel {
                         if let num = val.as(Double.self) {
-                            Text(MoneyFormat.format(minor: settings.currency.toStorageMinor(num), currency: settings.currency, language: lang, compact: true))
+                            Text(MoneyFormat.format(minor: displayCurrency.toStorageMinor(num), currency: displayCurrency, language: lang, compact: true))
                                 .font(.appCaption)
                                 .foregroundStyle(Color.textSecondary)
                         }
@@ -600,18 +559,12 @@ public struct OverviewView: View {
                             cashFlowTooltipCard(
                                 title: bin.label,
                                 incomeLabel: incomeLabel,
-                                incomeText: MoneyFormat.masked(MoneyFormat.format(
+                                incomeText: MoneyFormat.masked(settings.formatMoney(
                                     minor: bin.incomeMinor,
-                                    currency: settings.currency,
-                                    language: lang,
                                     signed: bin.incomeMinor > 0
                                 ), hidden: bin.isSalaryMasked(hidden: hideSalary)),
                                 spendLabel: spendLabel,
-                                spendText: MoneyFormat.format(
-                                    minor: bin.spendingMinor,
-                                    currency: settings.currency,
-                                    language: lang
-                                )
+                                spendText: settings.formatMoney(minor: bin.spendingMinor)
                             )
                             .position(x: clampedX, y: plotRect.minY + 26)
                         }
@@ -728,7 +681,7 @@ public struct OverviewView: View {
                         .frame(width: 126, height: 126)
 
                         VStack(spacing: 1) {
-                            Text(MoneyFormat.format(minor: snapshot.spendingMinor, currency: settings.currency, language: lang, compact: true))
+                            Text(settings.formatMoney(minor: snapshot.spendingMinor, compact: true))
                                 .font(.appControl)
                                 .lineLimit(1)
                             Text(L10n.text(lang, en: "Spent", vi: "Tổng chi", zh: "总支出"))
@@ -751,7 +704,7 @@ public struct OverviewView: View {
                                         .foregroundStyle(Color.textSecondary)
                                         .lineLimit(1)
                                     Spacer(minLength: 4)
-                                    Text(MoneyFormat.format(minor: item.spentMinor, currency: settings.currency, language: lang, compact: settings.currency == .vnd))
+                                    Text(settings.formatMoney(minor: item.spentMinor, compact: settings.effectiveDisplayCurrency.isZeroDecimal))
                                         .font(.appCaption.weight(.semibold))
                                         .monospacedDigit()
                                 }
@@ -847,7 +800,7 @@ public struct OverviewView: View {
                                 }
                                 Spacer(minLength: 8)
                                 VStack(alignment: .trailing, spacing: 1) {
-                                    Text(MoneyFormat.format(minor: next.payment.amountMinor, currency: settings.currency, language: lang))
+                                    Text(settings.formatMoney(minor: next.payment.amountMinor))
                                         .font(.appAmount)
                                         .foregroundStyle(Color.textPrimary)
                                         .lineLimit(1)
@@ -876,7 +829,7 @@ public struct OverviewView: View {
             Text(title)
                 .font(.appCaption)
                 .foregroundStyle(Color.textSecondary)
-            Text(MoneyFormat.format(minor: minor, currency: settings.currency, language: lang))
+            Text(settings.formatMoney(minor: minor))
                 .font(.appMetric)
                 .foregroundStyle(Color.textPrimary)
                 .lineLimit(1)
@@ -913,7 +866,7 @@ public struct OverviewView: View {
                                     Tag(text: "\(goal.percent)%", color: goal.icon.color)
                                 }
                                 TallyProgressBar(value: goal.progress, fill: goal.icon.color)
-                                Text("\(MoneyFormat.format(minor: goal.savedMinor, currency: settings.currency, language: lang)) / \(MoneyFormat.format(minor: goal.targetMinor, currency: settings.currency, language: lang))")
+                                Text("\(settings.formatMoney(minor: goal.savedMinor)) / \(settings.formatMoney(minor: goal.targetMinor))")
                                     .font(.appCaption)
                                     .foregroundStyle(Color.textSecondary)
                             }

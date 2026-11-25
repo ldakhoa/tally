@@ -175,4 +175,73 @@ public enum KeychainStore {
     public static func mcpTokenCreatingIfNeeded() -> String? {
         readMCPToken() ?? regenerateMCPToken()
     }
+
+    // MARK: - Cloud MCP Credentials (synced across user's devices via iCloud Keychain)
+
+    public struct CloudMCPCredentials: Codable, Equatable, Sendable {
+        public var url: String
+        public var syncSecret: String
+        public var accessToken: String
+
+        public init(url: String, syncSecret: String, accessToken: String) {
+            self.url = url
+            self.syncSecret = syncSecret
+            self.accessToken = accessToken
+        }
+    }
+
+    private static let cloudMCPService = "com.ldakhoa.tally.mcp-cloud"
+    private static let cloudMCPAccount = "credentials"
+
+    public static func hasCloudMCPCredentials() -> Bool {
+        readCloudMCPCredentials() != nil
+    }
+
+    public static func readCloudMCPCredentials() -> CloudMCPCredentials? {
+        for kind in APIKeyKeychain.kinds() {
+            var q = APIKeyKeychain.query(kind, service: cloudMCPService, account: cloudMCPAccount)
+            q[kSecReturnData as String] = true
+            q[kSecMatchLimit as String] = kSecMatchLimitOne
+            var item: CFTypeRef?
+            guard SecItemCopyMatching(q as CFDictionary, &item) == errSecSuccess,
+                  let data = item as? Data,
+                  let decoded = try? JSONDecoder().decode(CloudMCPCredentials.self, from: data),
+                  !decoded.url.isEmpty,
+                  !decoded.syncSecret.isEmpty,
+                  !decoded.accessToken.isEmpty
+            else { continue }
+            return decoded
+        }
+        return nil
+    }
+
+    @discardableResult
+    public static func saveCloudMCPCredentials(_ credentials: CloudMCPCredentials) -> Bool {
+        guard let encoded = try? JSONEncoder().encode(credentials) else { return false }
+        deleteCloudMCPCredentials()
+        for kind in APIKeyKeychain.kinds() {
+            var q = APIKeyKeychain.query(kind, service: cloudMCPService, account: cloudMCPAccount)
+            q[kSecValueData as String] = encoded
+            q[kSecAttrGeneric as String] = Data(credentials.url.utf8)
+            for (k, v) in APIKeyKeychain.addAttributes(kind) { q[k] = v }
+            let status = SecItemAdd(q as CFDictionary, nil)
+            if status == errSecSuccess { return true }
+            guard kind == .shared, APIKeyKeychain.isUnavailable(status) else { return false }
+        }
+        return false
+    }
+
+    public static func regenerateCloudMCPAccessToken() -> CloudMCPCredentials? {
+        guard var current = readCloudMCPCredentials() else { return nil }
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { return nil }
+        current.accessToken = bytes.map { String(format: "%02x", $0) }.joined()
+        return saveCloudMCPCredentials(current) ? current : nil
+    }
+
+    public static func deleteCloudMCPCredentials() {
+        for kind in APIKeyKeychain.kinds() {
+            SecItemDelete(APIKeyKeychain.query(kind, service: cloudMCPService, account: cloudMCPAccount) as CFDictionary)
+        }
+    }
 }

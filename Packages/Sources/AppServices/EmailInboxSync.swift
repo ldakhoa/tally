@@ -69,9 +69,14 @@ public final class EmailInboxSync {
 
         do {
             // Drain all pending batches (up to 10 batches = 500 emails max per sync).
+            var didRefreshRates = false
             for _ in 0..<10 {
                 let alerts = try await inboxClient.fetchInbox()
                 guard !alerts.isEmpty else { break }
+                if !didRefreshRates {
+                    didRefreshRates = true
+                    await ExchangeRateService.shared.refreshIfStale()
+                }
 
                 lastPulledCount += alerts.count
                 // Includes tombstones: an alert the user deleted (or converted into an
@@ -134,9 +139,12 @@ public final class EmailInboxSync {
                                 rawSourceText: alert.combinedText,
                                 memberID: memberID,
                                 memberName: memberName,
-                                needsReview: settings.flagAutoCapturedForReview,
+                                needsReview: settings.flagAutoCapturedForReview || resolved.usedFallbackUnavailableRate,
                                 updatedAt: Date(),
-                                isDeleted: false
+                                isDeleted: false,
+                                originalAmountMinor: resolved.originalAmountMinor,
+                                originalCurrencyCode: resolved.originalCurrencyCode,
+                                exchangeRate: resolved.exchangeRate
                             )
                             let outcome = store.saveAutoCapturedTransaction(record, notifyCloud: true)
                             if !outcome.wasDuplicate {

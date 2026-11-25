@@ -17,6 +17,9 @@ public struct TallyBackupDocument: Codable, Hashable, Sendable {
         /// Native-app extensions (absent in Tally Web backups).
         public var planID: String?
         public var planPaymentIndex: Int?
+        public var originalAmount: Int64?
+        public var originalCurrency: String?
+        public var exchangeRate: Double?
     }
 
     /// Installment/loan plan (native-app extension; Tally Web backups have no `plans` key).
@@ -109,7 +112,10 @@ public enum WebBackupCodec {
                 memberID: tx.memberID,
                 memberName: tx.memberName.isEmpty ? nil : tx.memberName,
                 planID: tx.planID,
-                planPaymentIndex: tx.planPaymentIndex
+                planPaymentIndex: tx.planPaymentIndex,
+                originalAmount: tx.originalAmountMinor,
+                originalCurrency: tx.originalCurrencyCode,
+                exchangeRate: tx.exchangeRate
             )
         }
         var budgetMap: [String: Int64] = [:]
@@ -192,6 +198,9 @@ public enum WebBackupCodec {
                   item.amount > 0
             else { return nil }
             let source = item.source.flatMap(TransactionSource.init(rawValue:)) ?? .imported
+            let origCurrency = item.originalCurrency.flatMap(CurrencyCode.normalizeCode)
+            let origAmount = (origCurrency != nil && (item.originalAmount ?? 0) > 0) ? item.originalAmount : nil
+            let origRate = (origAmount != nil && (item.exchangeRate ?? 0) > 0 && item.exchangeRate?.isFinite == true) ? item.exchangeRate : nil
             return TransactionRecord(
                 id: item.id,
                 name: item.name,
@@ -207,7 +216,10 @@ public enum WebBackupCodec {
                 needsReview: false,
                 updatedAt: now,
                 planID: item.planID,
-                planPaymentIndex: item.planPaymentIndex
+                planPaymentIndex: item.planPaymentIndex,
+                originalAmountMinor: origAmount,
+                originalCurrencyCode: origAmount != nil ? origCurrency : nil,
+                exchangeRate: origRate
             )
         }
 
@@ -300,9 +312,15 @@ public enum SampleBudgetData {
         myName: String = "Khoa",
         partnerName: String = "Wife"
     ) -> (transactions: [TransactionRecord], budgets: [BudgetLimitRecord], goals: [SavingsGoalRecord]) {
-        let scale: Double = currency == .vnd ? 18_500.0 : 1.0
         func amt(_ sgd: Double) -> Int64 {
-            let value = currency == .vnd ? (sgd * scale).rounded() : sgd
+            let value: Double
+            if currency == .vnd {
+                value = (sgd * 18_500.0).rounded()
+            } else if currency == .sgd {
+                value = sgd
+            } else {
+                value = ExchangeRateTable.fallback.convert(sgd, from: "SGD", to: currency)?.convertedMajor ?? sgd
+            }
             return currency.toStorageMinor(max(1, value))
         }
         let resolvedLang = language.resolved

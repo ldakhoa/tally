@@ -19,7 +19,7 @@ const GMAIL_QUERY = [
   '-subject:(promo OR promotion OR voucher OR cashback OR "up to" OR offer OR newsletter OR statement OR "ưu đãi" OR "khuyến mãi" OR "giảm giá" OR "cơ hội" OR "mời bạn" OR OTP)',
   "(",
   'subject:("Transaction Alert" OR "Card Transaction" OR "PayNow" OR "PayLah" OR "Funds Transfer" OR "Your Grab E-Receipt" OR "Payment Confirmation" OR "Biến động số dư" OR "Thông báo giao dịch")',
-  'OR (from:(dbs.com OR dbs.com.sg OR posb.com.sg OR ocbc.com OR uobgroup.com OR uob.com.sg OR trustbank.sg OR citi.com OR sc.com OR hsbc OR maribank OR gxsbank OR youtrip OR vietcombank OR techcombank OR mbbank OR tpbank) ("SGD" OR "VND" OR "USD" OR "S$" OR "transferred" OR "debited" OR "credited" OR "payment"))',
+  'OR (from:(dbs.com OR dbs.com.sg OR posb.com.sg OR ocbc.com OR uobgroup.com OR uob.com.sg OR trustbank.sg OR citi.com OR sc.com OR hsbc OR maribank OR gxsbank OR youtrip OR vietcombank OR techcombank OR mbbank OR tpbank) ("SGD" OR "VND" OR "USD" OR "HKD" OR "JPY" OR "CNY" OR "MYR" OR "THB" OR "EUR" OR "GBP" OR "S$" OR "spent" OR "transferred" OR "debited" OR "credited" OR "payment"))',
   ")"
 ].join(" ");
 

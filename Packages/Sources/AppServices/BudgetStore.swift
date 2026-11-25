@@ -69,7 +69,25 @@ public final class BudgetStore {
     public var activityCategoryFilter: CategoryID? = nil
 
     @ObservationIgnored public var onLocalChanges: (([ChangedSyncRecord]) -> Void)?
+    @ObservationIgnored private var mutationObservers: [UUID: () -> Void] = [:]
     @ObservationIgnored private let context: ModelContext
+
+    @discardableResult
+    public func addMutationObserver(_ handler: @escaping () -> Void) -> UUID {
+        let id = UUID()
+        mutationObservers[id] = handler
+        return id
+    }
+
+    public func removeMutationObserver(_ id: UUID) {
+        mutationObservers.removeValue(forKey: id)
+    }
+
+    private func notifyMutationObservers() {
+        for observer in mutationObservers.values {
+            observer()
+        }
+    }
 
     // Memoized analytics caches (O(1) reads during 120fps tab switches & scrolling)
     @ObservationIgnored private var _activeTransactions: [TransactionRecord]?
@@ -138,15 +156,24 @@ public final class BudgetStore {
         let dayChanged = todayKey != lastReloadDayKey
         lastReloadDayKey = todayKey
 
-        if dayChanged || newTransactions != transactions { transactions = newTransactions }
-        if dayChanged || newBudgets != budgets { budgets = newBudgets }
-        if newGoals != goals { goals = newGoals }
-        if newPlans != plans { plans = newPlans }
+        let txChanged = newTransactions != transactions
+        let budgetChanged = newBudgets != budgets
+        let goalChanged = newGoals != goals
+        let planChanged = newPlans != plans
+        let dataChanged = txChanged || budgetChanged || goalChanged || planChanged
+
+        if dayChanged || txChanged { transactions = newTransactions }
+        if dayChanged || budgetChanged { budgets = newBudgets }
+        if goalChanged { goals = newGoals }
+        if planChanged { plans = newPlans }
 
         // Launch, foreground (`TallyApp` reloads on scene activation) and day rollover: book any
         // installment/loan payments that fell due since the last run.
         if dayChanged && !isMaterializingPlans && !activePlans.isEmpty {
             materializeDuePlanPayments(todayKey: todayKey)
+        }
+        if dataChanged {
+            notifyMutationObservers()
         }
     }
 
@@ -181,6 +208,10 @@ public final class BudgetStore {
         let computed = plans.filter { !$0.isDeleted }
         _activePlans = computed
         return computed
+    }
+
+    public var hasActiveRecords: Bool {
+        !activeTransactions.isEmpty || !activeBudgets.isEmpty || !activeGoals.isEmpty || !activePlans.isEmpty
     }
 
     public var pendingReviewTransactions: [TransactionRecord] {
@@ -842,7 +873,7 @@ public final class BudgetStore {
 
     public func importBackup(_ data: Data, settings: AppSettings) throws {
         let decoded = try WebBackupCodec.decode(data)
-        settings.currency = decoded.currency
+        settings.setHouseholdCurrency(decoded.currency)
         var changed: [ChangedSyncRecord] = []
         for tx in decoded.transactions {
             upsertTransaction(tx)
@@ -894,6 +925,67 @@ public final class BudgetStore {
         onLocalChanges?(changed)
     }
 
+    // MARK: - Household Currency Conversion
+
+    @discardableResult
+    public func convertCurrency(
+        from oldCurrency: CurrencyCode,
+        to newCurrency: CurrencyCode,
+        rates: ExchangeRateTable,
+        settings: AppSettings,
+        todayKey: String = DateKey.dayKey(from: Date()),
+        now: Date = Date(),
+        notifyCloud: Bool = true
+    ) -> Bool {
+        guard let result = CurrencyLedgerConverter.convert(
+            from: oldCurrency,
+            to: newCurrency,
+            rates: rates,
+            transactions: transactions,
+            budgets: budgets,
+            goals: goals,
+            plans: plans,
+            todayKey: todayKey,
+            now: now
+        ) else { return false }
+
+        let changedPlanSet = Set(result.changedPlanIDs)
+        let changedTxSet = Set(result.changedTransactionIDs)
+        let changedBudgetSet = Set(result.changedBudgetIDs)
+        let changedGoalSet = Set(result.changedGoalIDs)
+
+        for plan in result.plans where changedPlanSet.contains(plan.id) {
+            upsertPlan(plan)
+        }
+        for tx in result.transactions where changedTxSet.contains(tx.id) {
+            upsertTransaction(tx)
+        }
+        for budget in result.budgets where changedBudgetSet.contains(budget.id) {
+            upsertBudget(budget)
+        }
+        for goal in result.goals where changedGoalSet.contains(goal.id) {
+            upsertGoal(goal)
+        }
+
+        try? context.save()
+        isMaterializingPlans = true
+        reload()
+        isMaterializingPlans = false
+
+        settings.setHouseholdCurrency(newCurrency, updatedAt: now, notifyCloud: notifyCloud)
+
+        let changed: [ChangedSyncRecord] =
+            result.changedPlanIDs.map { ChangedSyncRecord(kind: .plan, id: $0) }
+            + result.changedTransactionIDs.map { ChangedSyncRecord(kind: .transaction, id: $0) }
+            + result.changedBudgetIDs.map { ChangedSyncRecord(kind: .budget, id: $0) }
+            + result.changedGoalIDs.map { ChangedSyncRecord(kind: .goal, id: $0) }
+
+        if notifyCloud, !changed.isEmpty {
+            onLocalChanges?(changed)
+        }
+        return true
+    }
+
     // MARK: - Cloud Merge (does not re-trigger outbound sync)
 
     /// Merges transactions from iCloud (`SyncMerge`). Plan payments that arrive for a plan this
@@ -901,26 +993,29 @@ public final class BudgetStore {
     /// derived from an older revision is rewritten or withdrawn and the revision is announced to
     /// CloudSync. Payments for plans not seen yet are reconciled when the plan arrives
     /// (`applyRemotePlans`).
-    public func applyRemoteTransactions(_ incoming: [TransactionRecord], todayKey: String = DateKey.dayKey(from: Date())) {
+    public func applyRemoteTransactions(_ incoming: [TransactionRecord], todayKey: String = DateKey.dayKey(from: Date()), notifyCloud: Bool = false) {
         guard !incoming.isEmpty else { return }
         let localByID = Dictionary(transactions.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var didChange = false
+        var changedRecords: [ChangedSyncRecord] = []
         var touchedPayments: [String: [String: TransactionRecord]] = [:]
         for remote in incoming {
             let local = localByID[remote.id]
             let merged = SyncMerge.mergeTransaction(local: local, remote: remote)
             guard merged != local else { continue }
             upsertTransaction(merged)
-            didChange = true
+            changedRecords.append(ChangedSyncRecord(kind: .transaction, id: merged.id))
             if merged.isPlanPayment, let planID = merged.planID {
                 touchedPayments[planID, default: [:]][merged.id] = merged
             }
         }
-        guard didChange else { return }
+        guard !changedRecords.isEmpty else { return }
         try? context.save()
         isMaterializingPlans = true
         reload()
         isMaterializingPlans = false
+        if notifyCloud {
+            onLocalChanges?(changedRecords)
+        }
 
         // Reconcile arriving payments against the locally winning plan revision: a payment
         // derived from an older revision is rewritten or withdrawn (the result is a join, so a
@@ -943,36 +1038,42 @@ public final class BudgetStore {
         deduplicateExistingTransactions(notifyCloud: true)
     }
 
-    public func applyRemoteBudgets(_ incoming: [BudgetLimitRecord]) {
+    public func applyRemoteBudgets(_ incoming: [BudgetLimitRecord], notifyCloud: Bool = false) {
         guard !incoming.isEmpty else { return }
         let localByID = Dictionary(budgets.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var didChange = false
+        var changedRecords: [ChangedSyncRecord] = []
         for remote in incoming {
             let local = localByID[remote.id]
             let merged = SyncMerge.mergeBudget(local: local, remote: remote)
             guard merged != local else { continue }
             upsertBudget(merged)
-            didChange = true
+            changedRecords.append(ChangedSyncRecord(kind: .budget, id: merged.id))
         }
-        guard didChange else { return }
+        guard !changedRecords.isEmpty else { return }
         try? context.save()
         reload()
+        if notifyCloud {
+            onLocalChanges?(changedRecords)
+        }
     }
 
-    public func applyRemoteGoals(_ incoming: [SavingsGoalRecord]) {
+    public func applyRemoteGoals(_ incoming: [SavingsGoalRecord], notifyCloud: Bool = false) {
         guard !incoming.isEmpty else { return }
         let localByID = Dictionary(goals.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var didChange = false
+        var changedRecords: [ChangedSyncRecord] = []
         for remote in incoming {
             let local = localByID[remote.id]
             let merged = SyncMerge.mergeGoal(local: local, remote: remote)
             guard merged != local else { continue }
             upsertGoal(merged)
-            didChange = true
+            changedRecords.append(ChangedSyncRecord(kind: .goal, id: merged.id))
         }
-        guard didChange else { return }
+        guard !changedRecords.isEmpty else { return }
         try? context.save()
         reload()
+        if notifyCloud {
+            onLocalChanges?(changedRecords)
+        }
     }
 
     /// Merges plans from iCloud (LWW + tombstones), then books payments that are due. Plans
@@ -981,7 +1082,7 @@ public final class BudgetStore {
     /// withdrawn when outside the owed schedule or not yet due here, removed when the plan was
     /// deleted with its payments; user-decided payments are left alone). Only those payment revisions and newly booked payments are announced to
     /// CloudSync; the merged plans themselves are not echoed back, so there is no loop.
-    public func applyRemotePlans(_ incoming: [InstallmentPlanRecord], todayKey: String = DateKey.dayKey(from: Date())) {
+    public func applyRemotePlans(_ incoming: [InstallmentPlanRecord], todayKey: String = DateKey.dayKey(from: Date()), notifyCloud: Bool = false) {
         let valid = incoming.filter { $0.isDeleted || $0.hasValidTerms }
         guard !valid.isEmpty else { return }
         let localByID = Dictionary(plans.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
@@ -1007,8 +1108,10 @@ public final class BudgetStore {
         isMaterializingPlans = true
         reload()
         isMaterializingPlans = false
-        if !changedPayments.isEmpty {
-            onLocalChanges?(changedPayments)
+        let planChanges = notifyCloud ? changedPlans.map { ChangedSyncRecord(kind: .plan, id: $0.id) } : []
+        let allChanges = planChanges + changedPayments
+        if !allChanges.isEmpty {
+            onLocalChanges?(allChanges)
         }
         materializeDuePlanPayments(todayKey: todayKey, notifyCloud: true)
     }
@@ -1033,7 +1136,11 @@ public final class BudgetStore {
         dayKey: String = DateKey.dayKey(from: Date()),
         note: String = "",
         source: TransactionSource,
-        rawSourceText: String? = nil
+        rawSourceText: String? = nil,
+        originalAmountMinor: Int64? = nil,
+        originalCurrencyCode: String? = nil,
+        exchangeRate: Double? = nil,
+        needsReviewOverride: Bool? = nil
     ) -> TransactionRecord {
         let settings = AppSettings()
         let member = settings.currentMember
@@ -1050,9 +1157,12 @@ public final class BudgetStore {
             rawSourceText: rawSourceText,
             memberID: member.id,
             memberName: member.name,
-            needsReview: settings.flagAutoCapturedForReview,
+            needsReview: needsReviewOverride ?? settings.flagAutoCapturedForReview,
             updatedAt: Date(),
-            isDeleted: false
+            isDeleted: false,
+            originalAmountMinor: originalAmountMinor,
+            originalCurrencyCode: originalCurrencyCode,
+            exchangeRate: exchangeRate
         )
 
         if let live = BudgetStore.current {

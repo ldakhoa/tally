@@ -20,12 +20,6 @@ struct TallyCommands: Commands {
             }
             .keyboardShortcut("n", modifiers: .command)
 
-            Button(L10n.text(lang, en: "Smart Paste", vi: "Dán thông báo", zh: "智能粘贴")) {
-                CozyHaptics.light()
-                settings.isShowingSmartCapture = true
-            }
-            .keyboardShortcut("v", modifiers: [.command, .shift])
-
             Button(L10n.text(lang, en: "Ask Tally AI", vi: "Hỏi Trợ lý Tally AI", zh: "问问 Tally AI")) {
                 CozyHaptics.light()
                 settings.isShowingAskTally = true

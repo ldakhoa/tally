@@ -26,6 +26,10 @@ public final class SDTransaction {
     // JSON-encoded `PlanPaymentState` of a plan payment. Optional so existing stores migrate
     // lightweight.
     public var paymentStateData: Data?
+    // Added for foreign-currency transactions. Optional so existing stores migrate lightweight.
+    public var originalAmountMinor: Int64?
+    public var originalCurrencyCode: String?
+    public var exchangeRate: Double?
 
     public init(from record: TransactionRecord) {
         self.recordID = record.id
@@ -46,6 +50,9 @@ public final class SDTransaction {
         self.planID = record.planID
         self.planPaymentIndex = record.planPaymentIndex
         self.paymentStateData = Self.encode(record.paymentState)
+        self.originalAmountMinor = record.originalAmountMinor
+        self.originalCurrencyCode = record.originalCurrencyCode
+        self.exchangeRate = record.exchangeRate
     }
 
     public func apply(_ record: TransactionRecord) {
@@ -66,6 +73,9 @@ public final class SDTransaction {
         planID = record.planID
         planPaymentIndex = record.planPaymentIndex
         paymentStateData = Self.encode(record.paymentState)
+        originalAmountMinor = record.originalAmountMinor
+        originalCurrencyCode = record.originalCurrencyCode
+        exchangeRate = record.exchangeRate
     }
 
     public var record: TransactionRecord {
@@ -87,7 +97,10 @@ public final class SDTransaction {
             isDeleted: isDeleted,
             planID: planID,
             planPaymentIndex: planPaymentIndex,
-            paymentState: paymentStateData.flatMap { try? JSONDecoder().decode(PlanPaymentState.self, from: $0) }
+            paymentState: paymentStateData.flatMap { try? JSONDecoder().decode(PlanPaymentState.self, from: $0) },
+            originalAmountMinor: originalAmountMinor,
+            originalCurrencyCode: originalCurrencyCode,
+            exchangeRate: exchangeRate
         )
     }
 

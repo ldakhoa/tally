@@ -10,6 +10,8 @@
 	<true/>
 	<key>NSFaceIDUsageDescription</key>
 	<string>Tally uses Face ID to confirm it is you before showing your salary.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Tally uses the camera to scan an MCP setup QR code from another device.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Tally uses the microphone to dictate expenses, budgets, and questions in English, Vietnamese, or Chinese.</string>
 	<key>NSSpeechRecognitionUsageDescription</key>

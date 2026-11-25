@@ -5,3 +5,4 @@ Packages/.swiftpm/
 *.xcuserdata
 *.xcscmblueprint
 .wrangler/
+node_modules/

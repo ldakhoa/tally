@@ -1,0 +1,141 @@
+#!/bin/bash
+# Deploys Tally's always-on Cloud MCP server (`tools/mcp-server`) to Cloudflare Workers,
+# generates random sync & MCP access secrets, and opens Tally on Mac to save and sync them.
+#
+#   tools/deploy-mcp            deploy and open Tally with the pairing link
+#   tools/deploy-mcp --no-open  deploy only (prints summary)
+#   tools/deploy-mcp --json     deploy and print {"url","syncSecret","accessToken"} JSON
+set -euo pipefail
+
+export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+worker_dir="$root/tools/mcp-server"
+
+json_mode=0
+open_app=1
+for arg in "$@"; do
+    case "$arg" in
+    --json)
+        json_mode=1
+        open_app=0
+        ;;
+    --no-open)
+        open_app=0
+        ;;
+    -h | --help)
+        sed -n '2,8p' "$0" | sed 's/^# \{0,1\}//'
+        exit 0
+        ;;
+    *)
+        echo "Unknown option: $arg" >&2
+        exit 1
+        ;;
+    esac
+done
+
+log() {
+    if [ "$json_mode" = 1 ]; then
+        echo "$*" >&2
+    else
+        echo "$*"
+    fi
+}
+
+require_cmd() {
+    if ! command -v "$1" >/dev/null 2>&1; then
+        echo "Missing required tool '$1'. Install Node.js / Homebrew and retry." >&2
+        exit 1
+    fi
+}
+
+require_cmd node
+require_cmd npm
+require_cmd openssl
+require_cmd curl
+
+cd "$worker_dir"
+
+if [ ! -d node_modules ] || [ ! -x node_modules/.bin/wrangler ]; then
+    log "== Installing Cloudflare Worker dependencies..."
+    npm install --no-audit --no-fund >&2
+fi
+
+wrangler="$worker_dir/node_modules/.bin/wrangler"
+
+log "== Checking Cloudflare account..."
+if ! "$wrangler" whoami >/dev/null 2>&1; then
+    if [ -t 0 ] && [ "$json_mode" = 0 ]; then
+        log "== Opening Cloudflare login in your browser..."
+        "$wrangler" login
+    else
+        echo "Cloudflare Wrangler is not logged in. Run 'cd $worker_dir && npx wrangler login' once, then tap 1-Tap Setup again." >&2
+        exit 1
+    fi
+fi
+
+sync_secret="$(openssl rand -hex 32)"
+access_token="$(openssl rand -hex 32)"
+
+log "== Deploying tally-mcp-server to Cloudflare Workers..."
+deploy_log="$(mktemp -t tally-mcp-deploy)"
+trap 'rm -f "$deploy_log"' EXIT
+
+if ! "$wrangler" deploy >"$deploy_log" 2>&1; then
+    cat "$deploy_log" >&2
+    exit 1
+fi
+
+worker_url="$(grep -Eo 'https://[a-zA-Z0-9._-]+\.workers\.dev' "$deploy_log" | head -n 1 || true)"
+if [ -z "$worker_url" ]; then
+    cat "$deploy_log" >&2
+    echo "Could not detect deployed workers.dev URL from wrangler output." >&2
+    exit 1
+fi
+log "== Deployed: $worker_url"
+
+log "== Saving TALLY_SYNC_SECRET in Cloudflare..."
+printf '%s' "$sync_secret" | "$wrangler" secret put TALLY_SYNC_SECRET >/dev/null 2>&1
+
+log "== Configuring initial MCP access token on Worker..."
+config_payload="$(node -e 'process.stdout.write(JSON.stringify({mcpToken: process.argv[1], mcpEnabled: true}))' "$access_token")"
+status=0
+for attempt in $(seq 1 10); do
+    status="$(curl -sS -o /dev/null -w '%{http_code}' -X POST "$worker_url/v1/config" \
+        -H "Authorization: Bearer $sync_secret" \
+        -H "Content-Type: application/json" \
+        --data "$config_payload" || echo "000")"
+    if [ "$status" = "200" ]; then
+        break
+    fi
+    sleep 1
+done
+
+if [ "$status" != "200" ]; then
+    echo "Worker deployed at $worker_url, but initial /v1/config returned HTTP $status." >&2
+    exit 1
+fi
+
+if [ "$json_mode" = 1 ]; then
+    node -e 'console.log(JSON.stringify({url: process.argv[1], syncSecret: process.argv[2], accessToken: process.argv[3]}))' \
+        "$worker_url" "$sync_secret" "$access_token"
+    exit 0
+fi
+
+deep_link="$(node -e '
+const u = new URL("tally://mcp");
+u.searchParams.set("url", process.argv[1]);
+u.searchParams.set("sync", process.argv[2]);
+u.searchParams.set("token", process.argv[3]);
+process.stdout.write(u.toString());
+' "$worker_url" "$sync_secret" "$access_token")"
+
+echo "== Ready!"
+echo "Worker URL: $worker_url"
+
+if [ "$open_app" = 1 ]; then
+    echo "== Opening Tally to finish pairing..."
+    open "$deep_link" || true
+else
+    echo "Pairing link: $deep_link"
+fi

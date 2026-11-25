@@ -34,7 +34,7 @@ let featureModules: [(name: String, dependencies: [String])] = [
     ("AssistantUI", ["TallyCore", "ClaudeKit", "BudgetKit", "DesignSystem", "AppServices", "SharedUI"]),
     // Tier 2 (top): Settings sheet and panes.
     ("SettingsUI", [
-        "TallyCore", "ThemeTokens", "ClaudeKit", "BudgetKit", "SyncKit", "DesignSystem", "AppServices", "SharedUI",
+        "TallyCore", "ThemeTokens", "ClaudeKit", "MCPKit", "BudgetKit", "SyncKit", "DesignSystem", "AppServices", "SharedUI",
     ]),
 ]
 

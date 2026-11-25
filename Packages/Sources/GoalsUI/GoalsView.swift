@@ -44,7 +44,6 @@ public struct GoalsView: View {
                 }
                 .pageBackground()
                 .navigationTitle(L10n.text(lang, en: "Goals", vi: "Mục tiêu", zh: "存钱目标"))
-                .toolbar { TopToolbarControls() }
                 .sheet(isPresented: $showingNewGoal) {
                     GoalEditorSheet(existing: nil)
                 }
@@ -126,7 +125,6 @@ public struct GoalsView: View {
     // MARK: - Hero: everything saved so far
 
     private func heroCard(journey: GoalsJourney, lang: AppLanguage) -> some View {
-        let currency = settings.currency
         let percent = Int((journey.fraction * 100).rounded(.down))
 
         return VStack(alignment: .leading, spacing: 14) {
@@ -139,15 +137,15 @@ public struct GoalsView: View {
                             .foregroundStyle(Color.textSecondary)
                     }
 
-                    CozyCountUpText(value: journey.totalSavedMinor) {
-                        MoneyFormat.format(minor: $0, currency: currency, language: lang)
+                    CozyCountUpText(value: settings.displayMinor(journey.totalSavedMinor)) {
+                        MoneyFormat.format(minor: $0, currency: settings.effectiveDisplayCurrency, language: lang)
                     }
                     .font(.appMetricHero)
                     .foregroundStyle(Color.textPrimary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.6)
 
-                    Text("\(L10n.text(lang, en: "of", vi: "trên", zh: "目标")) \(MoneyFormat.format(minor: journey.totalTargetMinor, currency: currency, language: lang))")
+                    Text("\(L10n.text(lang, en: "of", vi: "trên", zh: "目标")) \(settings.formatMoney(minor: journey.totalTargetMinor))")
                         .font(.appCaption)
                         .foregroundStyle(Color.textSecondary)
                         .lineLimit(1)
@@ -187,10 +185,8 @@ public struct GoalsView: View {
 
                 if let closest = journey.closest {
                     CozyStatTile(
-                        value: MoneyFormat.format(
+                        value: settings.formatMoney(
                             minor: max(0, closest.targetMinor - closest.savedMinor),
-                            currency: currency,
-                            language: lang,
                             compact: true
                         ),
                         label: L10n.text(
@@ -221,6 +217,8 @@ public struct GoalsView: View {
 // MARK: - Goal card: ring, milestone stars, celebration
 
 private struct GoalJourneyCard: View {
+    @Environment(AppSettings.self) private var settings
+
     let goal: SavingsGoalRecord
     let currency: CurrencyCode
     let language: AppLanguage
@@ -378,7 +376,7 @@ private struct GoalJourneyCard: View {
     }
 
     private func money(_ minor: Int64) -> String {
-        MoneyFormat.format(minor: minor, currency: currency, language: language)
+        settings.formatMoney(minor: minor)
     }
 }
 
@@ -483,6 +481,25 @@ public struct GoalEditorSheet: View {
                                 withAnimation(.snappy(duration: 0.16)) {
                                     activeAmountField = .saved
                                 }
+                            }
+                        }
+
+                        if settings.isConvertingDisplay {
+                            let savedMajor = max(0, savedKeypad.evaluatedValue ?? 0)
+                            if targetMajor > 0 || savedMajor > 0 {
+                                HStack(spacing: 12) {
+                                    if targetMajor > 0 {
+                                        Text("≈ \(settings.formatMoney(minor: settings.currency.toStorageMinor(targetMajor)))")
+                                    }
+                                    Spacer(minLength: 4)
+                                    if savedMajor > 0 {
+                                        Text("≈ \(settings.formatMoney(minor: settings.currency.toStorageMinor(savedMajor)))")
+                                    }
+                                }
+                                .font(.appCaption)
+                                .monospacedDigit()
+                                .foregroundStyle(Color.textSecondary)
+                                .padding(.horizontal, 4)
                             }
                         }
 
@@ -774,6 +791,13 @@ private struct ContributionSheet: View {
                                     .font(.custom("AvenirNext-Medium", size: 26))
                                     .foregroundStyle(keypad.isEmpty ? Color.textSecondary.opacity(0.45) : Color.positive.opacity(0.8))
                             }
+                        }
+
+                        if settings.isConvertingDisplay, amountMajor > 0 {
+                            Text("≈ \(settings.formatMoney(minor: currency.toStorageMinor(amountMajor)))")
+                                .font(.appCaption)
+                                .monospacedDigit()
+                                .foregroundStyle(Color.textSecondary)
                         }
                     }
 

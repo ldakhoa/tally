@@ -6,6 +6,37 @@ import TallyCore
 /// emails, Apple Pay alerts, or natural text into clean transactions.
 /// Explicitly rejects promotional/marketing emails, OTPs, newsletters, and ads via `isTransaction`.
 public enum AITransactionParser {
+    public struct ResolvedTransactionAmount: Equatable, Sendable {
+        public let amountMinor: Int64
+        public let note: String
+        public let originalAmountMinor: Int64?
+        public let originalCurrencyCode: String?
+        public let exchangeRate: Double?
+        public let isLiveRate: Bool
+        public let rateDate: String?
+        public let usedFallbackUnavailableRate: Bool
+
+        public init(
+            amountMinor: Int64,
+            note: String,
+            originalAmountMinor: Int64? = nil,
+            originalCurrencyCode: String? = nil,
+            exchangeRate: Double? = nil,
+            isLiveRate: Bool = false,
+            rateDate: String? = nil,
+            usedFallbackUnavailableRate: Bool = false
+        ) {
+            self.amountMinor = amountMinor
+            self.note = note
+            self.originalAmountMinor = originalAmountMinor
+            self.originalCurrencyCode = originalCurrencyCode
+            self.exchangeRate = exchangeRate
+            self.isLiveRate = isLiveRate
+            self.rateDate = rateDate
+            self.usedFallbackUnavailableRate = usedFallbackUnavailableRate
+        }
+    }
+
     private struct WireResult: Decodable {
         let isTransaction: Bool
         let name: String
@@ -21,8 +52,8 @@ public enum AITransactionParser {
     public static let responseSchema: JSONValue = .schemaObject([
         ("isTransaction", .schemaBool("TRUE only if this text confirms an ACTUAL completed financial transaction (card charge, bank debit/credit, PayNow transfer, ride/food e-receipt, salary, refund). FALSE for marketing/promotional emails, discounts, vouchers, 'up to X off', newsletters, OTPs, login alerts, credit card statements, or ads.")),
         ("name", .schemaString("Short, clean merchant or transaction name (2-50 chars). Empty string if isTransaction is false.")),
-        ("amount", .schemaNumber("Positive numeric amount in the transaction's ORIGINAL currency major units (e.g. 50000 for 50,000đ VND, 18.5 for SGD 18.50). 0 if isTransaction is false.")),
-        ("currency", .schemaEnum(CurrencyCode.allCases.map(\.rawValue), "Original currency code in the message (e.g. VND for đ/VND, SGD for S$/SGD). Use default currency only if none is stated.")),
+        ("amount", .schemaNumber("Positive numeric amount in the transaction's ORIGINAL currency major units (e.g. 83.75 for HKD 83.75, 50000 for 50,000đ VND, 18.5 for SGD 18.50). Ignore secondary estimated cashback/reward amounts. 0 if isTransaction is false.")),
+        ("currency", .schemaString("3-letter uppercase ISO 4217 currency code of the transaction's ORIGINAL amount (e.g. SGD, HKD, JPY, CNY, VND, USD, MYR, THB, EUR, GBP, AED). Use default currency only if no currency is shown.")),
         ("type", .schemaEnum(["expense", "income"], "Whether this is an expense or income.")),
         ("category", .schemaEnum(CategoryID.allCases.map(\.rawValue), "Best matching category ID.")),
         ("date", .schemaString("Transaction date in YYYY-MM-DD format; use today's date if not mentioned.")),
@@ -55,7 +86,8 @@ public enum AITransactionParser {
             - Loan, cash-advance, balance-transfer, credit-limit and card-upgrade OFFERS (e.g. "CashOne", "get cash at 1.9% p.a.", "pre-approved", "apply by ...") are promotional: isTransaction = false, even when they quote amounts or rates.
             - Never invent a placeholder amount. If no money actually moved, isTransaction = false and amount = 0.
             - Set isTransaction = true ONLY for an actual completed payment, transfer, receipt, debit, credit, salary, or refund.
-            - Always report the EXACT original currency stated in the text (e.g. "50,000đ" or "VND" -> currency "VND"; "S$" or "SGD" -> currency "SGD"). Only use default currency \(defaultCurrency.rawValue) if no currency is shown.
+            - Always report the EXACT original amount and 3-letter ISO 4217 currency code stated in the text without converting (e.g. "HKD 83.75" -> amount 83.75, currency "HKD"; "50,000đ" -> currency "VND"; "S$" -> currency "SGD"). Only use default currency \(defaultCurrency.rawValue) if no currency is shown.
+            - When a card purchase alert also mentions a small secondary estimated cashback, reward, or points figure (e.g. "You'll receive estimated S$0.07 cashback*"), extract ONLY the main purchase amount and currency, not the cashback.
             - Today's date is \(todayKey). Use it when no transaction date is present.
             - Vietnamese shorthand: 65k = 65000 VND, 1.5tr = 1500000 VND. Chinese shorthand: 1万 = 10000, 3千 = 3000.
             - Expense categories: \(CategoryID.expenseCategories.map(\.rawValue).joined(separator: ", ")).
@@ -90,11 +122,11 @@ public enum AITransactionParser {
                     category = type == .income ? .income : .other
                 }
                 let dayKey = DateKey.date(fromDayKey: wire.date) != nil ? wire.date : todayKey
-                let currency = wire.currency.flatMap(CurrencyCode.init(rawValue:)) ?? defaultCurrency
+                let currencyCode = wire.currency.flatMap(CurrencyCode.normalizeCode) ?? defaultCurrency.rawValue
                 return ParsedTransactionDraft(
                     name: wire.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Transaction" : wire.name,
                     amountMajor: wire.amount,
-                    currency: currency,
+                    currencyCode: currencyCode,
                     type: type,
                     category: category,
                     dayKey: dayKey,
@@ -112,26 +144,68 @@ public enum AITransactionParser {
     }
 
     /// Resolves a parsed draft's amount into the user's budget currency, automatically converting
-    /// foreign currencies (e.g., VND -> SGD) and noting the original foreign amount.
+    /// foreign currencies (e.g., HKD -> SGD, VND -> SGD) and recording original amount & FX rate.
     public static func resolvedAmountAndNote(
         for draft: ParsedTransactionDraft,
         targetCurrency: CurrencyCode,
         language: AppLanguage,
-        fallbackNote: String = ""
-    ) -> (amountMinor: Int64, note: String) {
+        fallbackNote: String = "",
+        rates: ExchangeRateTable = .current
+    ) -> ResolvedTransactionAmount {
         let baseNote = draft.note.isEmpty ? fallbackNote : draft.note
-        let sourceCurrency = draft.currency ?? targetCurrency
-        guard sourceCurrency != targetCurrency else {
-            return (targetCurrency.toStorageMinor(draft.amountMajor), baseNote)
+        let sourceCode = draft.currencyCode.flatMap(CurrencyCode.normalizeCode) ?? targetCurrency.rawValue
+        guard sourceCode != targetCurrency.rawValue else {
+            return ResolvedTransactionAmount(
+                amountMinor: targetCurrency.toStorageMinor(draft.amountMajor),
+                note: baseNote
+            )
         }
-        let convertedMajor = CurrencyConverter.convert(draft.amountMajor, from: sourceCurrency, to: targetCurrency)
+
+        let originalMinor = CurrencyCode.toStorageMinor(draft.amountMajor, currencyCode: sourceCode)
         let origFormatted = MoneyFormat.format(
-            minor: sourceCurrency.toStorageMinor(draft.amountMajor),
-            currency: sourceCurrency,
+            minor: originalMinor,
+            currencyCode: sourceCode,
             language: language
         )
-        let fxTag = L10n.text(language, en: "Orig: \(origFormatted)", vi: "Gốc: \(origFormatted)", zh: "原币: \(origFormatted)")
-        let combinedNote = baseNote.isEmpty ? fxTag : "\(baseNote) · \(fxTag)"
-        return (targetCurrency.toStorageMinor(convertedMajor), combinedNote)
+
+        if let conversion = rates.convert(draft.amountMajor, from: sourceCode, to: targetCurrency) {
+            let fxTag = L10n.text(language, en: "Orig: \(origFormatted)", vi: "Gốc: \(origFormatted)", zh: "原币: \(origFormatted)")
+            let combinedNote: String
+            if baseNote.isEmpty {
+                combinedNote = fxTag
+            } else if baseNote.contains(origFormatted) {
+                combinedNote = baseNote
+            } else {
+                combinedNote = "\(baseNote) · \(fxTag)"
+            }
+            return ResolvedTransactionAmount(
+                amountMinor: conversion.convertedMinor,
+                note: combinedNote,
+                originalAmountMinor: originalMinor,
+                originalCurrencyCode: sourceCode,
+                exchangeRate: conversion.rate,
+                isLiveRate: conversion.isLiveRate,
+                rateDate: conversion.rateDate,
+                usedFallbackUnavailableRate: false
+            )
+        }
+
+        let missingTag = L10n.text(
+            language,
+            en: "Orig: \(origFormatted) (check FX rate)",
+            vi: "Gốc: \(origFormatted) (kiểm tra tỷ giá)",
+            zh: "原币: \(origFormatted)（请核对汇率）"
+        )
+        let combinedNote = baseNote.isEmpty ? missingTag : "\(baseNote) · \(missingTag)"
+        return ResolvedTransactionAmount(
+            amountMinor: targetCurrency.toStorageMinor(draft.amountMajor),
+            note: combinedNote,
+            originalAmountMinor: originalMinor,
+            originalCurrencyCode: sourceCode,
+            exchangeRate: nil,
+            isLiveRate: false,
+            rateDate: nil,
+            usedFallbackUnavailableRate: true
+        )
     }
 }

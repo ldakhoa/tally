@@ -201,8 +201,11 @@ struct FMAddTransactionArgs: Sendable {
     @Guide(description: "Short merchant or description, e.g. 'PayNow to friend', 'Rent', 'Coffee', 'Tiền nhà', '房租'")
     var name: String
 
-    @Guide(description: "Positive numeric amount in the household's currency")
+    @Guide(description: "Positive numeric amount as stated in the transaction's currency (do not convert yourself)")
     var amount: Double
+
+    @Guide(description: "Optional 3-letter uppercase ISO currency code if spent in a currency other than the household currency (e.g. HKD, JPY, CNY, VND, USD); leave empty if same as household currency")
+    var currency: String
 
     @Guide(description: "Either 'expense' or 'income'")
     var type: String
@@ -224,7 +227,13 @@ struct FMAddTransactionTool: Tool {
     let context: AppleToolContext
 
     func call(arguments: FMAddTransactionArgs) async throws -> String {
-        await MainActor.run {
+        let statedCode = CurrencyCode.normalizeCode(arguments.currency)
+        let householdCode = await MainActor.run { context.settings.currency.rawValue }
+        if let statedCode, statedCode != householdCode, ExchangeRateTable.current.fetchedAt == nil {
+            await ExchangeRateService.shared.refreshIfStale()
+        }
+
+        return await MainActor.run {
             let lang = context.settings.language
             let currency = context.settings.currency
             let todayKey = DateKey.dayKey(from: Date())
@@ -236,7 +245,14 @@ struct FMAddTransactionTool: Tool {
             let day = DateKey.date(fromDayKey: arguments.dayKey) != nil ? arguments.dayKey : todayKey
             let cleanedName = arguments.name.trimmingCharacters(in: .whitespacesAndNewlines)
             let finalName = cleanedName.isEmpty ? cat.title(in: lang) : cleanedName
-            let minor = max(1, currency.toStorageMinor(abs(arguments.amount)))
+            let resolved = AssistantAmounts.resolve(
+                amountMajor: abs(arguments.amount),
+                statedCurrencyCode: statedCode,
+                household: currency,
+                note: arguments.note.trimmingCharacters(in: .whitespacesAndNewlines),
+                language: lang
+            )
+            let minor = resolved.amountMinor
             let member = context.settings.currentMember
 
             let record = TransactionRecord(
@@ -245,26 +261,46 @@ struct FMAddTransactionTool: Tool {
                 type: txType,
                 category: cat,
                 dayKey: day,
-                note: arguments.note.trimmingCharacters(in: .whitespacesAndNewlines),
+                note: resolved.note,
                 source: .aiQuickAdd,
                 memberID: member.id,
                 memberName: member.name,
-                needsReview: false
+                needsReview: resolved.usedFallbackUnavailableRate,
+                originalAmountMinor: resolved.originalAmountMinor,
+                originalCurrencyCode: resolved.originalCurrencyCode,
+                exchangeRate: resolved.exchangeRate
             )
             context.store.saveTransaction(record)
             context.store.ensureVisible(dayKey: record.dayKey)
 
             let signedMinor = txType == .income ? minor : -minor
             let amtStr = MoneyFormat.masked(MoneyFormat.format(minor: signedMinor, currency: currency, language: lang, signed: txType == .income), hidden: record.isSalaryMasked(hidden: context.settings.hideSalary))
+            var receiptDetails: [String]? = nil
+            var conversionSuffix = ""
+            if let origCode = record.originalCurrencyCode,
+               let origText = record.formattedOriginalAmount(language: lang) {
+                let absAmtStr = MoneyFormat.masked(
+                    MoneyFormat.format(minor: minor, currency: currency, language: lang),
+                    hidden: record.isSalaryMasked(hidden: context.settings.hideSalary)
+                )
+                let ratePart = resolved.exchangeRate.map { " · \(ExchangeRateTable.formatRate($0, from: origCode, to: currency))" } ?? ""
+                let tag = resolved.isLiveRate
+                    ? L10n.text(lang, en: "Live", vi: "Tỷ giá thực", zh: "实时汇率")
+                    : L10n.text(lang, en: "Est.", vi: "Ước tính", zh: "估算")
+                receiptDetails = ["\(origText) → \(absAmtStr)\(ratePart) (\(tag))"]
+                conversionSuffix = " (converted from \(origText)\(ratePart))"
+            }
             context.receipts.append(AssistantActionReceipt(
                 kind: .transactionAdded,
                 emoji: cat.cuteEmoji,
                 title: record.name,
                 subtitle: "\(cat.title(in: lang)) · \(DateKey.formatCompactDay(record.dayKey, language: lang))",
                 amountText: amtStr,
-                isPositive: txType == .income
+                isPositive: txType == .income,
+                details: receiptDetails,
+                recordID: record.id
             ))
-            return "Saved \(record.name): \(amtStr) in \(cat.title(in: lang)) on \(record.dayKey)."
+            return "Saved \(record.name): \(amtStr) in \(cat.title(in: lang)) on \(record.dayKey)\(conversionSuffix)."
         }
     }
 }
@@ -478,6 +514,7 @@ public enum AppleAssistantRunner {
         recentHistory: [ChatEntry],
         settings: AppSettings,
         store: BudgetStore,
+        bankAlertHint: String? = nil,
         onTextUpdate: @escaping @MainActor (String) -> Void
     ) async throws -> (text: String, receipts: [AssistantActionReceipt]) {
         guard SystemLanguageModel.default.isAvailable else {
@@ -494,7 +531,7 @@ public enum AppleAssistantRunner {
         ]
 
         // Keep instructions compact so we stay comfortably inside the on-device context window.
-        let instructions = compactSystemInstructions(settings: settings, store: store)
+        let instructions = compactSystemInstructions(settings: settings, store: store) + (bankAlertHint.map { "\n\n\($0)" } ?? "")
         let session = LanguageModelSession(
             model: SystemLanguageModel.default,
             tools: tools,
@@ -563,7 +600,8 @@ public enum AppleAssistantRunner {
         Installment plans & loans: \(plansSummary.isEmpty ? "none" : plansSummary).
 
         RULES:
-        - When the user mentions spending, paying (e.g. PayNow, rent, credit card, meal), or receiving income: ALWAYS call `add_transaction` (call once per item).
+        - When the user mentions spending, paying (e.g. PayNow, rent, credit card, meal), or receiving income: ALWAYS call `add_transaction` (call once per item). Pass foreign currencies (e.g. HKD, JPY, CNY, VND, USD) in `currency` without converting yourself; ignore small secondary cashback amounts on purchase alerts.
+        - A pasted bank alert can describe a completed transaction. Do not log a balance, offer, verification message, or pending or failed payment. Ask if the amount or direction is unclear.
         - When the user sets a monthly budget: ALWAYS call `set_budget`.
         - When the user wants to save for a goal: ALWAYS call `create_savings_goal` or `contribute_savings_goal`.
         - When the user describes a purchase paid in monthly instalments or a loan: call `create_installment_plan`, but only with figures they gave; if the amount, months or first payment date is missing, ask. If the first payment is in the past, ask whether the payments so far are already recorded in Tally.

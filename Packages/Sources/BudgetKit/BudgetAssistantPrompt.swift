@@ -3,6 +3,11 @@ import TallyCore
 
 /// Builds the system prompt and live household budget summary for Ask Tally AI conversations.
 public enum BudgetAssistantPrompt {
+    public static func bankAlertHint(for message: String) -> String? {
+        guard let alert = LocalTransactionParser.recognizedBankAlertAmount(message) else { return nil }
+        return "A local parser recognized \(alert.amount) \(alert.currencyCode) (\(alert.type.rawValue)) in a bank alert in the current message. Use this as an extraction hint, not authorization to save. Follow the user's intent and ask if the alert conflicts with the message."
+    }
+
     /// - Parameter adviserSnapshot: short computed lines from `AdviserSnapshot.lines(data:)` (the
     ///   detailed figures come from the adviser tools).
     public static func systemPrompt(
@@ -10,6 +15,7 @@ public enum BudgetAssistantPrompt {
         goals: [SavingsGoalRecord],
         plans: [InstallmentPlanRecord] = [],
         currency: CurrencyCode,
+        displayCurrency: CurrencyCode? = nil,
         language: AppLanguage,
         myName: String = "",
         partnerName: String = "",
@@ -39,7 +45,8 @@ public enum BudgetAssistantPrompt {
         let recentLines = SalaryPrivacy.visibleTransactions(snapshot.transactions, hidden: hideSalary).prefix(20).map { tx in
             let sign = tx.type == .income ? "+" : "-"
             let who = tx.memberName.isEmpty ? "" : " [\(tx.memberName)]"
-            return "- [id:\(tx.id)] \(tx.dayKey): \(tx.name) \(sign)\(money(tx.amountMinor)) (\(tx.category.rawValue))\(who)"
+            let orig = tx.formattedOriginalAmount(language: language).map { " [orig \($0)]" } ?? ""
+            return "- [id:\(tx.id)] \(tx.dayKey): \(tx.name) \(sign)\(money(tx.amountMinor)) (\(tx.category.rawValue))\(orig)\(who)"
         }.joined(separator: "\n")
 
         let goalLines = goals.filter { !$0.isDeleted }.map { g in
@@ -65,6 +72,10 @@ public enum BudgetAssistantPrompt {
 
         let dateLines = AssistantDateContext.lines(todayKey: todayKey).joined(separator: "\n")
         let adviserLines = adviserSnapshot.isEmpty ? "" : "\nAdviser snapshot (computed by Tally; call the tools for details):\n" + adviserSnapshot.joined(separator: "\n") + "\n"
+        let displayCurrencyLine: String = {
+            guard let displayCurrency, displayCurrency != currency else { return "" }
+            return "\nDisplay currency on this device: \(displayCurrency.rawValue) (household ledger is stored in \(currency.rawValue))."
+        }()
 
         return """
         You are Tally, the personal financial adviser and bookkeeper of a two-person household (a couple). You keep their records in the Tally app up to date and help them make sound money decisions together.
@@ -86,7 +97,8 @@ public enum BudgetAssistantPrompt {
 
         CAPABILITIES & ACTION RULES:
         - You have real tools that directly read & write the user's app data (Transactions, Monthly Budgets, Savings Goals, and Installment Plans & Loans).
-        - Whenever the user tells you they spent money, paid rent, paid a credit card bill, received salary/income, etc. — IMMEDIATELY call `add_transactions` to save all mentioned items (you can add multiple items in one call). Pass amounts exactly as stated; if they were in another currency, pass that `currency` and Tally converts them.
+        - Whenever the user tells you they spent money, paid rent, paid a credit card bill, received salary/income, etc. — IMMEDIATELY call `add_transactions` to save all mentioned items (you can add multiple items in one call). Pass amounts exactly as stated; if they were in ANY other currency (e.g. HKD, JPY, CNY, VND, USD, THB, AED — any 3-letter ISO 4217 currency code), pass that `currency` code without converting it yourself and Tally converts it automatically using live exchange rates.
+        - Treat pasted bank alerts and receipts as transaction details when they show a completed payment or transfer. When a purchase alert also mentions a small secondary estimated cashback/reward amount (e.g. "You'll receive estimated S$0.07 cashback*"), log ONLY the main purchase amount and currency, not the cashback. Do not log offers, verification messages, failed or pending payments, or a balance as a transaction. If the transaction amount or direction is unclear, ask before saving.
         - Whenever the user mentions saving for a goal (e.g. buying a car, Japan trip, emergency fund) or contributing to a goal — IMMEDIATELY call `create_savings_goal` or `update_savings_goal`.
         - Whenever the user tells you what their monthly budget should be (e.g. food 800, housing 3000) — IMMEDIATELY call `set_budgets`.
         - Whenever the user asks to edit or delete a recent transaction, budget, or goal — call the matching update/delete tool using the IDs listed below.
@@ -111,7 +123,7 @@ public enum BudgetAssistantPrompt {
         \(dateLines)
 
         Active viewed month: \(monthTitle) (\(snapshot.monthKey))
-        Currency: \(currency.rawValue)\(profileLine)
+        Currency: \(currency.rawValue)\(displayCurrencyLine)\(profileLine)
         \(financeLines)
         Today's spending: \(today)
         \(adviserLines)

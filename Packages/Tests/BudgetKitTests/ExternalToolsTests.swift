@@ -163,4 +163,38 @@ final class ExternalToolsTests: XCTestCase {
         XCTAssertTrue(writable.contains("Confirm with the user before deleting"))
         XCTAssertTrue(writable.contains("VND"))
     }
+
+    func testListTransactionsIncludesAndSearchesForeignCurrency() throws {
+        let fxTx = TransactionRecord(
+            id: "fx-1",
+            name: "PinDuoDuo",
+            amountMinor: 1_432,
+            type: .expense,
+            category: .shopping,
+            dayKey: "2026-11-24",
+            note: "Freedom card",
+            originalAmountMinor: 8_375,
+            originalCurrencyCode: "HKD",
+            exchangeRate: 0.171
+        )
+        let ctx = AdviserToolContext(
+            data: AdviserDataSet(transactions: [fxTx], budgets: [], goals: [], plans: [], currency: .sgd, todayKey: today, salaryHidden: false),
+            currentMemberID: "me",
+            members: [HouseholdMember(id: "me", name: "Alex")],
+            salaryRequestAvailable: false
+        )
+
+        let byCode = try XCTUnwrap(ExternalToolCatalog.run(ClaudeToolUse(id: "t1", name: "list_transactions", input: ["search": "HKD"]), context: ctx))
+        let json = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(byCode.text.utf8)) as? [String: Any])
+        let rows = try XCTUnwrap(json["transactions"] as? [[String: Any]])
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0]["original_currency"] as? String, "HKD")
+        XCTAssertEqual(rows[0]["original_amount"] as? String, "HK$83.75")
+        XCTAssertEqual(rows[0]["original_amount_value"] as? Double, 83.75)
+        XCTAssertEqual(rows[0]["exchange_rate"] as? Double, 0.171)
+
+        let byOrigAmt = try XCTUnwrap(ExternalToolCatalog.run(ClaudeToolUse(id: "t2", name: "list_transactions", input: ["search": "83.75"]), context: ctx))
+        let json2 = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(byOrigAmt.text.utf8)) as? [String: Any])
+        XCTAssertEqual(json2["total_matching"] as? Int, 1)
+    }
 }

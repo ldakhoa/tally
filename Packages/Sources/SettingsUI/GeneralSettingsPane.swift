@@ -7,7 +7,38 @@ import ThemeTokens
 struct GeneralSettingsPane: View {
     @Environment(AppSettings.self) private var settings
     @Environment(BudgetStore.self) private var store
+    @Environment(ExchangeRateService.self) private var exchangeRates: ExchangeRateService?
     @Environment(\.colorScheme) private var colorScheme
+
+    @State private var pendingCurrencySwitch: CurrencyCode?
+
+    private var fxService: ExchangeRateService { exchangeRates ?? .shared }
+
+    private var currencyBinding: Binding<CurrencyCode> {
+        Binding(
+            get: { settings.currency },
+            set: { newCode in
+                guard newCode != settings.currency else { return }
+                if store.hasActiveRecords {
+                    pendingCurrencySwitch = newCode
+                } else {
+                    settings.setHouseholdCurrency(newCode)
+                }
+            }
+        )
+    }
+
+    private var displayCurrencyBinding: Binding<CurrencyCode?> {
+        Binding(
+            get: { settings.displayCurrency },
+            set: { newDisplay in
+                settings.displayCurrency = newDisplay
+                if newDisplay != nil {
+                    Task { await fxService.refreshIfStale() }
+                }
+            }
+        )
+    }
 
     /// Hiding never asks; showing asks for Face ID / passcode when that requirement is on.
     private var hideSalaryBinding: Binding<Bool> {
@@ -52,13 +83,62 @@ struct GeneralSettingsPane: View {
                     }
                 }
 
-                Picker(L10n.text(lang, en: "Currency", vi: "Đơn vị tiền tệ", zh: "货币"), selection: $settings.currency) {
+                Picker(L10n.text(lang, en: "Currency", vi: "Đơn vị tiền tệ", zh: "货币"), selection: currencyBinding) {
                     ForEach(CurrencyCode.allCases) { code in
                         Text("\(code.rawValue) · \(code.name(in: lang))").tag(code)
                     }
                 }
+
+                Picker(L10n.text(lang, en: "Display in", vi: "Hiển thị bằng", zh: "显示货币"), selection: displayCurrencyBinding) {
+                    Text(L10n.text(
+                        lang,
+                        en: "Same as household (\(settings.currency.rawValue))",
+                        vi: "Theo tiền tệ chung (\(settings.currency.rawValue))",
+                        zh: "跟随家庭货币（\(settings.currency.rawValue)）"
+                    ))
+                    .tag(CurrencyCode?.none)
+
+                    ForEach(CurrencyCode.allCases.filter { $0 != settings.currency }) { code in
+                        Text("\(code.rawValue) · \(code.name(in: lang))")
+                            .tag(CurrencyCode?.some(code))
+                    }
+                }
+
+                HStack(spacing: 10) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.text(lang, en: "Exchange rates", vi: "Tỷ giá quy đổi", zh: "汇率更新"))
+                            .font(.appBody)
+                        Text(fxStatusText(lang: lang))
+                            .font(.appCaption)
+                            .foregroundStyle(Color.textSecondary)
+                    }
+                    Spacer()
+                    if fxService.isRefreshing {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Button {
+                            Task { await fxService.refreshNow() }
+                        } label: {
+                            CozyUIIcon(.refresh, size: 16, color: Color.accent)
+                        }
+                        .buttonStyle(.themedPlain)
+                        .accessibilityLabel(L10n.text(lang, en: "Refresh exchange rates", vi: "Cập nhật tỷ giá", zh: "刷新汇率"))
+                    }
+                }
             } header: {
                 formSectionHeader(L10n.text(lang, en: "Language & Currency", vi: "Ngôn ngữ & Tiền tệ", zh: "语言与货币"))
+            } footer: {
+                if settings.isConvertingDisplay {
+                    let display = settings.effectiveDisplayCurrency
+                    let rateLine = fxService.table.conversionRate(from: settings.currency.rawValue, to: display.rawValue)
+                        .map { "\(ExchangeRateTable.formatRate($0.rate, from: settings.currency.rawValue, to: display)) · " } ?? ""
+                    formSectionFooter(L10n.text(
+                        lang,
+                        en: "\(rateLine)Stored household data remains in \(settings.currency.rawValue); this device shows amounts converted to \(display.rawValue).",
+                        vi: "\(rateLine)Dữ liệu gốc vẫn lưu bằng \(settings.currency.rawValue); thiết bị này hiển thị số tiền đã quy đổi sang \(display.rawValue).",
+                        zh: "\(rateLine)家庭原始数据仍以 \(settings.currency.rawValue) 存储；本设备将以 \(display.rawValue) 显示换算金额。"
+                    ))
+                }
             }
 
             Section {
@@ -183,5 +263,19 @@ struct GeneralSettingsPane: View {
         .onDisappear {
             store.reconcileMemberIdentities(settings: settings, notifyCloud: true)
         }
+        .sheet(item: $pendingCurrencySwitch) { target in
+            CurrencySwitchSheet(from: settings.currency, to: target)
+        }
+    }
+
+    private func fxStatusText(lang: AppLanguage) -> String {
+        if let err = fxService.lastError, !err.isEmpty {
+            return L10n.text(lang, en: "Offline fallback · refresh failed", vi: "Tỷ giá ngoại tuyến · cập nhật lỗi", zh: "离线估算汇率 · 刷新失败")
+        }
+        if fxService.table.isLive {
+            let dateLabel = fxService.table.rateDate.map { DateKey.formatCompactDay($0, language: lang) } ?? L10n.today(lang)
+            return L10n.text(lang, en: "Live · \(dateLabel)", vi: "Trực tuyến · \(dateLabel)", zh: "实时汇率 · \(dateLabel)")
+        }
+        return L10n.text(lang, en: "Built-in offline estimates", vi: "Tỷ giá ước tính ngoại tuyến", zh: "内置离线估算汇率")
     }
 }

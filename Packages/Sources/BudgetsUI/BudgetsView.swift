@@ -38,7 +38,6 @@ public struct BudgetsView: View {
                 }
                 .pageBackground()
                 .navigationTitle(L10n.text(lang, en: "Budgets", vi: "Ngân sách", zh: "预算"))
-                .toolbar { TopToolbarControls() }
                 .sheet(isPresented: $showingNewBudget) {
                     BudgetEditorSheet(existing: nil)
                 }
@@ -126,7 +125,6 @@ public struct BudgetsView: View {
 
     private func heroCard(momentum: BudgetMomentum, lang: AppLanguage) -> some View {
         let style = BudgetPaceStyle(pace: momentum.pace)
-        let currency = settings.currency
         let isOver = momentum.pace == .over
         let percentLeft = Int((momentum.leftFraction * 100).rounded(.down))
 
@@ -142,8 +140,8 @@ public struct BudgetsView: View {
                             .minimumScaleFactor(0.8)
                     }
 
-                    CozyCountUpText(value: abs(momentum.leftMinor)) {
-                        MoneyFormat.format(minor: $0, currency: currency, language: lang)
+                    CozyCountUpText(value: abs(settings.displayMinor(momentum.leftMinor))) {
+                        MoneyFormat.format(minor: $0, currency: settings.effectiveDisplayCurrency, language: lang)
                     }
                     .font(.appMetricHero)
                     .foregroundStyle(isOver ? Color.negative : Color.textPrimary)
@@ -191,7 +189,7 @@ public struct BudgetsView: View {
             HStack(alignment: .top, spacing: 8) {
                 if momentum.timing == .current, !isOver {
                     CozyStatTile(
-                        value: MoneyFormat.format(minor: momentum.safeToSpendPerDayMinor, currency: currency, language: lang, compact: true),
+                        value: settings.formatMoney(minor: momentum.safeToSpendPerDayMinor, compact: true),
                         label: L10n.text(lang, en: "per day · \(momentum.daysLeft)d left", vi: "mỗi ngày · còn \(momentum.daysLeft) ngày", zh: "每天可花 · 剩 \(momentum.daysLeft) 天"),
                         tint: .accent
                     ) {
@@ -199,7 +197,7 @@ public struct BudgetsView: View {
                     }
                 } else {
                     CozyStatTile(
-                        value: MoneyFormat.format(minor: momentum.totalMinor, currency: currency, language: lang, compact: true),
+                        value: settings.formatMoney(minor: momentum.totalMinor, compact: true),
                         label: L10n.text(lang, en: "total limit", vi: "tổng hạn mức", zh: "总限额"),
                         tint: .accent
                     ) {
@@ -244,7 +242,7 @@ public struct BudgetsView: View {
     }
 
     private func paceText(momentum: BudgetMomentum, lang: AppLanguage) -> String {
-        let cushion = MoneyFormat.format(minor: abs(momentum.paceCushionMinor), currency: settings.currency, language: lang, compact: true)
+        let cushion = settings.formatMoney(minor: abs(momentum.paceCushionMinor), compact: true)
         switch momentum.pace {
         case .ahead:
             return L10n.text(lang, en: "\(cushion) ahead of plan", vi: "Đi trước kế hoạch \(cushion)", zh: "领先计划 \(cushion)")
@@ -281,7 +279,6 @@ public struct BudgetsView: View {
     // MARK: - Kept this month: the earn-more / keep-more ladder
 
     private func keptCard(snapshot: MonthlySnapshot, lang: AppLanguage) -> some View {
-        let currency = settings.currency
         let hidden = snapshot.isSalaryMasked(hidden: settings.hideSalary)
         let level = SavingsLevel(incomeMinor: snapshot.incomeMinor, netSavingsMinor: snapshot.netSavingsMinor)
         let shownLevel = hidden ? nil : level
@@ -306,8 +303,8 @@ public struct BudgetsView: View {
                             .font(.appMetric)
                             .salaryMaskAccessibility(true, language: lang)
                     } else {
-                        CozyCountUpText(value: snapshot.netSavingsMinor) {
-                            MoneyFormat.format(minor: $0, currency: currency, language: lang)
+                        CozyCountUpText(value: settings.displayMinor(snapshot.netSavingsMinor)) {
+                            MoneyFormat.format(minor: $0, currency: settings.effectiveDisplayCurrency, language: lang)
                         }
                         .font(.appMetric)
                         .foregroundStyle(snapshot.netSavingsMinor < 0 ? Color.negative : Color.textPrimary)
@@ -357,8 +354,8 @@ public struct BudgetsView: View {
         guard let next = level.nextTier else {
             return L10n.text(lang, en: "Top level. You keep more than half of what you earn!", vi: "Cấp cao nhất rồi! Bạn giữ được hơn nửa số tiền kiếm ra.", zh: "已是最高等级！你留下了一半以上的收入。")
         }
-        let earn = MoneyFormat.format(minor: level.earnMoreMinor, currency: settings.currency, language: lang, compact: true)
-        let cut = MoneyFormat.format(minor: level.spendLessMinor, currency: settings.currency, language: lang, compact: true)
+        let earn = settings.formatMoney(minor: level.earnMoreMinor, compact: true)
+        let cut = settings.formatMoney(minor: level.spendLessMinor, compact: true)
         let nextTitle = SavingsTierStyle(tier: next).title(in: lang)
         return L10n.text(
             lang,
@@ -454,6 +451,8 @@ private struct SavingsTierStyle {
 // MARK: - Category card
 
 private struct BudgetCategoryCard: View {
+    @Environment(AppSettings.self) private var settings
+
     let budget: BudgetLimitRecord
     let spentMinor: Int64
     let timing: BudgetMomentum.Timing
@@ -559,7 +558,7 @@ private struct BudgetCategoryCard: View {
     }
 
     private func money(_ minor: Int64, compact: Bool = false) -> String {
-        MoneyFormat.format(minor: minor, currency: currency, language: language, compact: compact)
+        settings.formatMoney(minor: minor, compact: compact)
     }
 }
 
@@ -753,6 +752,13 @@ public struct BudgetEditorSheet: View {
                 }
             }
             .padding(.horizontal, 8)
+
+            if settings.isConvertingDisplay, let value = keypad.evaluatedValue, value > 0 {
+                Text("≈ \(settings.formatMoney(minor: currency.toStorageMinor(value)))")
+                    .font(.appCaption)
+                    .monospacedDigit()
+                    .foregroundStyle(Color.textSecondary)
+            }
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 10)

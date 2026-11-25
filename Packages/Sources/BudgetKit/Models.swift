@@ -362,6 +362,13 @@ public struct TransactionRecord: Codable, Identifiable, Hashable, Sendable {
     /// visible fields above are derived from it. `nil` for ordinary transactions and payloads
     /// written before plans existed.
     public var paymentState: PlanPaymentState?
+    /// Original amount in storage minor units when the transaction was made in a foreign currency
+    /// (`nil` when entered in the household currency).
+    public var originalAmountMinor: Int64?
+    /// Uppercase ISO 4217 currency code of the original transaction when foreign (e.g. `"HKD"`).
+    public var originalCurrencyCode: String?
+    /// Exchange rate applied (`1 originalCurrencyCode = exchangeRate * householdCurrency`).
+    public var exchangeRate: Double?
 
     public init(
         id: String = UUID().uuidString,
@@ -381,7 +388,10 @@ public struct TransactionRecord: Codable, Identifiable, Hashable, Sendable {
         isDeleted: Bool = false,
         planID: String? = nil,
         planPaymentIndex: Int? = nil,
-        paymentState: PlanPaymentState? = nil
+        paymentState: PlanPaymentState? = nil,
+        originalAmountMinor: Int64? = nil,
+        originalCurrencyCode: String? = nil,
+        exchangeRate: Double? = nil
     ) {
         self.id = id
         self.name = name
@@ -401,6 +411,21 @@ public struct TransactionRecord: Codable, Identifiable, Hashable, Sendable {
         self.planID = planID
         self.planPaymentIndex = planPaymentIndex
         self.paymentState = paymentState
+        self.originalAmountMinor = originalAmountMinor
+        self.originalCurrencyCode = originalCurrencyCode
+        self.exchangeRate = exchangeRate
+    }
+
+    public var isForeignCurrency: Bool {
+        originalAmountMinor != nil && !(originalCurrencyCode?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+    }
+
+    public func formattedOriginalAmount(language: AppLanguage = .english) -> String? {
+        guard let originalAmountMinor,
+              let code = originalCurrencyCode?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !code.isEmpty
+        else { return nil }
+        return MoneyFormat.format(minor: originalAmountMinor, currencyCode: code, language: language)
     }
 
     public var monthKey: String { DateKey.monthKey(fromDayKey: dayKey) }
@@ -491,5 +516,25 @@ public struct SavingsGoalRecord: Codable, Identifiable, Hashable, Sendable {
     public var percent: Int {
         guard targetMinor > 0 else { return 0 }
         return Int((Double(savedMinor) * 100.0 / Double(targetMinor)).rounded(.down))
+    }
+}
+
+/// Synced household-level currency setting (so switching ledger currency syncs across devices and
+/// shared household members without conflating per-device display preferences).
+public struct HouseholdSettingsRecord: Codable, Identifiable, Hashable, Sendable {
+    public static let singletonID = "household"
+
+    public var id: String
+    public var currency: CurrencyCode
+    public var updatedAt: Date
+
+    public init(
+        id: String = HouseholdSettingsRecord.singletonID,
+        currency: CurrencyCode,
+        updatedAt: Date = Date()
+    ) {
+        self.id = id
+        self.currency = currency
+        self.updatedAt = updatedAt
     }
 }

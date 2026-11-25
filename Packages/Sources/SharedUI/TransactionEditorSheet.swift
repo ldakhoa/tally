@@ -6,21 +6,28 @@ import TallyCore
 
 public struct TransactionEditorSheet: View {
     public let existing: TransactionRecord?
-    public let prefill: ParsedTransactionDraft?
-    public let sourceOverride: TransactionSource?
-    public let rawSourceText: String?
 
     @Environment(AppSettings.self) private var settings
     @Environment(BudgetStore.self) private var store
+    @Environment(ExchangeRateService.self) private var exchangeRates: ExchangeRateService?
     @Environment(\.dismiss) private var dismiss
+
+    private var fxService: ExchangeRateService { exchangeRates ?? .shared }
 
     private enum EditorField: Hashable {
         case description
         case note
+        case convertedAmount
     }
 
     @State private var name: String = ""
     @State private var keypad = AmountKeypadEngine(maxFractionDigits: 2)
+    @State private var entryCurrencyCode: String = ""
+    @State private var showingCurrencyPicker = false
+    @State private var customConvertedText: String = ""
+    @State private var isEditingConvertedAmount = false
+    @State private var preservedForeign: (currencyCode: String, originalMinor: Int64, convertedMinor: Int64, rate: Double?)?
+    @State private var forceLiveRate = false
     @State private var type: TransactionType = .expense
     @State private var category: CategoryID = .food
     @State private var dayKey: String = DateKey.dayKey(from: Date())
@@ -35,16 +42,8 @@ public struct TransactionEditorSheet: View {
 
     @FocusState private var focusedField: EditorField?
 
-    public init(
-        existing: TransactionRecord? = nil,
-        prefill: ParsedTransactionDraft? = nil,
-        sourceOverride: TransactionSource? = nil,
-        rawSourceText: String? = nil
-    ) {
+    public init(existing: TransactionRecord? = nil) {
         self.existing = existing
-        self.prefill = prefill
-        self.sourceOverride = sourceOverride
-        self.rawSourceText = rawSourceText
     }
 
     public var body: some View {
@@ -74,7 +73,7 @@ public struct TransactionEditorSheet: View {
 
                         installmentSection(lang: lang)
 
-                        if let raw = existing?.rawSourceText ?? rawSourceText, !raw.isEmpty {
+                        if let raw = existing?.rawSourceText, !raw.isEmpty {
                             Card(L10n.text(lang, en: "Original alert text", vi: "Nội dung thông báo gốc", zh: "原始通知内容"), symbol: "text.quote") {
                                 Text(raw)
                                     .font(.appCaption)
@@ -100,7 +99,7 @@ public struct TransactionEditorSheet: View {
                 if focusedField == nil {
                     AmountKeypadView(
                         engine: $keypad,
-                        currency: settings.currency,
+                        currencyCode: activeCurrencyCode,
                         language: lang,
                         saveTitle: saveButtonTitle(amountMajor: liveAmount, lang: lang),
                         isSaveEnabled: canSave,
@@ -151,6 +150,16 @@ public struct TransactionEditorSheet: View {
                         // The original expense is replaced by the plan's payments: close the editor.
                         dismiss()
                     }
+                }
+            }
+            .sheet(isPresented: $showingCurrencyPicker) {
+                CurrencyPickerSheet(
+                    selectedCode: activeCurrencyCode,
+                    householdCurrency: settings.currency,
+                    fxTable: fxService.table,
+                    language: lang
+                ) { chosenCode in
+                    selectCurrency(chosenCode)
                 }
             }
             .sheet(isPresented: $showingDatePicker) {
@@ -208,18 +217,18 @@ public struct TransactionEditorSheet: View {
     // MARK: - Hero Amount Stage
 
     private func amountHeroStage(lang: AppLanguage) -> some View {
-        let currency = settings.currency
-        let displayNumber = keypad.formattedDisplayNumber(currency: currency)
+        let code = activeCurrencyCode
+        let displayNumber = keypad.formattedDisplayNumber(currencyCode: code)
         let isEmpty = keypad.isEmpty
         let amountColor: Color = isEmpty
             ? Color.textSecondary.opacity(0.38)
             : (type == .income ? Color.positive : Color.textPrimary)
+        let isVND = code == CurrencyCode.vnd.rawValue
+        let rawSymbol = CurrencyCode.displaySymbol(forCode: code).trimmingCharacters(in: .whitespaces)
+        let symbolNeedsSpace = rawSymbol == code || code == "CHF"
 
-        return Button {
-            focusedField = nil
-        } label: {
-            VStack(spacing: 4) {
-                // Live arithmetic formula pill (when +, −, ×, ÷ is active)
+        return VStack(spacing: 8) {
+            HStack(spacing: 8) {
                 if keypad.hasOperator {
                     HStack(spacing: 6) {
                         Text(keypad.formattedExpression)
@@ -243,10 +252,32 @@ public struct TransactionEditorSheet: View {
                     .foregroundStyle(Color.textSecondary)
                 }
 
+                Button {
+                    focusedField = nil
+                    showingCurrencyPicker = true
+                } label: {
+                    HStack(spacing: 4) {
+                        Text(code)
+                            .font(.appCaption.weight(.semibold))
+                        CozyUIIcon(.chevronDown, size: 10, color: isForeignEntry ? Color.onInk.opacity(0.85) : Color.textSecondary)
+                    }
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 4)
+                    .foregroundStyle(isForeignEntry ? Color.onInk : Color.textPrimary)
+                    .background(isForeignEntry ? Color.ink : Color.softFill, in: Capsule())
+                }
+                .buttonStyle(.themedPlain)
+                .accessibilityLabel(L10n.text(lang, en: "Change currency (\(code))", vi: "Đổi tiền tệ (\(code))", zh: "切换货币（\(code)）"))
+            }
+
+            Button {
+                focusedField = nil
+            } label: {
                 HStack(alignment: .firstTextBaseline, spacing: 4) {
-                    if currency != .vnd {
-                        Text(type == .income && !isEmpty ? "+\(currency.narrowSymbol)" : currency.narrowSymbol)
-                            .font(.custom("AvenirNext-Medium", size: 26))
+                    if !isVND {
+                        let prefix = (type == .income && !isEmpty ? "+" : "") + rawSymbol + (symbolNeedsSpace ? " " : "")
+                        Text(prefix)
+                            .font(.custom("AvenirNext-Medium", size: rawSymbol.count > 2 ? 22 : 26))
                             .foregroundStyle(isEmpty ? Color.textSecondary.opacity(0.45) : amountColor.opacity(0.75))
                     } else if type == .income && !isEmpty {
                         Text("+")
@@ -261,19 +292,151 @@ public struct TransactionEditorSheet: View {
                         .minimumScaleFactor(0.48)
                         .contentTransition(.numericText())
 
-                    if currency == .vnd {
+                    if isVND {
                         Text("₫")
                             .font(.custom("AvenirNext-Medium", size: 26))
                             .foregroundStyle(isEmpty ? Color.textSecondary.opacity(0.45) : amountColor.opacity(0.75))
                     }
                 }
                 .padding(.horizontal, 8)
+                .frame(maxWidth: .infinity)
+                .contentShape(Rectangle())
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+
+            if isForeignEntry {
+                foreignConversionStrip(lang: lang)
+            }
         }
-        .buttonStyle(.plain)
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private func foreignConversionStrip(lang: AppLanguage) -> some View {
+        let preview = conversionPreview
+        let household = settings.currency
+        let prefix = (preview.source == .custom || preview.source == .preservedHistorical) ? "=" : "≈"
+        let convertedText = MoneyFormat.format(minor: preview.minor, currency: household, language: lang)
+        let rateLabel: String = {
+            switch preview.source {
+            case .domestic:
+                return ""
+            case .custom:
+                let ratePart = preview.rate.map { "\(ExchangeRateTable.formatRate($0, from: activeCurrencyCode, to: household)) · " } ?? ""
+                return ratePart + L10n.text(lang, en: "Custom", vi: "Tự nhập", zh: "自定义")
+            case .preservedHistorical:
+                let ratePart = preview.rate.map { "\(ExchangeRateTable.formatRate($0, from: activeCurrencyCode, to: household)) · " } ?? ""
+                return ratePart + L10n.text(lang, en: "Saved rate", vi: "Tỷ giá đã lưu", zh: "已保存汇率")
+            case .live:
+                let ratePart = preview.rate.map { "\(ExchangeRateTable.formatRate($0, from: activeCurrencyCode, to: household)) · " } ?? ""
+                return ratePart + L10n.text(lang, en: "Live", vi: "Tỷ giá thực", zh: "实时汇率")
+            case .estimated:
+                let ratePart = preview.rate.map { "\(ExchangeRateTable.formatRate($0, from: activeCurrencyCode, to: household)) · " } ?? ""
+                return ratePart + L10n.text(lang, en: "Est.", vi: "Ước tính", zh: "估算")
+            case .unavailable:
+                return L10n.text(lang, en: "Rate unavailable — enter \(household.rawValue)", vi: "Chưa có tỷ giá — nhập \(household.rawValue)", zh: "暂无汇率 — 请手动输入 \(household.rawValue)")
+            }
+        }()
+
+        VStack(spacing: 8) {
+            HStack(spacing: 8) {
+                if resolvedAmountMajor > 0 {
+                    Text("\(prefix) \(convertedText)")
+                        .font(.appCaption.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(preview.source == .unavailable ? Color.negative : Color.textPrimary)
+                }
+
+                if !rateLabel.isEmpty {
+                    Text(rateLabel)
+                        .font(.appCaption)
+                        .monospacedDigit()
+                        .foregroundStyle(Color.textSecondary)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.8)
+                }
+
+                Button {
+                    withAnimation(.snappy(duration: 0.18)) {
+                        isEditingConvertedAmount.toggle()
+                        if isEditingConvertedAmount {
+                            if customConvertedText.isEmpty && preview.minor > 0 {
+                                let major = household.toMajor(preview.minor)
+                                customConvertedText = household.isZeroDecimal
+                                    ? "\(Int64(major.rounded()))"
+                                    : String(format: "%.2f", major)
+                            }
+                            focusedField = .convertedAmount
+                        } else if focusedField == .convertedAmount {
+                            focusedField = nil
+                        }
+                    }
+                } label: {
+                    CozyUIIcon(.pencil, size: 12, color: Color.textSecondary)
+                        .padding(4)
+                }
+                .buttonStyle(.themedPlain)
+                .accessibilityLabel(L10n.text(lang, en: "Edit billed amount in \(household.rawValue)", vi: "Sửa số tiền thực trừ (\(household.rawValue))", zh: "修改 \(household.rawValue) 入账金额"))
+
+                if preview.source == .custom || preview.source == .preservedHistorical {
+                    Button {
+                        withAnimation(.snappy(duration: 0.18)) {
+                            customConvertedText = ""
+                            isEditingConvertedAmount = false
+                            forceLiveRate = true
+                            if focusedField == .convertedAmount { focusedField = nil }
+                        }
+                        Task { await fxService.refreshIfStale() }
+                    } label: {
+                        CozyUIIcon(.refresh, size: 12, color: Color.accent)
+                            .padding(4)
+                    }
+                    .buttonStyle(.themedPlain)
+                    .accessibilityLabel(L10n.text(lang, en: "Use live exchange rate", vi: "Dùng tỷ giá thực", zh: "使用实时汇率"))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .background(Color.softFill, in: Capsule())
+
+            if isEditingConvertedAmount {
+                HStack(spacing: 8) {
+                    Text(L10n.text(lang, en: "Billed in \(household.rawValue)", vi: "Thực trừ (\(household.rawValue))", zh: "实际入账 (\(household.rawValue))"))
+                        .font(.appCaption.weight(.medium))
+                        .foregroundStyle(Color.textSecondary)
+
+                    TextField(household.isZeroDecimal ? "0" : "0.00", text: $customConvertedText)
+                        .font(.appBodyMedium.monospacedDigit())
+                        .multilineTextAlignment(.trailing)
+                        .focused($focusedField, equals: .convertedAmount)
+                        #if os(iOS)
+                        .keyboardType(household.isZeroDecimal ? .numberPad : .decimalPad)
+                        #endif
+                        .submitLabel(.done)
+                        .onSubmit { focusedField = nil }
+
+                    Button(L10n.text(lang, en: "Auto", vi: "Tự động", zh: "自动")) {
+                        withAnimation(.snappy(duration: 0.16)) {
+                            customConvertedText = ""
+                            isEditingConvertedAmount = false
+                            forceLiveRate = true
+                            if focusedField == .convertedAmount { focusedField = nil }
+                        }
+                    }
+                    .font(.appCaption.weight(.semibold))
+                    .foregroundStyle(Color.accent)
+                    .buttonStyle(.themedPlain)
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color.fieldBackground, in: RoundedRectangle(cornerRadius: Radius.field, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: Radius.field, style: .continuous)
+                        .strokeBorder(Color.hairline, lineWidth: 1)
+                )
+            }
+        }
     }
 
     // MARK: - Description Input + Quick Chips
@@ -580,6 +743,82 @@ public struct TransactionEditorSheet: View {
 
     // MARK: - Data & Helpers
 
+    private enum ConversionSource: Equatable {
+        case domestic
+        case custom
+        case preservedHistorical
+        case live(String?)
+        case estimated
+        case unavailable
+    }
+
+    private struct ConversionPreview {
+        let minor: Int64
+        let rate: Double?
+        let source: ConversionSource
+    }
+
+    private var activeCurrencyCode: String {
+        entryCurrencyCode.isEmpty ? settings.currency.rawValue : entryCurrencyCode
+    }
+
+    private var isForeignEntry: Bool {
+        activeCurrencyCode != settings.currency.rawValue
+    }
+
+    private var parsedCustomConvertedMajor: Double? {
+        let trimmed = customConvertedText
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: ",", with: ".")
+        guard let value = Double(trimmed), value > 0, value.isFinite else { return nil }
+        return value
+    }
+
+    private var conversionPreview: ConversionPreview {
+        let entered = resolvedAmountMajor
+        let household = settings.currency
+        guard isForeignEntry else {
+            return ConversionPreview(minor: household.toStorageMinor(entered), rate: nil, source: .domestic)
+        }
+        if let customMajor = parsedCustomConvertedMajor, customMajor > 0 {
+            let minor = max(1, household.toStorageMinor(customMajor))
+            let rate = entered > 0 ? (customMajor / entered) : nil
+            return ConversionPreview(
+                minor: minor,
+                rate: (rate?.isFinite == true && (rate ?? 0) > 0) ? rate : nil,
+                source: .custom
+            )
+        }
+        if let preserved = preservedForeign,
+           !forceLiveRate,
+           preserved.currencyCode == activeCurrencyCode,
+           CurrencyCode.toStorageMinor(entered, currencyCode: activeCurrencyCode) == preserved.originalMinor {
+            return ConversionPreview(minor: preserved.convertedMinor, rate: preserved.rate, source: .preservedHistorical)
+        }
+        if entered > 0 {
+            if let conv = fxService.table.convert(entered, from: activeCurrencyCode, to: household) {
+                return ConversionPreview(
+                    minor: max(1, conv.convertedMinor),
+                    rate: conv.rate,
+                    source: conv.isLiveRate ? .live(conv.rateDate) : .estimated
+                )
+            }
+            return ConversionPreview(
+                minor: max(1, household.toStorageMinor(entered)),
+                rate: nil,
+                source: .unavailable
+            )
+        }
+        if let info = fxService.table.conversionRate(from: activeCurrencyCode, to: household.rawValue) {
+            return ConversionPreview(
+                minor: 0,
+                rate: info.rate,
+                source: info.isLive ? .live(info.rateDate) : .estimated
+            )
+        }
+        return ConversionPreview(minor: 0, rate: nil, source: .unavailable)
+    }
+
     private var resolvedAmountMajor: Double {
         max(0, keypad.evaluatedValue ?? 0)
     }
@@ -591,14 +830,37 @@ public struct TransactionEditorSheet: View {
                 ? L10n.text(lang, en: "Save changes", vi: "Lưu thay đổi", zh: "保存修改")
                 : L10n.text(lang, en: "Save transaction", vi: "Lưu giao dịch", zh: "保存账单")
         }
+        let targetMinor = isForeignEntry
+            ? conversionPreview.minor
+            : settings.currency.toStorageMinor(amountMajor)
         let formatted = MoneyFormat.format(
-            minor: settings.currency.toStorageMinor(amountMajor),
+            minor: targetMinor,
             currency: settings.currency,
             language: lang
         )
         return isEditing
             ? L10n.text(lang, en: "Update · \(formatted)", vi: "Cập nhật · \(formatted)", zh: "更新 · \(formatted)")
             : L10n.text(lang, en: "Save · \(formatted)", vi: "Lưu · \(formatted)", zh: "保存 · \(formatted)")
+    }
+
+    private func selectCurrency(_ code: String) {
+        let normalized = CurrencyCode.normalizeCode(code) ?? settings.currency.rawValue
+        guard normalized != activeCurrencyCode else { return }
+        entryCurrencyCode = normalized
+        customConvertedText = ""
+        isEditingConvertedAmount = false
+        forceLiveRate = true
+        let newDigits = CurrencyCode.fractionDigits(forCode: normalized)
+        if keypad.maxFractionDigits != newDigits {
+            if let current = keypad.evaluatedValue, current > 0 {
+                keypad = AmountKeypadEngine(initialAmountMajor: current, maxFractionDigits: newDigits)
+            } else {
+                keypad.maxFractionDigits = newDigits
+            }
+        }
+        if normalized != settings.currency.rawValue {
+            Task { await fxService.refreshIfStale() }
+        }
     }
 
     private func quickSuggestions(lang: AppLanguage) -> [String] {
@@ -631,11 +893,23 @@ public struct TransactionEditorSheet: View {
     }
 
     private func populate() {
-        let maxDigits = settings.currency.fractionDigits
         if let existing {
             name = existing.name
-            let major = settings.currency.toMajor(existing.amountMinor)
-            keypad = AmountKeypadEngine(initialAmountMajor: major, maxFractionDigits: maxDigits)
+            if existing.isForeignCurrency,
+               let origCode = existing.originalCurrencyCode,
+               let origMinor = existing.originalAmountMinor {
+                let normalized = CurrencyCode.normalizeCode(origCode) ?? origCode.uppercased()
+                entryCurrencyCode = normalized
+                let maxDigits = CurrencyCode.fractionDigits(forCode: normalized)
+                keypad = AmountKeypadEngine(initialAmountMajor: CurrencyCode.toMajor(origMinor), maxFractionDigits: maxDigits)
+                preservedForeign = (normalized, origMinor, existing.amountMinor, existing.exchangeRate)
+            } else {
+                entryCurrencyCode = settings.currency.rawValue
+                let maxDigits = settings.currency.fractionDigits
+                let major = settings.currency.toMajor(existing.amountMinor)
+                keypad = AmountKeypadEngine(initialAmountMajor: major, maxFractionDigits: maxDigits)
+                preservedForeign = nil
+            }
             type = existing.type
             category = existing.category
             dayKey = existing.dayKey
@@ -643,18 +917,10 @@ public struct TransactionEditorSheet: View {
             showNoteField = !existing.note.isEmpty
             selectedMemberID = existing.memberID
             selectedMemberName = existing.memberName
-        } else if let prefill {
-            name = prefill.name
-            keypad = AmountKeypadEngine(initialAmountMajor: prefill.amountMajor, maxFractionDigits: maxDigits)
-            type = prefill.type
-            category = prefill.category
-            dayKey = prefill.dayKey
-            note = prefill.note
-            showNoteField = !prefill.note.isEmpty
-            selectedMemberID = settings.currentMember.id
-            selectedMemberName = settings.currentMember.name
         } else {
-            keypad = AmountKeypadEngine(initialAmountMajor: nil, maxFractionDigits: maxDigits)
+            entryCurrencyCode = settings.currency.rawValue
+            keypad = AmountKeypadEngine(initialAmountMajor: nil, maxFractionDigits: settings.currency.fractionDigits)
+            preservedForeign = nil
             selectedMemberID = settings.currentMember.id
             selectedMemberName = settings.currentMember.name
             dayKey = store.selectedPeriod.defaultNewTransactionDayKey()
@@ -671,22 +937,46 @@ public struct TransactionEditorSheet: View {
         let cleanedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let finalName = cleanedName.isEmpty ? category.title(in: settings.language) : cleanedName
 
+        let finalAmountMinor: Int64
+        let origMinor: Int64?
+        let origCode: String?
+        let finalRate: Double?
+        let needsReview: Bool
+
+        if isForeignEntry {
+            let preview = conversionPreview
+            finalAmountMinor = max(1, preview.minor)
+            origMinor = max(1, CurrencyCode.toStorageMinor(major, currencyCode: activeCurrencyCode))
+            origCode = activeCurrencyCode
+            finalRate = preview.rate ?? (major > 0 ? settings.currency.toMajor(finalAmountMinor) / major : nil)
+            needsReview = preview.source == .unavailable
+        } else {
+            finalAmountMinor = max(1, settings.currency.toStorageMinor(major))
+            origMinor = nil
+            origCode = nil
+            finalRate = nil
+            needsReview = false
+        }
+
         let record = TransactionRecord(
             id: existing?.id ?? UUID().uuidString,
             name: finalName,
-            amountMinor: settings.currency.toStorageMinor(major),
+            amountMinor: finalAmountMinor,
             type: type,
             category: category,
             dayKey: dayKey,
             createdAt: existing?.createdAt ?? Date(),
             note: note.trimmingCharacters(in: .whitespacesAndNewlines),
-            source: existing?.source ?? sourceOverride ?? .manual,
-            rawSourceText: existing?.rawSourceText ?? rawSourceText,
+            source: existing?.source ?? .manual,
+            rawSourceText: existing?.rawSourceText,
             memberID: selectedMemberID.isEmpty ? settings.currentMember.id : selectedMemberID,
             memberName: selectedMemberName.isEmpty ? settings.currentMember.name : selectedMemberName,
-            needsReview: false,
+            needsReview: needsReview,
             updatedAt: Date(),
-            isDeleted: false
+            isDeleted: false,
+            originalAmountMinor: origMinor,
+            originalCurrencyCode: origCode,
+            exchangeRate: finalRate
         )
         store.saveTransaction(record)
         store.ensureVisible(dayKey: record.dayKey)

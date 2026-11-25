@@ -6,6 +6,7 @@ import CloudKit
 import Combine
 import DesignSystem
 import GoalsUI
+import MCPKit
 import OverviewUI
 import Persistence
 import SettingsUI
@@ -34,7 +35,10 @@ struct TallyApp: App {
     @State private var emailInbox = EmailInboxSync()
     @State private var assistant = AssistantService()
     @State private var mcpServer = MCPServer()
+    @State private var remoteMCP = RemoteMCPSync()
+    @State private var exchangeRates = ExchangeRateService.shared
     @State private var router = TabRouter()
+    @State private var pendingMCPPairing: MCPPairingPayload?
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -47,6 +51,8 @@ struct TallyApp: App {
                 .environment(emailInbox)
                 .environment(assistant)
                 .environment(mcpServer)
+                .environment(remoteMCP)
+                .environment(exchangeRates)
                 .environment(\.hideSalary, settings.hideSalary)
                 #if os(macOS)
                 .frame(minWidth: 780, minHeight: 580)
@@ -57,9 +63,11 @@ struct TallyApp: App {
                     store.reconcileMemberIdentities(settings: settings, notifyCloud: true)
                     store.deduplicateExistingTransactions(notifyCloud: true)
                     emailInbox.syncIfConfigured(settings: settings, store: store)
+                    remoteMCP.attach(settings: settings, store: store)
+                    remoteMCP.syncIfConfigured(settings: settings, store: store)
+                    Task { await exchangeRates.refreshIfStale() }
                     #if os(macOS)
-                    // The MCP server for other assistants runs only in the Mac app, and only when
-                    // the user turned it on in Settings.
+                    // The local MCP server runs only in the Mac app when turned on in Settings.
                     mcpServer.apply(settings: settings, store: store)
                     #endif
                 }
@@ -74,6 +82,13 @@ struct TallyApp: App {
                         settings.refreshKeychain()
                         cloudSync.appBecameActive()
                         emailInbox.syncIfConfigured(settings: settings, store: store)
+                        remoteMCP.syncIfConfigured(settings: settings, store: store)
+                        Task { await exchangeRates.refreshIfStale() }
+                    }
+                }
+                .onChange(of: settings.hideSalary) { _, _ in
+                    if settings.isCloudMCPConfigured {
+                        Task { await remoteMCP.pushConfig(settings: settings) }
                     }
                 }
                 // Day rollover while the app stays open (e.g. left running past midnight):
@@ -83,6 +98,9 @@ struct TallyApp: App {
                 }
                 .onOpenURL { url in
                     Task { await handleDeepLink(url) }
+                }
+                .sheet(item: $pendingMCPPairing) { payload in
+                    MCPPairingConfirmationSheet(payload: payload)
                 }
         }
         #if os(macOS)
@@ -114,6 +132,10 @@ struct TallyApp: App {
     /// or `tally://log?amount=18.50&merchant=FairPrice&source=applePay`
     private func handleDeepLink(_ url: URL) async {
         guard url.scheme?.lowercased() == "tally" else { return }
+        if let pairing = MCPSetupLink.parsePairingDeepLink(url) {
+            pendingMCPPairing = pairing
+            return
+        }
         let comps = URLComponents(url: url, resolvingAgainstBaseURL: false)
         let query = Dictionary(uniqueKeysWithValues: (comps?.queryItems ?? []).compactMap { item in
             item.value.map { (item.name.lowercased(), $0) }
@@ -121,18 +143,43 @@ struct TallyApp: App {
 
         let source = query["source"].flatMap(TransactionSource.init(rawValue:)) ?? .shortcut
 
-        if let amountStr = query["amount"], let amount = Double(amountStr), amount > 0 {
+        if let amountStr = query["amount"],
+           let parsedAmount = ApplePayInputParser.parseFormattedAmount(
+               amountStr,
+               explicitCurrency: query["currency"],
+               defaultCurrency: settings.currency
+           ) {
             let merchant = query["merchant"] ?? query["name"] ?? "Transaction"
             let type = query["type"].flatMap(TransactionType.init(rawValue:)) ?? .expense
             let category = query["category"].flatMap(CategoryID.init(rawValue:))
                 ?? LocalTransactionParser.inferCategory(text: merchant, type: type)
+            let statedCode = parsedAmount.currencyCode
+            if statedCode != settings.currency.rawValue {
+                await exchangeRates.refreshIfStale()
+            }
+            let resolved = AITransactionParser.resolvedAmountAndNote(
+                for: ParsedTransactionDraft(
+                    name: merchant,
+                    amountMajor: parsedAmount.amountMajor,
+                    currencyCode: statedCode,
+                    type: type,
+                    category: category,
+                    note: query["note"] ?? query["card"] ?? ""
+                ),
+                targetCurrency: settings.currency,
+                language: settings.language
+            )
             BudgetStore.ingestFromShortcut(
                 name: merchant,
-                amountMajor: amount,
+                amountMajor: settings.currency.toMajor(max(1, resolved.amountMinor)),
                 type: type,
                 category: category,
-                note: query["note"] ?? query["card"] ?? "",
-                source: source
+                note: resolved.note,
+                source: source,
+                originalAmountMinor: resolved.originalAmountMinor,
+                originalCurrencyCode: resolved.originalCurrencyCode,
+                exchangeRate: resolved.exchangeRate,
+                needsReviewOverride: resolved.usedFallbackUnavailableRate ? true : nil
             )
             return
         }
@@ -146,6 +193,9 @@ struct TallyApp: App {
                 language: settings.language,
                 client: client
             ) {
+                if let parsedCode = parsed.currencyCode, parsedCode != settings.currency.rawValue {
+                    await exchangeRates.refreshIfStale()
+                }
                 let resolved = AITransactionParser.resolvedAmountAndNote(
                     for: parsed,
                     targetCurrency: settings.currency,
@@ -159,7 +209,11 @@ struct TallyApp: App {
                     dayKey: parsed.dayKey,
                     note: resolved.note,
                     source: source,
-                    rawSourceText: rawText
+                    rawSourceText: rawText,
+                    originalAmountMinor: resolved.originalAmountMinor,
+                    originalCurrencyCode: resolved.originalCurrencyCode,
+                    exchangeRate: resolved.exchangeRate,
+                    needsReviewOverride: resolved.usedFallbackUnavailableRate ? true : nil
                 )
             }
         }

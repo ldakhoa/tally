@@ -155,4 +155,102 @@ final class TallyCoreTests: XCTestCase {
         XCTAssertEqual(AIProvider.auto.shortTitle(in: .vietnamese), "Tự động")
         XCTAssertEqual(AIProvider.claude.shortTitle(in: .english), "Claude")
     }
+
+    func testExpandedCurrenciesFormattingAndZeroDecimal() {
+        XCTAssertTrue(CurrencyCode.vnd.isZeroDecimal)
+        XCTAssertTrue(CurrencyCode.jpy.isZeroDecimal)
+        XCTAssertTrue(CurrencyCode.krw.isZeroDecimal)
+        XCTAssertTrue(CurrencyCode.idr.isZeroDecimal)
+        XCTAssertFalse(CurrencyCode.hkd.isZeroDecimal)
+        XCTAssertFalse(CurrencyCode.cny.isZeroDecimal)
+
+        XCTAssertEqual(CurrencyCode.hkd.narrowSymbol, "HK$")
+        XCTAssertEqual(CurrencyCode.jpy.narrowSymbol, "¥")
+        XCTAssertEqual(CurrencyCode.hkd.name(in: .english), "Hong Kong Dollar")
+        XCTAssertEqual(CurrencyCode.hkd.name(in: .vietnamese), "Đô la Hồng Kông")
+        XCTAssertEqual(CurrencyCode.hkd.name(in: .chinese), "港元")
+
+        let hkd = MoneyFormat.format(minor: CurrencyCode.hkd.toStorageMinor(83.75), currency: .hkd, language: .english)
+        XCTAssertEqual(hkd, "HK$83.75")
+
+        let jpy = MoneyFormat.format(minor: CurrencyCode.jpy.toStorageMinor(2_400), currency: .jpy, language: .english)
+        XCTAssertEqual(jpy, "¥2,400")
+
+        let aed = MoneyFormat.format(minor: CurrencyCode.toStorageMinor(120.5, currencyCode: "AED"), currencyCode: "AED", language: .english)
+        XCTAssertEqual(aed, "AED 120.50")
+    }
+
+    func testCurrencyCodeNormalizationAndRejection() {
+        XCTAssertEqual(CurrencyCode.normalizeCode("hkd"), "HKD")
+        XCTAssertEqual(CurrencyCode.normalizeCode("HK$"), "HKD")
+        XCTAssertEqual(CurrencyCode.normalizeCode("RMB"), "CNY")
+        XCTAssertEqual(CurrencyCode.normalizeCode("NT$"), "TWD")
+        XCTAssertEqual(CurrencyCode.normalizeCode(" aed "), "AED")
+
+        XCTAssertNil(CurrencyCode.normalizeCode("SGT"))
+        XCTAssertNil(CurrencyCode.normalizeCode("NOV"))
+        XCTAssertNil(CurrencyCode.normalizeCode("REF"))
+        XCTAssertNil(CurrencyCode.normalizeCode(""))
+        XCTAssertNil(CurrencyCode.normalizeCode("XYZ"))
+    }
+
+    func testExchangeRateTableConversionAndNoMixing() {
+        let hkdToSgd = ExchangeRateTable.fallback.convert(83.75, from: "HKD", to: .sgd)
+        XCTAssertNotNil(hkdToSgd)
+        XCTAssertEqual(hkdToSgd?.convertedMajor ?? 0, 14.32, accuracy: 0.02)
+        XCTAssertEqual(hkdToSgd?.isLiveRate, false)
+
+        let jpyToSgd = ExchangeRateTable.fallback.convert(2_400, from: "JPY", to: .sgd)
+        XCTAssertNotNil(jpyToSgd)
+        XCTAssertEqual(jpyToSgd?.convertedMajor ?? 0, 21.05, accuracy: 0.02)
+
+        let aedToSgd = ExchangeRateTable.fallback.convert(27.5, from: "AED", to: .sgd)
+        XCTAssertEqual(aedToSgd?.convertedMajor ?? 0, 10.0, accuracy: 0.02)
+
+        let same = ExchangeRateTable.fallback.conversionRate(from: "SGD", to: "SGD")
+        XCTAssertEqual(same?.rate, 1.0)
+
+        // Live table missing a currency falls back cleanly as a pair (never mixing live + fallback).
+        let partialLive = ExchangeRateTable(ratesPerSGD: ["SGD": 1.0, "USD": 0.70], rateDate: "2026-11-25", fetchedAt: Date())
+        let hkdFallback = partialLive.conversionRate(from: "HKD", to: "USD")
+        XCTAssertEqual(hkdFallback?.isLive, false)
+        XCTAssertEqual(hkdFallback?.rate ?? 0, 0.75 / 5.85, accuracy: 0.0001)
+
+        XCTAssertTrue(ExchangeRateTable.formatRate(0.17094, from: "HKD", to: .sgd).contains("1 HKD = 0.1709 SGD"))
+        XCTAssertTrue(ExchangeRateTable.formatRate(1.0 / 19_000.0, from: "VND", to: .sgd).contains("1 SGD = 19,000 VND"))
+    }
+
+    func testAmountKeypadCurrencyCodeFormatting() {
+        var engine = AmountKeypadEngine(initialAmountMajor: 2400, maxFractionDigits: 0)
+        XCTAssertEqual(engine.formattedDisplayNumber(currencyCode: "JPY"), "2,400")
+        XCTAssertEqual(engine.formattedDisplayNumber(currencyCode: "VND"), "2.400")
+
+        engine = AmountKeypadEngine(initialAmountMajor: 83.75, maxFractionDigits: 2)
+        XCTAssertEqual(engine.formattedDisplayNumber(currencyCode: "HKD"), "83.75")
+        XCTAssertEqual(engine.formattedDisplayNumber(currencyCode: "AED"), "83.75")
+    }
+
+    func testConvertMinorSafetyAndPrecision() {
+        let rates = ExchangeRateTable(ratesPerSGD: ["SGD": 1.0, "VND": 19_000.0, "USD": 0.75], fetchedAt: Date())
+
+        // SGD -> VND (zero-decimal storage alignment: multiple of 100)
+        let sgdMinor = CurrencyCode.sgd.toStorageMinor(65.71) // 6571 -> S$65.71 * 19_000 = 1,248,490 VND
+        let vndMinor = rates.convertMinor(sgdMinor, from: .sgd, to: .vnd)
+        XCTAssertEqual(vndMinor, 124_849_000)
+        XCTAssertEqual(vndMinor % 100, 0)
+
+        // VND -> SGD
+        let backToSgd = rates.convertMinor(124_849_000, from: .vnd, to: .sgd)
+        XCTAssertEqual(backToSgd, 6_571)
+
+        // Negative, zero, and identity
+        XCTAssertEqual(rates.convertMinor(-1_000, from: .sgd, to: .vnd), -19_000_000)
+        XCTAssertEqual(rates.convertMinor(0, from: .sgd, to: .vnd), 0)
+        XCTAssertEqual(rates.convertMinor(12_345, from: .sgd, to: .sgd), 12_345)
+
+        // Extreme values never trap Int64
+        XCTAssertNil(rates.convert(1e16, from: "SGD", to: .vnd))
+        XCTAssertEqual(rates.convertMinor(Int64.min, from: .sgd, to: .vnd), Int64.min)
+        XCTAssertEqual(rates.convertMinor(Int64.max, from: .sgd, to: .vnd), Int64.max)
+    }
 }

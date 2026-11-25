@@ -26,11 +26,18 @@ public struct AskTallyView: View {
     @State private var dictation = VoiceDictationManager()
     @State private var copiedMessageID: UUID?
     @State private var celebrationTrigger = 0
-    @State private var isShowingHistory = false
+    @State private var path: [Route] = []
+    @State private var didRestoreRoute = false
     @State private var pendingImages: [PreparedChatImage] = []
     @State private var preparingCount = 0
+    @State private var attachmentBatchID = UUID()
     @State private var attachNote: String?
     @State private var viewerItem: ChatImageViewerItem?
+    @State private var editingTransaction: TransactionRecord?
+    @State private var hasScrolled = false
+    @State private var lastMessageIsOffscreen = false
+    @State private var isAtBottom = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     #if os(iOS)
     @State private var photoSelection: [PhotosPickerItem] = []
     #else
@@ -40,214 +47,307 @@ public struct AskTallyView: View {
 
     private let bottomAnchorID = "ask-tally-bottom-anchor"
 
+    private enum Route: Hashable { case conversation }
+
     public init() {}
 
     public var body: some View {
         let lang = settings.language
-        NavigationStack {
-            VStack(spacing: 0) {
-                ScrollViewReader { proxy in
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 14) {
-                            if !settings.isAIReady {
-                                setupEmptyState(lang: lang)
-                            } else if assistant.messages.isEmpty {
-                                welcomeEmptyState(lang: lang)
-                            } else {
-                                ForEach(assistant.messages) { msg in
-                                    messageRow(for: msg, lang: lang)
-                                        .id(msg.id)
-                                }
+        NavigationStack(path: $path) {
+            chatHistory(lang: lang)
+                .navigationDestination(for: Route.self) { _ in
+                    conversation(lang: lang)
+                }
+        }
+        .onAppear {
+            guard !didRestoreRoute else { return }
+            didRestoreRoute = true
+            if assistant.activeSessionID != nil {
+                path = [.conversation]
+            }
+        }
+        .cozySheetFrame(minWidth: 540, idealWidth: 640, minHeight: 600, idealHeight: 700)
+        .interactiveDismissDisabled(
+            !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                || !pendingImages.isEmpty
+                || dictation.isRecording
+                || assistant.isStreaming
+        )
+    }
 
-                                if let status = assistant.statusLabel {
-                                    HStack(spacing: 8) {
-                                        ProgressView().controlSize(.small)
-                                        Text(status)
-                                            .font(.appCaption.weight(.medium))
-                                            .foregroundStyle(Color.textSecondary)
+    private func conversation(lang: AppLanguage) -> some View {
+        VStack(spacing: 0) {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 14) {
+                        if !settings.isAIReady {
+                            setupEmptyState(lang: lang)
+                        } else if assistant.messages.isEmpty {
+                            welcomeEmptyState(lang: lang)
+                        } else {
+                            ForEach(assistant.messages) { msg in
+                                messageRow(for: msg, lang: lang)
+                                    .background {
+                                        if msg.id == assistant.messages.last?.id {
+                                            Color.clear.onGeometryChange(for: Bool.self) { geometry in
+                                                guard let viewport = geometry.bounds(of: .scrollView) else { return false }
+                                                return !viewport.intersects(CGRect(origin: .zero, size: geometry.size))
+                                            } action: { lastMessageIsOffscreen = $0 }
+                                        }
                                     }
-                                    .padding(.horizontal, 12)
-                                    .padding(.vertical, 7)
-                                    .background(Color.softFill, in: Capsule())
-                                    .transition(.opacity.combined(with: .scale(scale: 0.96)))
+                                    .id(msg.id)
+                            }
+
+                            if let status = assistant.statusLabel {
+                                HStack(spacing: 8) {
+                                    ProgressView().controlSize(.small)
+                                    Text(status)
+                                        .font(.appCaption.weight(.medium))
+                                        .foregroundStyle(Color.textSecondary)
                                 }
+                                .padding(.horizontal, 12)
+                                .padding(.vertical, 7)
+                                .background(Color.softFill, in: Capsule())
+                                .transition(.opacity.combined(with: .scale(scale: 0.96)))
                             }
-
-                            if let err = assistant.errorMessage {
-                                errorBanner(err, lang: lang)
-                            }
-
-                            if let micErr = dictation.errorMessage {
-                                Text(micErr)
-                                    .font(.appCaption)
-                                    .foregroundStyle(Color.negative)
-                                    .padding(10)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .background(Color.negative.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-                            }
-
-                            Color.clear
-                                .frame(height: 6)
-                                .id(bottomAnchorID)
                         }
-                        .documentColumn()
+
+                        if let err = assistant.errorMessage {
+                            errorBanner(err, lang: lang)
+                        }
+
+                        if let micErr = dictation.errorMessage {
+                            Text(micErr)
+                                .font(.appCaption)
+                                .foregroundStyle(Color.negative)
+                                .padding(10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.negative.opacity(0.09), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                        }
+
+                        Color.clear
+                            .frame(height: 6)
+                            .onGeometryChange(for: Bool.self) { geometry in
+                                guard let viewport = geometry.bounds(of: .scrollView) else { return true }
+                                return viewport.maxY >= 0
+                            } action: { atBottom in
+                                isAtBottom = atBottom
+                                if atBottom { hasScrolled = false }
+                            }
+                            .id(bottomAnchorID)
                     }
-                    .scrollDismissesKeyboard(.interactively)
+                    .documentColumn()
                     .contentShape(Rectangle())
                     .onTapGesture {
                         if isComposerFocused {
                             isComposerFocused = false
                         }
                     }
-                    .onChange(of: assistant.messages.count) { _, _ in
-                        scrollToBottom(proxy: proxy, animated: true)
+                    #if os(macOS)
+                    .modifier(LegacyChatScrollIntent { hasScrolled = true })
+                    #endif
+                }
+                .modifier(ChatScrollIntent { hasScrolled = true })
+                .scrollDismissesKeyboard(.interactively)
+                .onChange(of: assistant.messages.count) { _, _ in
+                    followLatestMessage(proxy: proxy, animated: true)
+                }
+                .onChange(of: assistant.messages.last?.text) { _, _ in
+                    followLatestMessage(proxy: proxy, animated: false)
+                }
+                .onChange(of: assistant.messages.last?.actions.count) { oldCount, newCount in
+                    followLatestMessage(proxy: proxy, animated: true)
+                    if let newCount, newCount > (oldCount ?? 0) {
+                        celebrationTrigger += 1
                     }
-                    .onChange(of: assistant.messages.last?.text) { _, _ in
-                        scrollToBottom(proxy: proxy, animated: false)
-                    }
-                    .onChange(of: assistant.messages.last?.actions.count) { oldCount, newCount in
-                        scrollToBottom(proxy: proxy, animated: true)
-                        if let newCount, newCount > (oldCount ?? 0) {
-                            celebrationTrigger += 1
+                }
+                .onChange(of: assistant.salaryAccess.pending?.id) { _, _ in
+                    followLatestMessage(proxy: proxy, animated: true)
+                }
+                .onChange(of: isComposerFocused) { _, focused in
+                    if focused {
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                            followLatestMessage(proxy: proxy, animated: true)
                         }
                     }
-                    .onChange(of: assistant.salaryAccess.pending?.id) { _, _ in
-                        scrollToBottom(proxy: proxy, animated: true)
-                    }
-                    .onChange(of: isComposerFocused) { _, focused in
-                        if focused {
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
-                                scrollToBottom(proxy: proxy, animated: true)
-                            }
-                        }
-                    }
                 }
-
-                // Live voice dictation bar (appears smoothly when recording)
-                if dictation.isRecording {
-                    liveDictationBanner(lang: lang)
-                        .transition(.move(edge: .bottom).combined(with: .opacity))
+                .task(id: assistant.activeSessionID) {
+                    hasScrolled = false
+                    scrollToBottom(proxy: proxy, animated: false)
                 }
-
-                // Cozy floating chat composer bar (swipe down to dismiss keyboard)
-                composerBar(lang: lang)
-            }
-            .overlay(alignment: .bottom) {
-                CozyCelebrationOverlay(trigger: celebrationTrigger)
-                    .padding(.bottom, 92)
-            }
-            .animation(.spring(response: 0.28, dampingFraction: 0.8), value: dictation.isRecording)
-            .pageBackground()
-            .onAppear { assistant.chatScreenDidAppear() }
-            // A consent card still waiting when the chat goes away counts as Not now.
-            .onDisappear { assistant.chatScreenDidDisappear() }
-            .cozySheetToolbar(title: L10n.text(lang, en: "Ask Tally", vi: "Trợ lý Tally AI", zh: "Tally AI 助手")) {
-                Button(L10n.text(lang, en: "Close", vi: "Đóng", zh: "关闭")) {
-                    dictation.stop()
-                    dismiss()
-                }
-            } trailing: {
-                if !assistant.sessions.isEmpty || !assistant.messages.isEmpty {
-                    if !assistant.sessions.isEmpty {
+                .overlay(alignment: .bottomTrailing) {
+                    if hasScrolled && lastMessageIsOffscreen && !assistant.messages.isEmpty {
                         Button {
-                            CozyHaptics.light()
-                            isComposerFocused = false
-                            isShowingHistory = true
+                            scrollToBottom(proxy: proxy, animated: true)
                         } label: {
-                            Image(systemName: "clock.arrow.circlepath")
-                                .font(.appControl)
+                            CozyUIIcon(.chevronDown, size: 18, color: Color.onInk)
+                                .frame(width: 44, height: 44)
+                                .background(Color.ink, in: Circle())
+                                .contentShape(Rectangle())
                         }
-                        .accessibilityLabel(L10n.text(lang, en: "Chat history", vi: "Lịch sử chat", zh: "历史对话"))
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(L10n.text(lang, en: "Scroll to latest message", vi: "Cuộn đến tin nhắn mới nhất", zh: "滚动到最新消息"))
+                        .padding(12)
                     }
+                }
+            }
 
-                    if !assistant.messages.isEmpty {
-                        Button {
-                            CozyHaptics.light()
-                            dictation.stop()
-                            assistant.startNewChat()
-                        } label: {
-                            CozyUIIcon(.compose, size: 18, color: Color.textPrimary)
-                        }
-                        .accessibilityLabel(L10n.text(lang, en: "New chat", vi: "Chat mới", zh: "新对话"))
-                    }
-                }
+            // Live voice dictation bar (appears smoothly when recording)
+            if dictation.isRecording {
+                liveDictationBanner(lang: lang)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
             }
-            .sheet(isPresented: $isShowingHistory) {
-                ChatHistorySheet(
-                    sessions: assistant.sessions,
-                    activeSessionID: assistant.activeSessionID,
-                    language: lang,
-                    onSelect: { session in
-                        CozyHaptics.selection()
-                        assistant.selectSession(session)
-                        isShowingHistory = false
-                    },
-                    onNewChat: {
-                        CozyHaptics.light()
-                        assistant.startNewChat()
-                        isShowingHistory = false
-                    },
-                    onDelete: { id in
-                        CozyHaptics.light()
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
-                            assistant.deleteSession(id: id)
-                        }
-                    }
-                )
-            }
-            .interactiveDismissDisabled(
-                !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || !pendingImages.isEmpty
-                    || dictation.isRecording
-                    || assistant.isStreaming
-            )
-            .onDisappear {
-                dictation.stop()
-            }
-            .onDrop(of: [.image, .fileURL], isTargeted: nil) { providers in
-                guard canAttachImages else {
-                    attachNote = AssistantService.imagesUnsupportedMessage(in: lang)
-                    return false
-                }
-                return attachImages(from: providers)
-            }
-            #if os(macOS)
-            .onPasteCommand(of: [.image, .fileURL]) { providers in
-                guard canAttachImages else { return }
-                _ = attachImages(from: providers)
-            }
-            .fileImporter(isPresented: $isShowingFileImporter, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
-                guard case .success(let urls) = result else { return }
-                let slots = ImageUploadPolicy.remainingSlots(current: pendingImages.count + preparingCount)
-                prepareImages(urls.prefix(slots).map { url in
-                    { @Sendable in
-                        let scoped = url.startAccessingSecurityScopedResource()
-                        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-                        return try? Data(contentsOf: url)
-                    }
-                })
-            }
-            #else
-            .onChange(of: photoSelection) { _, items in
-                guard !items.isEmpty else { return }
-                photoSelection = []
-                let slots = ImageUploadPolicy.remainingSlots(current: pendingImages.count + preparingCount)
-                prepareImages(items.prefix(slots).map { item in
-                    { @Sendable in try? await item.loadTransferable(type: Data.self) }
-                })
-            }
-            #endif
-            #if os(iOS)
-            .fullScreenCover(item: $viewerItem) { item in
-                ChatImageViewer(attachment: item.attachment, data: imageLoader(for: item.attachment), language: lang)
-            }
-            #else
-            .sheet(item: $viewerItem) { item in
-                ChatImageViewer(attachment: item.attachment, data: imageLoader(for: item.attachment), language: lang)
-            }
-            #endif
+
+            // Cozy floating chat composer bar (swipe down to dismiss keyboard)
+            composerBar(lang: lang)
         }
-        .cozySheetFrame(minWidth: 540, idealWidth: 640, minHeight: 600, idealHeight: 700)
+        .overlay(alignment: .bottom) {
+            CozyCelebrationOverlay(trigger: celebrationTrigger)
+                .padding(.bottom, 92)
+        }
+        .animation(.spring(response: 0.28, dampingFraction: 0.8), value: dictation.isRecording)
+        .pageBackground()
+        .onAppear { assistant.chatScreenDidAppear() }
+        // A consent card still waiting when the chat goes away counts as Not now.
+        .onDisappear { assistant.chatScreenDidDisappear() }
+        #if os(iOS)
+        .navigationTitle(conversationTitle(lang: lang))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .confirmationAction) { doneButton(lang: lang) }
+        }
+        .modifier(ChatHistorySwipe(onSwipe: showHistory))
+        #else
+        .navigationBarBackButtonHidden(true)
+        .cozySheetToolbar(title: conversationTitle(lang: lang)) {
+            Button(action: showHistory) {
+                Label(L10n.text(lang, en: "Chats", vi: "Danh sách chat", zh: "对话列表"), systemImage: "chevron.left")
+            }
+        } trailing: {
+            doneButton(lang: lang)
+        }
+        #endif
+        .onDisappear {
+            dictation.stop()
+        }
+        .onDrop(of: [.image, .fileURL], isTargeted: nil) { providers in
+            guard canAttachImages else {
+                attachNote = AssistantService.imagesUnsupportedMessage(in: lang)
+                return false
+            }
+            return attachImages(from: providers)
+        }
+        #if os(macOS)
+        .onPasteCommand(of: [.image, .fileURL]) { providers in
+            guard canAttachImages else { return }
+            _ = attachImages(from: providers)
+        }
+        .fileImporter(isPresented: $isShowingFileImporter, allowedContentTypes: [.image], allowsMultipleSelection: true) { result in
+            guard case .success(let urls) = result else { return }
+            let slots = ImageUploadPolicy.remainingSlots(current: pendingImages.count + preparingCount)
+            prepareImages(urls.prefix(slots).map { url in
+                { @Sendable in
+                    let scoped = url.startAccessingSecurityScopedResource()
+                    defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                    return try? Data(contentsOf: url)
+                }
+            })
+        }
+        #else
+        .onChange(of: photoSelection) { _, items in
+            guard !items.isEmpty else { return }
+            photoSelection = []
+            let slots = ImageUploadPolicy.remainingSlots(current: pendingImages.count + preparingCount)
+            prepareImages(items.prefix(slots).map { item in
+                { @Sendable in try? await item.loadTransferable(type: Data.self) }
+            })
+        }
+        #endif
+        #if os(iOS)
+        .fullScreenCover(item: $viewerItem) { item in
+            ChatImageViewer(attachment: item.attachment, data: imageLoader(for: item.attachment), language: lang)
+        }
+        #else
+        .sheet(item: $viewerItem) { item in
+            ChatImageViewer(attachment: item.attachment, data: imageLoader(for: item.attachment), language: lang)
+        }
+        #endif
+        .sheet(item: $editingTransaction) { tx in
+            TransactionEditorSheet(existing: tx)
+        }
+    }
+
+    private func conversationTitle(lang: AppLanguage) -> String {
+        assistant.sessions.first { $0.id == assistant.activeSessionID }?.title
+            ?? L10n.text(lang, en: "New Chat", vi: "Chat mới", zh: "新对话")
+    }
+
+    private func doneButton(lang: AppLanguage) -> some View {
+        Button(L10n.text(lang, en: "Done", vi: "Xong", zh: "完成")) {
+            dictation.stop()
+            dismiss()
+        }
+    }
+
+    private func chatHistory(lang: AppLanguage) -> some View {
+        ChatHistoryList(
+            sessions: assistant.sessions,
+            activeSessionID: assistant.activeSessionID,
+            isStreaming: assistant.isStreaming,
+            language: lang,
+            onSelect: { session in
+                if session.id != assistant.activeSessionID {
+                    guard !assistant.isStreaming else { return }
+                    resetComposer()
+                    assistant.selectSession(session)
+                }
+                CozyHaptics.selection()
+                path = [.conversation]
+            },
+            onDelete: { id in
+                guard !assistant.isStreaming || id != assistant.activeSessionID else { return }
+                if id == assistant.activeSessionID { resetComposer() }
+                CozyHaptics.light()
+                withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) {
+                    assistant.deleteSession(id: id)
+                }
+            }
+        )
+        .cozySheetToolbar(title: "Ask Tally") {
+            Button(L10n.text(lang, en: "Close", vi: "Đóng", zh: "关闭")) { dismiss() }
+        } trailing: {
+            Button(action: startNewChat) {
+                Image(systemName: "square.and.pencil")
+                    .font(.system(size: 19, weight: .semibold))
+                    .frame(minWidth: 36, minHeight: 36)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel(L10n.text(lang, en: "New chat", vi: "Chat mới", zh: "新对话"))
+        }
+    }
+
+    private func showHistory() {
+        CozyHaptics.light()
+        isComposerFocused = false
+        path.removeAll()
+    }
+
+    private func startNewChat() {
+        CozyHaptics.light()
+        resetComposer()
+        assistant.startNewChat()
+        path = [.conversation]
+    }
+
+    private func resetComposer() {
+        dictation.stop()
+        isComposerFocused = false
+        draft = ""
+        draftBeforeDictation = ""
+        pendingImages = []
+        preparingCount = 0
+        attachmentBatchID = UUID()
+        attachNote = nil
     }
 
     // MARK: - Empty States
@@ -319,9 +419,9 @@ public struct AskTallyView: View {
 
                     Text(L10n.text(
                         lang,
-                        en: "Type or speak in English, Vietnamese, or Chinese — Tally can log expenses, set budgets, manage savings goals, and chat about spending.",
-                        vi: "Gõ hoặc nói bằng tiếng Việt, Anh hoặc Trung — Tally tự động ghi chi tiêu, đặt ngân sách, tạo mục tiêu tiết kiệm và tâm sự thu chi cùng hai bạn.",
-                        zh: "支持中文、英文或越南语打字/语音输入——Tally 可自动记账、设置预算、管理存钱目标并解答家庭收支。"
+                        en: "Describe an expense or send a bank alert to log it. You can also ask about budgets, savings goals, and spending.",
+                        vi: "Mô tả khoản chi hoặc gửi thông báo ngân hàng để ghi giao dịch. Bạn cũng có thể hỏi về ngân sách, mục tiêu tiết kiệm và chi tiêu.",
+                        zh: "描述一笔支出或发送银行通知即可记账，也可以询问预算、储蓄目标和消费情况。"
                     ))
                     .font(.appSecondary)
                     .foregroundStyle(Color.textSecondary)
@@ -439,14 +539,14 @@ public struct AskTallyView: View {
             }
         } else if isThinking || !entry.text.isEmpty || !entry.actions.isEmpty || entry.hasConsents {
             VStack(alignment: .leading, spacing: 8) {
-                // Assistant header with cute Shiba Pet avatar
+                // Assistant header with golden puppy avatar
                 HStack(spacing: 8) {
                     ZStack {
                         Circle()
                             .fill(Color(hex: 0xFFE9D8))
                             .frame(width: 28, height: 28)
                             .overlay(Circle().strokeBorder(Color.accent.opacity(0.28), lineWidth: 1))
-                        ShibaPuppyView(mood: isThinking ? .cozy : .happy, size: 22, isBouncing: isThinking)
+                        GoldenPuppyView(mood: isThinking ? .cozy : .happy, size: 22, isBouncing: isThinking)
                     }
                     Text("Tally")
                         .font(.appCaption.weight(.semibold))
@@ -470,7 +570,7 @@ public struct AskTallyView: View {
                 if !entry.actions.isEmpty {
                     VStack(spacing: 6) {
                         ForEach(entry.actions) { receipt in
-                            actionReceiptCard(receipt)
+                            actionReceiptCard(receipt, timestamp: entry.timestamp, lang: lang)
                         }
                     }
                 }
@@ -658,8 +758,18 @@ public struct AskTallyView: View {
         }
     }
 
-    private func actionReceiptCard(_ receipt: AssistantActionReceipt) -> some View {
-        HStack(alignment: receipt.details?.isEmpty == false ? .top : .center, spacing: 10) {
+    @ViewBuilder
+    private func actionReceiptCard(_ receipt: AssistantActionReceipt, timestamp: Date, lang: AppLanguage) -> some View {
+        let linkedTransaction = AssistantReceiptLookup.transaction(
+            for: receipt,
+            timestamp: timestamp,
+            in: store.activeTransactions,
+            currency: settings.currency,
+            language: lang,
+            hideSalary: settings.hideSalary
+        )
+
+        let card = HStack(alignment: receipt.details?.isEmpty == false ? .top : .center, spacing: 10) {
             receiptIconView(receipt)
                 .frame(width: 30, height: 30)
                 .background(Color.softFill, in: RoundedRectangle(cornerRadius: 9, style: .continuous))
@@ -692,11 +802,16 @@ public struct AskTallyView: View {
 
             Spacer(minLength: 6)
 
-            if let amount = receipt.amountText {
-                Text(amount)
-                    .font(.appCaption.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(receipt.isPositive ? Color.positive : Color.textPrimary)
-                    .lineLimit(1)
+            HStack(spacing: 6) {
+                if let amount = receipt.amountText {
+                    Text(amount)
+                        .font(.appCaption.weight(.semibold).monospacedDigit())
+                        .foregroundStyle(receipt.isPositive ? Color.positive : Color.textPrimary)
+                        .lineLimit(1)
+                }
+                if linkedTransaction != nil {
+                    CozyUIIcon(.chevronRight, size: 12, color: Color.textSecondary.opacity(0.65))
+                }
             }
         }
         .padding(.horizontal, 10)
@@ -706,6 +821,21 @@ public struct AskTallyView: View {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
                 .strokeBorder(Color.hairline, lineWidth: 1)
         )
+        .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+        if let tx = linkedTransaction {
+            Button {
+                isComposerFocused = false
+                CozyHaptics.light()
+                editingTransaction = tx
+            } label: {
+                card
+            }
+            .buttonStyle(.themedPlain)
+            .accessibilityHint(L10n.text(lang, en: "Opens transaction details", vi: "Mở chi tiết giao dịch", zh: "打开账单详情"))
+        } else {
+            card
+        }
     }
 
     /// The assistant's request to use salary figures: Allow / Not now while waiting, then a small
@@ -1069,6 +1199,7 @@ public struct AskTallyView: View {
         pendingImages = []
         attachNote = nil
         isComposerFocused = false
+        hasScrolled = false
         assistant.send(text, images: images, settings: settings, store: store)
     }
 
@@ -1192,6 +1323,7 @@ public struct AskTallyView: View {
     private func prepareImages(_ loaders: [@Sendable () async -> Data?]) {
         guard !loaders.isEmpty else { return }
         let lang = settings.language
+        let batchID = attachmentBatchID
         attachNote = nil
         preparingCount += loaders.count
         for loader in loaders {
@@ -1200,6 +1332,7 @@ public struct AskTallyView: View {
                     guard let data = await loader() else { return nil }
                     return try? ChatImageEncoder.prepare(data)
                 }.value
+                guard batchID == attachmentBatchID else { return }
                 preparingCount = max(0, preparingCount - 1)
                 if let prepared, pendingImages.count < ImageUploadPolicy.maxImagesPerMessage {
                     withAnimation(.snappy(duration: 0.18)) { pendingImages.append(prepared) }
@@ -1231,8 +1364,13 @@ public struct AskTallyView: View {
         }
     }
 
+    private func followLatestMessage(proxy: ScrollViewProxy, animated: Bool) {
+        guard !hasScrolled || isAtBottom else { return }
+        scrollToBottom(proxy: proxy, animated: animated)
+    }
+
     private func scrollToBottom(proxy: ScrollViewProxy, animated: Bool) {
-        if animated {
+        if animated && !reduceMotion {
             withAnimation(.easeOut(duration: 0.22)) {
                 proxy.scrollTo(bottomAnchorID, anchor: .bottom)
             }
@@ -1253,6 +1391,40 @@ public struct AskTallyView: View {
 }
 
 // MARK: - Animated Thinking Dots & Live Audio Waveform
+
+private struct ChatScrollIntent: ViewModifier {
+    let onScroll: () -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18, macOS 15, *) {
+            content.onScrollPhaseChange { _, phase in
+                if phase == .interacting { onScroll() }
+            }
+        } else {
+            content.simultaneousGesture(DragGesture().onChanged { value in
+                if abs(value.translation.height) > abs(value.translation.width) { onScroll() }
+            })
+        }
+    }
+}
+
+#if os(macOS)
+private struct LegacyChatScrollIntent: ViewModifier {
+    let onScroll: () -> Void
+    @State private var previousOrigin: CGFloat?
+
+    func body(content: Content) -> some View {
+        if #available(macOS 15, *) {
+            content
+        } else {
+            content.onGeometryChange(for: CGFloat.self) { $0.frame(in: .scrollView).minY.rounded() } action: { origin in
+                if let previousOrigin, origin > previousOrigin { onScroll() }
+                previousOrigin = origin
+            }
+        }
+    }
+}
+#endif
 
 private struct TypingDotsView: View {
     @State private var phase = 0
@@ -1295,113 +1467,163 @@ private struct LiveAudioWaveformView: View {
     }
 }
 
-// MARK: - Cozy Chat History Sheet
+#if os(iOS)
+private struct ChatHistorySwipe: ViewModifier {
+    let onSwipe: () -> Void
+    @State private var width: CGFloat = 0
 
-private struct ChatHistorySheet: View {
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { width = $0 }
+            .simultaneousGesture(DragGesture(minimumDistance: 30).onEnded { value in
+                let horizontal = -value.translation.width
+                if width > 0, value.startLocation.x >= width - 56,
+                   horizontal >= 65, horizontal > 2 * abs(value.translation.height) {
+                    onSwipe()
+                }
+            })
+    }
+}
+#endif
+
+private struct ChatHistoryList: View {
     let sessions: [ChatSession]
     let activeSessionID: UUID?
+    let isStreaming: Bool
     let language: AppLanguage
     let onSelect: (ChatSession) -> Void
-    let onNewChat: () -> Void
     let onDelete: (UUID) -> Void
+    @State private var searchText = ""
+    @State private var pendingDeletion: ChatSession?
+    @State private var isConfirmingDeletion = false
 
-    @Environment(\.dismiss) private var dismiss
+    private var deleteTitle: String {
+        L10n.text(language, en: "Delete Chat", vi: "Xóa cuộc trò chuyện", zh: "删除对话")
+    }
+
+    private var matchingSessions: [ChatSession] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !query.isEmpty else { return sessions }
+        return sessions.filter { session in
+            session.title.localizedStandardContains(query)
+                || session.messages.contains { $0.text.localizedStandardContains(query) }
+        }
+    }
 
     var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 12) {
-                    Button(action: onNewChat) {
-                        HStack(spacing: 10) {
-                            Image(systemName: "plus.circle.fill")
-                                .font(.system(size: 20))
-                                .foregroundStyle(Color.accent)
-                            Text(L10n.text(language, en: "Start a new chat", vi: "Bắt đầu cuộc trò chuyện mới", zh: "开始新对话"))
-                                .font(.appControlLarge)
-                                .foregroundStyle(Color.textPrimary)
-                            Spacer()
-                        }
-                        .padding(14)
-                        .cardSurface(cornerRadius: 18)
-                    }
-                    .buttonStyle(.cozyCard)
+        let matches = matchingSessions
+        ScrollView {
+            VStack(alignment: .leading, spacing: 12) {
+                searchField
 
-                    if sessions.isEmpty {
-                        EmptyStateCard(
-                            symbol: "clock.arrow.circlepath",
-                            title: L10n.text(language, en: "No chat history yet", vi: "Chưa có lịch sử trò chuyện", zh: "暂无对话记录"),
-                            message: L10n.text(language, en: "Your conversations with Tally will be saved here automatically.", vi: "Các cuộc trò chuyện với Tally sẽ tự động được lưu tại đây.", zh: "您与 Tally 的对话会自动保存在这里。")
-                        )
-                    } else {
-                        ForEach(sessions) { session in
-                            let isActive = session.id == activeSessionID
-                            let lastPreview = session.messages.last(where: { !$0.text.isEmpty })?.text ?? ""
-
-                            HStack(spacing: 10) {
-                                Button {
-                                    onSelect(session)
-                                } label: {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        HStack(spacing: 6) {
-                                            Text(session.title)
-                                                .font(.appHeading)
-                                                .foregroundStyle(Color.textPrimary)
-                                                .lineLimit(1)
-                                            if isActive {
-                                                Tag(
-                                                    text: L10n.text(language, en: "Active", vi: "Đang mở", zh: "当前"),
-                                                    color: .accent
-                                                )
-                                            }
-                                        }
-
-                                        if !lastPreview.isEmpty {
-                                            Text(lastPreview)
-                                                .font(.appCaption)
-                                                .foregroundStyle(Color.textSecondary)
-                                                .lineLimit(2)
-                                        }
-
-                                        HStack(spacing: 6) {
-                                            Text(session.updatedAt, style: .relative)
-                                            Text("·")
-                                            Text("\(session.messages.count) \(L10n.text(language, en: "msgs", vi: "tin nhắn", zh: "条"))")
-                                        }
-                                        .font(.system(size: 11, weight: .medium, design: .rounded))
-                                        .foregroundStyle(Color.textSecondary.opacity(0.75))
-                                    }
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .contentShape(Rectangle())
-                                }
-                                .buttonStyle(.plain)
-
-                                Button {
-                                    onDelete(session.id)
-                                } label: {
-                                    Image(systemName: "trash")
-                                        .font(.system(size: 14, weight: .semibold))
-                                        .foregroundStyle(Color.textSecondary.opacity(0.7))
-                                        .frame(width: 34, height: 34)
-                                        .background(Color.softFill, in: Circle())
-                                }
-                                .buttonStyle(.plain)
-                                .accessibilityLabel(L10n.text(language, en: "Delete chat", vi: "Xoá cuộc trò chuyện", zh: "删除对话"))
-                            }
-                            .padding(14)
-                            .cardSurface(cornerRadius: 18, highlighted: isActive)
-                        }
+                if sessions.isEmpty {
+                    EmptyStateCard(
+                        symbol: "clock.arrow.circlepath",
+                        title: L10n.text(language, en: "No chat history yet", vi: "Chưa có lịch sử trò chuyện", zh: "暂无对话记录"),
+                        message: L10n.text(language, en: "Your conversations with Tally will be saved here automatically.", vi: "Các cuộc trò chuyện với Tally sẽ tự động được lưu tại đây.", zh: "您与 Tally 的对话会自动保存在这里。")
+                    )
+                } else if matches.isEmpty {
+                    EmptyStateCard(
+                        symbol: "magnifyingglass",
+                        title: L10n.text(language, en: "No matching chats", vi: "Không tìm thấy cuộc trò chuyện", zh: "没有匹配的对话"),
+                        message: L10n.text(language, en: "Try a different search.", vi: "Thử từ khóa khác.", zh: "请尝试其他搜索词。")
+                    )
+                } else {
+                    ForEach(matches) { session in
+                        chatRow(session)
                     }
                 }
-                .documentColumn()
             }
-            .pageBackground()
-            .cozySheetToolbar(title: L10n.text(language, en: "Chat History", vi: "Lịch sử Tally", zh: "对话记录")) {
-                Button(L10n.text(language, en: "Done", vi: "Xong", zh: "完成")) {
-                    dismiss()
+            .documentColumn()
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .pageBackground()
+        .confirmationDialog(deleteTitle, isPresented: $isConfirmingDeletion, titleVisibility: .visible, presenting: pendingDeletion) { session in
+            Button(deleteTitle, role: .destructive) { onDelete(session.id) }
+            Button(L10n.text(language, en: "Cancel", vi: "Hủy", zh: "取消"), role: .cancel) {}
+        } message: { session in
+            Text(L10n.text(
+                language,
+                en: "Delete ‘\(session.title)’ and its messages? This can’t be undone.",
+                vi: "Xóa ‘\(session.title)’ và các tin nhắn trong đó? Bạn không thể hoàn tác.",
+                zh: "删除“\(session.title)”及其消息？此操作无法撤销。"
+            ))
+        }
+        .onChange(of: isConfirmingDeletion) { _, isPresented in
+            if !isPresented { pendingDeletion = nil }
+        }
+    }
+
+    private func chatRow(_ session: ChatSession) -> some View {
+        let isCurrentSession = session.id == activeSessionID
+        let lastPreview = session.messages.last(where: { !$0.text.isEmpty })?.text ?? ""
+
+        return Button {
+            onSelect(session)
+        } label: {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(session.title)
+                    .font(.appHeading)
+                    .foregroundStyle(Color.textPrimary)
+                    .lineLimit(1)
+
+                if !lastPreview.isEmpty {
+                    Text(lastPreview)
+                        .font(.appCaption)
+                        .foregroundStyle(Color.textSecondary)
+                        .lineLimit(2)
                 }
+
+                HStack(spacing: 6) {
+                    Text(session.updatedAt, style: .relative)
+                    Text("·")
+                    Text("\(session.messages.count) \(L10n.text(language, en: "msgs", vi: "tin nhắn", zh: "条"))")
+                }
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.textSecondary.opacity(0.75))
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(14)
+            .cardSurface(cornerRadius: 18)
+            .contentShape(RoundedRectangle(cornerRadius: 18))
+        }
+        .buttonStyle(.plain)
+        .disabled(isStreaming && !isCurrentSession)
+        .contextMenu {
+            Button(role: .destructive) {
+                pendingDeletion = session
+                isConfirmingDeletion = true
+            } label: {
+                Label(deleteTitle, systemImage: "trash")
+            }
+            .disabled(isStreaming && isCurrentSession)
+        }
+    }
+
+    private var searchField: some View {
+        HStack(spacing: 8) {
+            CozyUIIcon(.search, size: 17, color: Color.textSecondary)
+                .accessibilityHidden(true)
+            TextField(L10n.text(language, en: "Search chats", vi: "Tìm cuộc trò chuyện", zh: "搜索对话"), text: $searchText)
+                .textFieldStyle(.plain)
+                .font(.appBody)
+                .submitLabel(.search)
+                .autocorrectionDisabled()
+            if !searchText.isEmpty {
+                Button {
+                    searchText = ""
+                } label: {
+                    CozyUIIcon(.xmarkCircle, size: 18, color: Color.textSecondary)
+                        .frame(width: 32, height: 32)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(L10n.text(language, en: "Clear search", vi: "Xoá tìm kiếm", zh: "清除搜索"))
             }
         }
-        .presentationDetents([.medium, .large])
-        .cozySheetFrame(minWidth: 420, idealWidth: 460, minHeight: 420, idealHeight: 500)
+        .padding(.horizontal, 14)
+        .frame(minHeight: 46)
+        .background(Color.cardBackground, in: Capsule())
+        .overlay { Capsule().strokeBorder(Color.hairlineStrong, lineWidth: 1) }
     }
 }

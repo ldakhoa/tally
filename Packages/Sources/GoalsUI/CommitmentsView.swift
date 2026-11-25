@@ -42,7 +42,6 @@ public struct CommitmentsView: View {
                 }
                 .pageBackground()
                 .navigationTitle(L10n.text(settings.language, en: "Commitments", vi: "Khoản cam kết", zh: "分期与贷款"))
-                .toolbar { TopToolbarControls() }
                 .sheet(isPresented: $showingNewPlan) {
                     InstallmentPlanEditorSheet(existing: nil)
                 }
@@ -139,7 +138,9 @@ public struct CommitmentsView: View {
                             .foregroundStyle(Color.textSecondary)
                     }
 
-                    CozyCountUpText(value: freedom.paidMinor) { money($0) }
+                    CozyCountUpText(value: settings.displayMinor(freedom.paidMinor)) {
+                        MoneyFormat.format(minor: $0, currency: settings.effectiveDisplayCurrency, language: lang)
+                    }
                         .font(.appMetricHero)
                         .foregroundStyle(Color.textPrimary)
                         .lineLimit(1)
@@ -516,6 +517,6 @@ public struct CommitmentsView: View {
     }
 
     private func money(_ minor: Int64, compact: Bool = false) -> String {
-        MoneyFormat.format(minor: minor, currency: settings.currency, language: settings.language, compact: compact)
+        settings.formatMoney(minor: minor, compact: compact)
     }
 }

@@ -15,7 +15,7 @@ private let cozyPetInk = Color(hex: 0x4E382F)
 
 // MARK: - Cute Hand-Drawn Golden Puppy (Matching AppIcon.png)
 
-public struct ShibaPuppyView: View {
+public struct GoldenPuppyView: View {
     public var mood: PetMood
     public var size: CGFloat
     public var isBouncing: Bool
@@ -56,7 +56,7 @@ public struct ShibaPuppyView: View {
                     )
                 )
                 .overlay(FloppyPuppyEarShape().stroke(cozyPetInk, style: lineStyle))
-                .frame(width: 17 * s, height: 28 * s)
+                .frame(width: 18 * s, height: 32 * s)
                 .offset(x: -24 * s, y: -3 * s)
                 .rotationEffect(.degrees(mood == .alert || isBouncing ? 14 : 6), anchor: .topTrailing)
 
@@ -71,7 +71,7 @@ public struct ShibaPuppyView: View {
                 )
                 .overlay(FloppyPuppyEarShape().stroke(cozyPetInk, style: lineStyle))
                 .scaleEffect(x: -1, y: 1)
-                .frame(width: 17 * s, height: 28 * s)
+                .frame(width: 18 * s, height: 32 * s)
                 .offset(x: 24 * s, y: -3 * s)
                 .rotationEffect(.degrees(mood == .alert || isBouncing ? -14 : -6), anchor: .topLeading)
 
@@ -455,7 +455,7 @@ public struct CozyPetDuoView: View {
             }
 
             HStack(spacing: -4) {
-                ShibaPuppyView(mood: mood, size: petSize, isBouncing: isBouncing)
+                GoldenPuppyView(mood: mood, size: petSize, isBouncing: isBouncing)
                 CreamKittyView(mood: mood, size: petSize, isBouncing: isBouncing)
             }
         }

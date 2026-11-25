@@ -9,7 +9,7 @@
 Personal finance apps often feel cold, academic, or stressful—stark black ink, sharp geometric fonts, monochrome charts, and spreadsheet jargon. **Tally** intentionally flips that feeling:
 
 1. **Cozy over clinical:** Warm cream paper, roasted cocoa ink, and soft peach/mint/honey pastels replace harsh pure black (`#000000`) and clinical grays.
-2. **Personal & joyful:** Finance is shared life. The couple's own **watercolor chibi portraits** and their animated **Shiba Puppy & Cream Kitty** companions live right inside the app, reacting empathetically to savings, budgets, and daily treats.
+2. **Personal & joyful:** Finance is shared life. The couple's own **watercolor chibi portraits** and their animated **Golden Retriever Puppy & Cream Kitty** companions live right inside the app, reacting empathetically to savings, budgets, and daily treats.
 3. **Clear at a glance:** Cuteness never sacrifices readability. Every theme enforces WCAG AA contrast (`> 4.5:1` verified by `ThemeTokensTests`), every icon has a clear silhouette, and every number uses `monospacedDigit()` for effortless scanning.
 4. **Alive, never sluggish:** Delightful spring physics, micro-haptics, and celebratory paw/heart bursts run exclusively on GPU transforms (`scaleEffect`, `offset`, `opacity`, `rotationEffect`) with pre-warmed haptic generators so the app stays locked at 60/120fps.
 
@@ -112,7 +112,7 @@ Tally uses a **Hybrid Icon Architecture** optimized for both storybook warmth an
 ## 5. Pet Companions & Couple Chibi Avatars
 
 - **Couple Avatars (`ChibiAvatarView`, `CoupleAvatarsBadge`):** Circular crops of the couple's hand-painted watercolor chibi portraits with warm cream borders (`#FFFDF9`), soft brown shadow, and a gentle pulsing heart (`♥`) when paired together.
-- **Animated Pets (`ShibaPuppyView`, `CreamKittyView`, `CozyPetDuoView`):**
+- **Animated Pets (`GoldenPuppyView`, `CreamKittyView`, `CozyPetDuoView`):**
   - Subtle idle life: breathing scale (`1.9s` / `2.2s`), periodic eye blinks (`3.3s` / `4.0s`), ear wiggle / tail sway.
   - Tap interaction: bouncy jump + floating hearts/paws/sparkles + `CozyHaptics.soft()`.
   - Financial mood states: `.happy` (positive savings), `.cozy` (neutral), `.sleepy` (empty state), `.alert` (over budget).

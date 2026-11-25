@@ -322,16 +322,12 @@ struct RootTabs: View {
         .sheet(isPresented: $settings.isShowingQuickAdd) {
             TransactionEditorSheet()
         }
-        .sheet(isPresented: $settings.isShowingSmartCapture) {
-            SmartCaptureSheet()
-        }
         .sheet(isPresented: $settings.isShowingAskTally) {
             AskTallyView()
         }
         .onChange(of: settings.isShowingSettings) { _, wantsSettings in
             guard wantsSettings else { return }
             settings.isShowingAskTally = false
-            settings.isShowingSmartCapture = false
             settings.isShowingQuickAdd = false
             CozyHaptics.selection()
             router.selectedTab = .settings
@@ -398,8 +394,7 @@ struct RootTabs: View {
                             } else {
                                 settings.isShowingQuickAdd = true
                             }
-                        },
-                        onSmartPaste: activePlan == nil ? { settings.isShowingSmartCapture = true } : nil
+                        }
                     )
                     .padding(.trailing, 16)
                     .padding(.bottom, 84)
@@ -425,11 +420,6 @@ struct RootTabs: View {
                     CozyHaptics.medium()
                     CozySounds.play(.pop)
                     settings.isShowingQuickAdd = true
-                },
-                onSmartPaste: {
-                    CozyHaptics.light()
-                    CozySounds.play(.pop)
-                    settings.isShowingSmartCapture = true
                 },
                 onAskTally: {
                     CozyHaptics.light()
@@ -486,7 +476,6 @@ private struct CozySidebarView: View {
     let cloudSync: CloudSync
     let syncsWithICloud: Bool
     let onQuickAdd: () -> Void
-    let onSmartPaste: () -> Void
     let onAskTally: () -> Void
 
     @Environment(\.colorScheme) private var colorScheme
@@ -523,37 +512,22 @@ private struct CozySidebarView: View {
             VStack(spacing: 10) {
                 Divider().overlay(Color.hairline)
 
-                // Primary Quick Add + Smart Paste row
-                HStack(spacing: 8) {
-                    Button(action: onQuickAdd) {
-                        HStack(spacing: 6) {
-                            CozyUIIcon(.plus, size: 15, color: Color.onInk, lineWidthScale: 1.1)
-                            Text(L10n.text(language, en: "Add expense", vi: "Ghi chi tiêu", zh: "记一笔"))
-                                .font(.appControl)
-                                .lineLimit(1)
-                        }
-                        .frame(maxWidth: .infinity, minHeight: 38)
-                        .foregroundStyle(Color.onInk)
-                        .background(Color.ink, in: Capsule())
-                        .shadow(color: Color.ink.opacity(0.18), radius: 6, y: 2)
+                Button(action: onQuickAdd) {
+                    HStack(spacing: 6) {
+                        CozyUIIcon(.plus, size: 15, color: Color.onInk, lineWidthScale: 1.1)
+                        Text(L10n.text(language, en: "Add expense", vi: "Ghi chi tiêu", zh: "记一笔"))
+                            .font(.appControl)
+                            .lineLimit(1)
                     }
-                    .buttonStyle(.plain)
-                    #if os(macOS)
-                    .help(L10n.text(language, en: "New Transaction (⌘N)", vi: "Thêm giao dịch (⌘N)", zh: "新建账单 (⌘N)"))
-                    #endif
-
-                    Button(action: onSmartPaste) {
-                        CozyUIIcon(.bolt, size: 16, color: Color.accent)
-                            .frame(width: 38, height: 38)
-                            .background(Color.cardBackground, in: Circle())
-                            .overlay(Circle().strokeBorder(Color.hairlineStrong, lineWidth: 1))
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(L10n.text(language, en: "Smart paste", vi: "Dán thông báo", zh: "智能粘贴"))
-                    #if os(macOS)
-                    .help(L10n.text(language, en: "Smart Paste (⇧⌘V)", vi: "Dán thông báo (⇧⌘V)", zh: "智能粘贴 (⇧⌘V)"))
-                    #endif
+                    .frame(maxWidth: .infinity, minHeight: 38)
+                    .foregroundStyle(Color.onInk)
+                    .background(Color.ink, in: Capsule())
+                    .shadow(color: Color.ink.opacity(0.18), radius: 6, y: 2)
                 }
+                .buttonStyle(.plain)
+                #if os(macOS)
+                .help(L10n.text(language, en: "New Transaction (⌘N)", vi: "Thêm giao dịch (⌘N)", zh: "新建账单 (⌘N)"))
+                #endif
 
                 // Cozy Pet AI Companion card
                 askTallyCard
@@ -701,7 +675,7 @@ private struct CozySidebarView: View {
         } label: {
             HStack(spacing: 10) {
                 ZStack(alignment: .topTrailing) {
-                    ShibaPuppyView(mood: .happy, size: 32, isBouncing: petBounce)
+                    GoldenPuppyView(mood: .happy, size: 32, isBouncing: petBounce)
                         .frame(width: 34, height: 34)
                     ZStack {
                         Circle()
@@ -916,7 +890,6 @@ private struct PlanTabView: View {
             }
             .pageBackground()
             .navigationTitle(router.planSegment.title(in: lang))
-            .toolbar { TopToolbarControls() }
         }
     }
 }
@@ -928,99 +901,99 @@ private struct FloatingTallyActionDock: View {
     let onAskTally: () -> Void
     let addTitle: String
     let onQuickAdd: () -> Void
-    let onSmartPaste: (() -> Void)?
 
-    @Environment(\.colorScheme) private var colorScheme
-    @State private var petBounce = false
+    private let tab = UnevenRoundedRectangle(topLeadingRadius: 16, bottomLeadingRadius: 6, bottomTrailingRadius: 6, topTrailingRadius: 16)
 
     var body: some View {
-        let isDark = colorScheme == .dark
-        VStack(spacing: 12) {
-            // Cute Pet AI Companion button (Ask Tally)
+        HStack(alignment: .bottom, spacing: 0) {
             Button {
                 CozyHaptics.light()
                 CozySounds.play(.pop)
-                withAnimation(.spring(response: 0.28, dampingFraction: 0.55)) {
-                    petBounce = true
-                }
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
-                    petBounce = false
-                }
                 onAskTally()
             } label: {
-                ZStack(alignment: .topTrailing) {
-                    ZStack {
-                        Circle()
-                            .fill(
-                                LinearGradient(
-                                    colors: isDark
-                                        ? [Color(hex: 0x3D2E29), Color(hex: 0x2F2220)]
-                                        : [Color(hex: 0xFFE9D8), Color(hex: 0xFFF7EC)],
-                                    startPoint: .topLeading,
-                                    endPoint: .bottomTrailing
-                                )
-                            )
-                            .frame(width: 52, height: 52)
-
-                        ShibaPuppyView(mood: .happy, size: 42, isBouncing: petBounce)
-                            .offset(y: 2)
+                Text(L10n.text(language, en: "Ask Tally", vi: "Hỏi Tally", zh: "问问 Tally"))
+                    .font(.system(.caption, design: .rounded, weight: .semibold))
+                    .foregroundStyle(Color.textPrimary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.editorBackground, in: tab)
+                    .overlay(tab.strokeBorder(Color.ink.opacity(0.18), lineWidth: 1))
+                    .background(alignment: .topTrailing) {
+                        GoldenPuppyView(mood: .happy, size: 40)
+                            .offset(x: 5, y: -29)
+                            .accessibilityHidden(true)
                     }
-                    .frame(width: 52, height: 52)
-                    .clipShape(Circle())
-                    .overlay(
-                        Circle()
-                            .strokeBorder(
-                                isDark ? Color.accent.opacity(0.35) : Color(hex: 0x4E382F, alpha: 0.16),
-                                lineWidth: 1.5
-                            )
-                    )
-                    .shadow(color: Color(hex: 0x5A3F37, alpha: isDark ? 0.32 : 0.18), radius: 7, y: 3)
-
-                    // Gleaming AI sparkle badge
-                    ZStack {
-                        Circle()
-                            .fill(Color.accent)
-                            .frame(width: 19, height: 19)
-                            .overlay(Circle().strokeBorder(Color.cardBackground, lineWidth: 1.5))
-                        CozyUIIcon(.sparkles, size: 11, color: Color.onAccent)
+                    .overlay(alignment: .topTrailing) {
+                        GoldenPaw().offset(x: -23, y: -4)
                     }
-                    .offset(x: 3, y: -3)
-                }
+                    .overlay(alignment: .topTrailing) {
+                        GoldenPaw().rotationEffect(.degrees(-20)).offset(x: 8, y: -9)
+                    }
+                    .padding(.top, 29)
+                    .contentShape(Rectangle())
             }
-            .buttonStyle(.cozyCard)
-            .accessibilityLabel(L10n.text(language, en: "Ask Tally AI", vi: "Hỏi Trợ lý Tally AI", zh: "问问 Tally AI"))
+            .buttonStyle(BookmarkPressStyle(travel: -2))
+            .zIndex(1)
 
-            // Primary Add Expense FAB (long-press for Smart Paste)
-            Button {
-                CozyHaptics.medium()
-                CozySounds.play(.pop)
-                onQuickAdd()
-            } label: {
-                ZStack {
-                    Circle()
-                        .fill(Color.ink)
-                        .frame(width: 52, height: 52)
-                        .overlay(
-                            Circle()
-                                .strokeBorder(Color.cardBackground.opacity(0.35), lineWidth: 1.5)
-                        )
-                        .shadow(color: Color.ink.opacity(0.28), radius: 10, y: 5)
-
-                    CozyUIIcon(.plus, size: 24, color: Color.onInk, lineWidthScale: 1.12)
-                }
-            }
-            .buttonStyle(.plain)
-            .simultaneousGesture(
-                onSmartPaste.map { paste in
-                    LongPressGesture(minimumDuration: 0.45).onEnded { _ in
-                        #if os(iOS)
-                        UIImpactFeedbackGenerator(style: .heavy).impactOccurred()
-                        #endif
-                        paste()
-                    }
-                }
-            )
-            .accessibilityLabel(addTitle)
+            addButton
         }
+        .shadow(color: Color(hex: 0x6B4423).opacity(0.16), radius: 4, y: 3)
+    }
+
+    private var addButton: some View {
+        Button {
+            CozyHaptics.medium()
+            CozySounds.play(.pop)
+            onQuickAdd()
+        } label: {
+            let cover = RoundedRectangle(cornerRadius: 6, style: .continuous)
+            CozyUIIcon(.pencil, size: 22, color: Color.ink)
+            .padding(.leading, 4)
+            .frame(width: 52, height: 36)
+            .background(Color.editorBackground, in: cover)
+            .overlay(cover.strokeBorder(Color.ink.opacity(0.5), lineWidth: 1))
+            .background {
+                cover.fill(Color.cardBackground)
+                    .overlay(cover.strokeBorder(Color.ink.opacity(0.35), lineWidth: 1))
+                    .offset(y: 3)
+            }
+            .overlay(alignment: .leading) {
+                VStack(spacing: 8) {
+                    ForEach(0..<2) { _ in
+                        Capsule().strokeBorder(Color.ink, lineWidth: 1.5)
+                            .frame(width: 10, height: 5)
+                    }
+                }
+                .offset(x: -3)
+            }
+            .rotationEffect(.degrees(-4))
+            .padding(.horizontal, 4)
+            .frame(minHeight: 48)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(BookmarkPressStyle(travel: 2))
+        .accessibilityLabel(addTitle)
+    }
+}
+
+private struct GoldenPaw: View {
+    var body: some View {
+        Capsule().fill(Color(hex: 0xF2BE70))
+            .overlay(Capsule().strokeBorder(Color(hex: 0x4E382F), lineWidth: 1))
+            .frame(width: 11, height: 8)
+            .accessibilityHidden(true)
+            .allowsHitTesting(false)
+    }
+}
+
+private struct BookmarkPressStyle: ButtonStyle {
+    let travel: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .offset(y: configuration.isPressed && !reduceMotion ? travel : 0)
+            .opacity(configuration.isPressed ? 0.88 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: configuration.isPressed)
     }
 }

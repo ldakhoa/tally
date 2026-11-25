@@ -97,7 +97,6 @@ public struct TransactionsView: View {
                 tabBarVisibility?.setHidden(false, for: "transactions")
             }
             .modifier(ToolbarSearch(isEnabled: !usesInlineSearch, text: $searchText, prompt: searchPrompt(lang)))
-            .toolbar { TopToolbarControls() }
             .sheet(item: $editingTransaction) { tx in
                 TransactionEditorSheet(existing: tx)
             }
@@ -189,8 +188,8 @@ public struct TransactionsView: View {
             monthKey: store.selectedMonth,
             selectedDayKey: selectedSingleDay,
             language: lang,
-            currency: settings.currency,
-            dailyTotals: store.dailyCalendarTotals,
+            currency: settings.effectiveDisplayCurrency,
+            dailyTotals: settings.displayDailyTotals(store.dailyCalendarTotals),
             onSelectDay: { dayKey in
                 withAnimation(.snappy(duration: 0.18)) {
                     if selectedSingleDay == dayKey {
@@ -241,14 +240,14 @@ public struct TransactionsView: View {
                             SectionLabel(DateKey.formatShortDay(group.dayKey, language: lang))
                             Spacer()
                             if group.totalIncomeMinor > 0 {
-                                Text(MoneyFormat.masked(MoneyFormat.format(minor: group.totalIncomeMinor, currency: settings.currency, language: lang, signed: true), hidden: group.isSalaryMasked(hidden: settings.hideSalary)))
+                                Text(MoneyFormat.masked(settings.formatMoney(minor: group.totalIncomeMinor, signed: true), hidden: group.isSalaryMasked(hidden: settings.hideSalary)))
                                     .salaryMaskAccessibility(group.isSalaryMasked(hidden: settings.hideSalary), language: lang)
                                     .font(.appCaption.weight(.semibold))
                                     .monospacedDigit()
                                     .foregroundStyle(Color.positive)
                             }
                             if group.totalSpendingMinor > 0 {
-                                Text("−\(MoneyFormat.format(minor: group.totalSpendingMinor, currency: settings.currency, language: lang))")
+                                Text("−\(settings.formatMoney(minor: group.totalSpendingMinor))")
                                     .font(.appCaption.weight(.medium))
                                     .monospacedDigit()
                                     .foregroundStyle(Color.textSecondary)
@@ -491,6 +490,26 @@ public struct TransactionsView: View {
             if !tx.isSalaryMasked(hidden: settings.hideSalary) {
                 fields.append(MoneyFormat.format(minor: tx.amountMinor, currency: currency, language: lang))
                 fields.append(String(format: "%.2f", currency.toMajor(tx.amountMinor)))
+                if settings.isConvertingDisplay {
+                    let shownCurrency = settings.effectiveDisplayCurrency
+                    let shownMajor = settings.displayMajor(tx.amountMinor)
+                    fields.append(settings.formatMoney(minor: tx.amountMinor))
+                    fields.append(shownCurrency.isZeroDecimal
+                        ? String(Int64(shownMajor.rounded()))
+                        : String(format: "%.2f", shownMajor))
+                }
+                if tx.isForeignCurrency, let origCode = tx.originalCurrencyCode {
+                    fields.append(origCode)
+                    if let origFormatted = tx.formattedOriginalAmount(language: lang) {
+                        fields.append(origFormatted)
+                    }
+                    if let origMinor = tx.originalAmountMinor {
+                        let origMajor = CurrencyCode.toMajor(origMinor)
+                        fields.append(CurrencyCode.isZeroDecimal(code: origCode)
+                            ? String(Int64(origMajor.rounded()))
+                            : String(format: "%.2f", origMajor))
+                    }
+                }
             }
             return TransactionSearch.matches(query: query, fields: fields)
         }

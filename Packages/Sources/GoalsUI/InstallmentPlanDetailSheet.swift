@@ -426,7 +426,7 @@ struct InstallmentPlanDetailSheet: View {
     }
 
     private func money(_ minor: Int64) -> String {
-        MoneyFormat.format(minor: minor, currency: settings.currency, language: settings.language)
+        settings.formatMoney(minor: minor)
     }
 }
 
@@ -565,6 +565,6 @@ struct InstallmentSettleSheet: View {
     }
 
     private func money(_ minor: Int64) -> String {
-        MoneyFormat.format(minor: minor, currency: settings.currency, language: settings.language)
+        settings.formatMoney(minor: minor)
     }
 }

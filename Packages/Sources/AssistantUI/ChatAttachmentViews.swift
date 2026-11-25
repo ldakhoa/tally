@@ -37,13 +37,12 @@ struct ChatImageTile: View {
 
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        ZStack {
+        shape.fill(Color.softFill).overlay {
             if let image {
                 Image(decorative: image, scale: 1)
                     .resizable()
                     .scaledToFill()
             } else {
-                shape.fill(Color.softFill)
                 CozyUIIcon(.photo, size: 22, color: Color.textSecondary.opacity(didFail ? 0.45 : 0.3))
             }
         }

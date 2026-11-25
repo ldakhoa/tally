@@ -39,6 +39,8 @@ public struct AssistantActionReceipt: Identifiable, Codable, Hashable, Sendable 
     /// Extra lines shown in full under the subtitle (plan receipts list the saved values here).
     /// Optional so receipts persisted before this field existed still decode.
     public let details: [String]?
+    /// ID of the underlying `TransactionRecord` (optional so legacy receipts still decode).
+    public let recordID: String?
 
     public init(
         id: UUID = UUID(),
@@ -48,7 +50,8 @@ public struct AssistantActionReceipt: Identifiable, Codable, Hashable, Sendable 
         subtitle: String,
         amountText: String? = nil,
         isPositive: Bool = false,
-        details: [String]? = nil
+        details: [String]? = nil,
+        recordID: String? = nil
     ) {
         self.id = id
         self.kind = kind
@@ -58,6 +61,67 @@ public struct AssistantActionReceipt: Identifiable, Codable, Hashable, Sendable 
         self.amountText = amountText
         self.isPositive = isPositive
         self.details = details
+        self.recordID = recordID
+    }
+}
+
+/// Resolves an `AssistantActionReceipt` back to a live transaction for tap-to-edit in Ask Tally.
+public enum AssistantReceiptLookup {
+    public static func transaction(
+        for receipt: AssistantActionReceipt,
+        timestamp: Date,
+        in transactions: [TransactionRecord],
+        currency: CurrencyCode,
+        language: AppLanguage,
+        hideSalary: Bool
+    ) -> TransactionRecord? {
+        guard receipt.kind == .transactionAdded || receipt.kind == .transactionUpdated else {
+            return nil
+        }
+
+        let active = transactions.filter { !$0.isDeleted }
+        if let id = receipt.recordID, !id.isEmpty {
+            return active.first { $0.id == id }
+        }
+
+        let candidates = active.filter { tx in
+            tx.name == receipt.title && (tx.type == .income) == receipt.isPositive
+        }
+        guard !candidates.isEmpty else { return nil }
+
+        var narrowed = candidates
+        if let amountText = receipt.amountText,
+           !amountText.isEmpty,
+           amountText != MoneyFormat.hiddenPlaceholder {
+            let amountMatches = candidates.filter { tx in
+                if hideSalary && tx.isSalaryMasked(hidden: true) { return false }
+                let signedMinor = tx.type == .income ? tx.amountMinor : -tx.amountMinor
+                let localized = MoneyFormat.format(
+                    minor: signedMinor,
+                    currency: currency,
+                    language: language,
+                    signed: tx.type == .income
+                )
+                let english = MoneyFormat.format(
+                    minor: signedMinor,
+                    currency: currency,
+                    language: .english,
+                    signed: tx.type == .income
+                )
+                return localized == amountText || english == amountText
+            }
+            if !amountMatches.isEmpty {
+                narrowed = amountMatches
+            }
+        }
+
+        if let closest = narrowed
+            .map({ ($0, abs($0.createdAt.timeIntervalSince(timestamp))) })
+            .filter({ $0.1 <= 600 })
+            .min(by: { $0.1 < $1.1 })?.0 {
+            return closest
+        }
+        return narrowed.count == 1 ? narrowed.first : nil
     }
 }
 
@@ -72,8 +136,14 @@ public enum AssistantCommand: Equatable, Sendable {
         public let dayKey: String
         public let note: String
         public let memberHint: String?
-        /// Currency the amount was stated in when it is not the household's (converted by code).
-        public let currency: CurrencyCode?
+        /// ISO 4217 currency code the amount was stated in when not the household's (converted by code).
+        public let currencyCode: String?
+        /// Optional exact converted household amount only when explicitly stated alongside a foreign amount.
+        public let convertedAmountMajor: Double?
+
+        public var currency: CurrencyCode? {
+            currencyCode.flatMap(CurrencyCode.init(rawValue:))
+        }
 
         public init(
             name: String,
@@ -83,7 +153,8 @@ public enum AssistantCommand: Equatable, Sendable {
             dayKey: String,
             note: String = "",
             memberHint: String? = nil,
-            currency: CurrencyCode? = nil
+            currencyCode: String? = nil,
+            convertedAmountMajor: Double? = nil
         ) {
             self.name = name
             self.amountMajor = amountMajor
@@ -92,7 +163,32 @@ public enum AssistantCommand: Equatable, Sendable {
             self.dayKey = dayKey
             self.note = note
             self.memberHint = memberHint
-            self.currency = currency
+            self.currencyCode = currencyCode.flatMap(CurrencyCode.normalizeCode) ?? currencyCode?.uppercased()
+            self.convertedAmountMajor = convertedAmountMajor
+        }
+
+        public init(
+            name: String,
+            amountMajor: Double,
+            type: TransactionType,
+            category: CategoryID,
+            dayKey: String,
+            note: String = "",
+            memberHint: String? = nil,
+            currency: CurrencyCode?,
+            convertedAmountMajor: Double? = nil
+        ) {
+            self.init(
+                name: name,
+                amountMajor: amountMajor,
+                type: type,
+                category: category,
+                dayKey: dayKey,
+                note: note,
+                memberHint: memberHint,
+                currencyCode: currency?.rawValue,
+                convertedAmountMajor: convertedAmountMajor
+            )
         }
     }
 
@@ -170,8 +266,9 @@ public enum AssistantToolCatalog {
                 ("items", .schemaArray(
                     of: .schemaObject([
                         ("name", .schemaString("Short, clear merchant or description (e.g. 'Rent', 'Credit card payment', 'Tiền nhà', '房租').")),
-                        ("amount", .schemaNumber("Positive amount in major units, exactly as stated (do not convert currencies yourself).")),
-                        ("currency", .schemaEnum(CurrencyCode.allCases.map(\.rawValue), "Only when the amount was stated in a currency other than the household's: that currency. Tally converts it and keeps the original in the note.")),
+                        ("amount", .schemaNumber("Positive amount in major units, exactly as stated in the transaction's currency (do not convert currencies yourself).")),
+                        ("currency", .schemaString("3-letter uppercase ISO 4217 currency code ONLY when the amount was stated in a currency other than the household's (e.g. HKD, JPY, CNY, VND, USD, MYR, THB, EUR, GBP, AED). Tally converts it automatically using live exchange rates and keeps the original amount.")),
+                        ("converted_amount", .schemaNumber("ONLY if the user or receipt explicitly states the exact billed amount in the household currency alongside the foreign amount. Never compute or estimate this yourself; omit it so Tally converts using its FX rate.")),
                         ("type", .schemaEnum(["expense", "income"], "Whether this is an expense or income.")),
                         ("category", .schemaEnum(CategoryID.allCases.map(\.rawValue), "Best matching category ID. Use 'housing' for rent, 'bills' for utilities/credit card payments/subscriptions, 'food' for meals/groceries, 'transport' for rides/MRT, 'shopping' for purchases, 'health' for medical/gym, 'entertainment' for fun, 'salary'/'freelance'/'income' for income.")),
                         ("day_key", .schemaString("Optional transaction date in YYYY-MM-DD format, taken from the dates listed in the context (e.g. yesterday). Defaults to today if omitted.")),
@@ -293,7 +390,8 @@ public enum AssistantToolCatalog {
                 let dayKey = rawDay.flatMap { DateKey.date(fromDayKey: $0) != nil ? $0 : nil } ?? defaultDayKey
                 let note = item["note"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
                 let member = item["member"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let currency = item["currency"]?.stringValue.flatMap { CurrencyCode(rawValue: $0.uppercased()) }
+                let currencyCode = item["currency"]?.stringValue.flatMap(CurrencyCode.normalizeCode)
+                let convertedAmount = item["converted_amount"]?.doubleValue.flatMap { ($0 > 0 && $0.isFinite) ? $0 : nil }
                 parsed.append(.init(
                     name: rawName,
                     amountMajor: amount,
@@ -302,7 +400,8 @@ public enum AssistantToolCatalog {
                     dayKey: dayKey,
                     note: note,
                     memberHint: member?.isEmpty == false ? member : nil,
-                    currency: currency
+                    currencyCode: currencyCode,
+                    convertedAmountMajor: convertedAmount
                 ))
             }
             guard !parsed.isEmpty else {
@@ -417,9 +516,74 @@ public enum AssistantToolCatalog {
 // MARK: - Deterministic helpers for tool execution
 
 public enum AssistantAmounts {
+    /// Resolves an amount stated in `statedCurrencyCode` into `household` currency, preserving
+    /// original foreign currency details and applying an explicit billed `convertedAmountMajor`
+    /// only when provided. Never below one payable unit.
+    public static func resolve(
+        amountMajor: Double,
+        statedCurrencyCode: String?,
+        convertedAmountMajor: Double? = nil,
+        household: CurrencyCode,
+        note: String,
+        language: AppLanguage,
+        rates: ExchangeRateTable = .current
+    ) -> AITransactionParser.ResolvedTransactionAmount {
+        let step = AdviserMath.step(for: household)
+        let normalizedCode = statedCurrencyCode.flatMap(CurrencyCode.normalizeCode)
+
+        if let code = normalizedCode,
+           code != household.rawValue,
+           let billed = convertedAmountMajor,
+           billed > 0,
+           billed.isFinite {
+            let householdMinor = max(step, household.toStorageMinor(billed))
+            let originalMinor = CurrencyCode.toStorageMinor(amountMajor, currencyCode: code)
+            let origFormatted = MoneyFormat.format(minor: originalMinor, currencyCode: code, language: language)
+            let fxTag = L10n.text(language, en: "Orig: \(origFormatted)", vi: "Gốc: \(origFormatted)", zh: "原币: \(origFormatted)")
+            let combinedNote: String
+            if note.isEmpty {
+                combinedNote = fxTag
+            } else if note.contains(origFormatted) {
+                combinedNote = note
+            } else {
+                combinedNote = "\(note) · \(fxTag)"
+            }
+            let impliedRate = amountMajor > 0 ? (billed / amountMajor) : nil
+            let validRate = (impliedRate?.isFinite == true && (impliedRate ?? 0) > 0) ? impliedRate : nil
+            return AITransactionParser.ResolvedTransactionAmount(
+                amountMinor: householdMinor,
+                note: combinedNote,
+                originalAmountMinor: originalMinor,
+                originalCurrencyCode: code,
+                exchangeRate: validRate,
+                isLiveRate: false,
+                rateDate: nil,
+                usedFallbackUnavailableRate: false
+            )
+        }
+
+        let draft = ParsedTransactionDraft(name: "", amountMajor: amountMajor, currencyCode: normalizedCode, note: note)
+        let resolved = AITransactionParser.resolvedAmountAndNote(
+            for: draft,
+            targetCurrency: household,
+            language: language,
+            rates: rates
+        )
+        return AITransactionParser.ResolvedTransactionAmount(
+            amountMinor: max(step, resolved.amountMinor),
+            note: resolved.note,
+            originalAmountMinor: resolved.originalAmountMinor,
+            originalCurrencyCode: resolved.originalCurrencyCode,
+            exchangeRate: resolved.exchangeRate,
+            isLiveRate: resolved.isLiveRate,
+            rateDate: resolved.rateDate,
+            usedFallbackUnavailableRate: resolved.usedFallbackUnavailableRate
+        )
+    }
+
     /// Storage amount in `household` currency for an amount the user stated in `stated` currency
-    /// (approximate conversion via `CurrencyConverter`), and the note with the original amount
-    /// appended when converted. Never below one payable unit.
+    /// (converted via `ExchangeRateTable`), and the note with the original amount appended when
+    /// converted. Never below one payable unit.
     public static func storageMinor(
         amountMajor: Double,
         stated: CurrencyCode?,
@@ -427,9 +591,14 @@ public enum AssistantAmounts {
         note: String,
         language: AppLanguage
     ) -> (minor: Int64, note: String) {
-        let draft = ParsedTransactionDraft(name: "", amountMajor: amountMajor, currency: stated, note: note)
-        let resolved = AITransactionParser.resolvedAmountAndNote(for: draft, targetCurrency: household, language: language)
-        return (max(AdviserMath.step(for: household), resolved.amountMinor), resolved.note)
+        let resolved = resolve(
+            amountMajor: amountMajor,
+            statedCurrencyCode: stated?.rawValue,
+            household: household,
+            note: note,
+            language: language
+        )
+        return (resolved.amountMinor, resolved.note)
     }
 }
 

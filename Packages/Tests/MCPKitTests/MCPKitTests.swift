@@ -180,6 +180,49 @@ final class MCPKitTests: XCTestCase {
         XCTAssertEqual(text.status, 415)
     }
 
+    func testQuickTokenPathAuthorizesWithoutBearerHeaderAndRejectsBadTokens() async {
+        let body = #"{"jsonrpc":"2.0","id":1,"method":"ping"}"#
+        let ok = await endpoint.respond(to: HTTPRequest(
+            method: "POST",
+            path: "/u/\(token)/mcp",
+            headers: ["host": "127.0.0.1:47821", "content-type": "application/json"],
+            body: Data(body.utf8)
+        ))
+        XCTAssertEqual(ok.status, 200)
+
+        let wrong = await endpoint.respond(to: HTTPRequest(
+            method: "POST",
+            path: "/u/wrong-token/mcp",
+            headers: ["host": "127.0.0.1:47821", "content-type": "application/json"],
+            body: Data(body.utf8)
+        ))
+        XCTAssertEqual(wrong.status, 401)
+
+        let badNest = await endpoint.respond(to: HTTPRequest(
+            method: "POST",
+            path: "/u/a/b/mcp",
+            headers: ["host": "127.0.0.1:47821", "content-type": "application/json"],
+            body: Data(body.utf8)
+        ))
+        XCTAssertEqual(badNest.status, 404)
+
+        let emptyTok = await endpoint.respond(to: HTTPRequest(
+            method: "POST",
+            path: "/u//mcp",
+            headers: ["host": "127.0.0.1:47821", "content-type": "application/json"],
+            body: Data(body.utf8)
+        ))
+        XCTAssertEqual(emptyTok.status, 404)
+
+        let rebinding = await endpoint.respond(to: HTTPRequest(
+            method: "POST",
+            path: "/u/\(token)/mcp",
+            headers: ["host": "evil.example", "content-type": "application/json"],
+            body: Data(body.utf8)
+        ))
+        XCTAssertEqual(rebinding.status, 403)
+    }
+
     // MARK: HTTP parsing
 
     func testParsesRequestWithBodyAndReportsConsumedBytes() {

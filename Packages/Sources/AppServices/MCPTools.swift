@@ -119,6 +119,42 @@ public enum MCPClientSetup {
         """
     }
 
+    /// Antigravity Streamable HTTP block (`~/.gemini/config/mcp_config.json`).
+    public static func antigravity(quickURL: String) -> String {
+        """
+        {
+          "mcpServers": {
+            "\(serverName)": {
+              "url": "\(quickURL)"
+            }
+          }
+        }
+        """
+    }
+
+    /// Claude Desktop stdio-to-HTTP bridge via `mcp-remote`.
+    public static func claudeDesktopBridge(quickURL: String) -> String {
+        let isHTTP = quickURL.lowercased().hasPrefix("http://")
+        let args = isHTTP
+            ? "[\"-y\", \"mcp-remote\", \"\(quickURL)\", \"--allow-http\"]"
+            : "[\"-y\", \"mcp-remote\", \"\(quickURL)\"]"
+        return """
+        {
+          "mcpServers": {
+            "\(serverName)": {
+              "command": "npx",
+              "args": \(args)
+            }
+          }
+        }
+        """
+    }
+
+    /// 1-URL quick connector link (works with Claude iOS/Web, ChatGPT, Muse, Antigravity).
+    public static func quickConnector(url: String) -> String {
+        url
+    }
+
     /// The token as shown on screen: only its last four characters.
     public static func masked(_ token: String) -> String {
         "••••••••" + token.suffix(4)

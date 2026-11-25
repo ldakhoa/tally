@@ -9,11 +9,14 @@ import UIKit
 /// long-press backspace to clear, and an ink capsule save action.
 public struct AmountKeypadView: View {
     @Binding public var engine: AmountKeypadEngine
-    public let currency: CurrencyCode
+    public let currencyCode: String
+    public let isZeroDecimal: Bool
     public let language: AppLanguage
     public let saveTitle: String
     public let isSaveEnabled: Bool
     public let onSave: () -> Void
+
+    public var currency: CurrencyCode { CurrencyCode(rawValue: currencyCode) ?? .sgd }
 
     public init(
         engine: Binding<AmountKeypadEngine>,
@@ -24,7 +27,26 @@ public struct AmountKeypadView: View {
         onSave: @escaping () -> Void
     ) {
         self._engine = engine
-        self.currency = currency
+        self.currencyCode = currency.rawValue
+        self.isZeroDecimal = currency.isZeroDecimal
+        self.language = language
+        self.saveTitle = saveTitle
+        self.isSaveEnabled = isSaveEnabled
+        self.onSave = onSave
+    }
+
+    public init(
+        engine: Binding<AmountKeypadEngine>,
+        currencyCode: String,
+        language: AppLanguage,
+        saveTitle: String,
+        isSaveEnabled: Bool,
+        onSave: @escaping () -> Void
+    ) {
+        self._engine = engine
+        let normalized = CurrencyCode.normalizeCode(currencyCode) ?? currencyCode.uppercased()
+        self.currencyCode = normalized
+        self.isZeroDecimal = CurrencyCode.isZeroDecimal(code: normalized)
         self.language = language
         self.saveTitle = saveTitle
         self.isSaveEnabled = isSaveEnabled
@@ -59,7 +81,7 @@ public struct AmountKeypadView: View {
 
             // Row 4: (. or 000), 0, ÷, ×
             HStack(spacing: 8) {
-                if currency.isZeroDecimal {
+                if isZeroDecimal {
                     digitKey("000", compactFont: true)
                 } else {
                     decimalKey
